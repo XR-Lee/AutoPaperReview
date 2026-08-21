@@ -1,0 +1,72 @@
+schema_version = 1
+
+[project]
+id = "synthetic-tracking-review"
+title = "Synthetic tracking manuscript review"
+source = "manuscript.txt"
+run_root = ".runs"
+default_language = "zh-Hans"
+network_policy = "deny"
+copy_source = true
+
+[[routes]]
+id = "M0"
+name = "Structured closed-book review"
+kind = "prompt"
+prompt = "../../src/autopaperreview/prompts/closed_book_v1.md"
+prompt_version = "1.0"
+manuscript_access = true
+network_access = false
+
+[[routes]]
+id = "M2"
+name = "Metric and protocol review"
+kind = "prompt"
+prompt = "../../src/autopaperreview/prompts/metric_protocol_v1.md"
+prompt_version = "1.0"
+manuscript_access = true
+network_access = false
+
+[[stages]]
+id = "ingest"
+type = "ingest"
+[stages.params]
+copy = true
+
+[[stages]]
+id = "deterministic_check"
+type = "command"
+depends_on = ["ingest"]
+[stages.params]
+command = ["python3", "checks/deterministic_check.py", "{source}", "{stage_dir}/result.json"]
+outputs = ["result.json"]
+timeout_seconds = 30
+
+[[stages]]
+id = "prompt_packets"
+type = "prompt_packet"
+depends_on = ["ingest"]
+[stages.params]
+route_ids = ["M0", "M2"]
+include_source_text = true
+
+[[stages]]
+id = "issues"
+type = "import_issues"
+depends_on = ["deterministic_check", "prompt_packets"]
+[stages.params]
+path = "review_input.json"
+
+[[stages]]
+id = "consensus"
+type = "consensus"
+depends_on = ["issues"]
+[stages.params]
+min_independent_routes = 1
+
+[[stages]]
+id = "report"
+type = "report"
+depends_on = ["consensus"]
+[stages.params]
+language = "zh-Hans"

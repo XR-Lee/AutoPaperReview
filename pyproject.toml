@@ -1,0 +1,45 @@
+[project]
+name = "autopaperreview"
+version = "0.1.0"
+description = "A local-first, evidence-traceable harness for reproducible scholarly manuscript review."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "AutoPaperReview contributors" }
+]
+dependencies = [
+  "pydantic>=2.10,<3",
+]
+keywords = ["peer-review", "provenance", "reproducibility", "scientific-publishing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Repository = "https://github.com/XR-Lee/AutoPaperReview"
+Issues = "https://github.com/XR-Lee/AutoPaperReview/issues"
+
+[project.scripts]
+autopaperreview = "autopaperreview.cli:main"
+
+[project.entry-points."autopaperreview.stages"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autopaperreview = ["prompts/*.md", "schemas/*.json"]

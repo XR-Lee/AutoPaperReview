@@ -1,0 +1,74 @@
+{
+  "manuscript": {
+    "recommendation_en": "Major revision is required before the deployment claim can be evaluated.",
+    "recommendation_zh": "在能够评估部署结论之前，稿件需要进行实质性大修。"
+  },
+  "methods": [
+    {
+      "id": "M0",
+      "name_en": "Structured closed-book review"
+    },
+    {
+      "id": "M2",
+      "name_en": "Metric and protocol review"
+    }
+  ],
+  "sources": [
+    {
+      "id": "S1",
+      "type": "manuscript",
+      "title": "Synthetic manuscript",
+      "path": "manuscript.txt"
+    }
+  ],
+  "issues": [
+    {
+      "id": "I001",
+      "severity": "critical",
+      "category": "evaluation validity",
+      "title_en": "The image-level split does not establish sequence independence",
+      "title_zh": "图像级拆分没有建立序列独立性",
+      "location": "Methods and Results",
+      "evidence_en": "Eight temporally related images from one specimen are randomly split into training and test images.",
+      "evidence_zh": "来自同一试件的八张时间相关图像被随机拆分到训练集和测试集。",
+      "impact_en": "Near-duplicate temporal content can inflate the reported accuracy and cannot support generalization to unseen structures.",
+      "impact_zh": "时间上高度相似的内容可能抬高准确率，无法支持对未见结构的泛化结论。",
+      "required_action_en": "Use specimen- or sequence-level holdout and report results on a genuinely independent test set.",
+      "required_action_zh": "采用试件级或序列级留出，并在真正独立的测试集上报告结果。",
+      "detected_by": ["M0", "M2"],
+      "sources": ["S1"],
+      "confidence": 0.99
+    },
+    {
+      "id": "I002",
+      "severity": "major",
+      "category": "statistics",
+      "title_en": "The deployment claim lacks uncertainty and repeated-run evidence",
+      "title_zh": "部署结论缺少不确定性和重复运行证据",
+      "location": "Results and Conclusion",
+      "evidence_en": "The manuscript reports one accuracy value without confidence intervals, repeated seeds, or an external test set.",
+      "evidence_zh": "稿件只报告一个准确率，没有置信区间、多随机种子或外部测试集。",
+      "impact_en": "The magnitude and stability of the claimed performance are unknown.",
+      "impact_zh": "所声称性能的幅度和稳定性均不明确。",
+      "required_action_en": "Report repeated runs, uncertainty intervals, and an external or specimen-level test.",
+      "required_action_zh": "报告重复运行、不确定性区间以及外部或试件级测试。",
+      "detected_by": ["M0"],
+      "sources": ["S1"],
+      "confidence": 0.96
+    }
+  ],
+  "strengths_en": [
+    "The manuscript states a concrete deployment-oriented objective."
+  ],
+  "strengths_zh": [
+    "稿件提出了明确的部署导向目标。"
+  ],
+  "acceptance_gate_en": [
+    "Use a sequence-independent split.",
+    "Report repeated runs and uncertainty."
+  ],
+  "acceptance_gate_zh": [
+    "采用序列独立的数据拆分。",
+    "报告重复运行与不确定性。"
+  ]
+}

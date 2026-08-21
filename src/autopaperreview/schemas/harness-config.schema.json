@@ -1,0 +1,217 @@
+{
+  "$defs": {
+    "NetworkPolicy": {
+      "enum": [
+        "deny",
+        "metadata_only",
+        "allow"
+      ],
+      "title": "NetworkPolicy",
+      "type": "string"
+    },
+    "ProjectConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "copy_source": {
+          "default": false,
+          "title": "Copy Source",
+          "type": "boolean"
+        },
+        "default_language": {
+          "default": "en",
+          "title": "Default Language",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "network_policy": {
+          "$ref": "#/$defs/NetworkPolicy",
+          "default": "deny"
+        },
+        "run_root": {
+          "default": ".autopaperreview/runs",
+          "title": "Run Root",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "source"
+      ],
+      "title": "ProjectConfig",
+      "type": "object"
+    },
+    "RouteConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RouteKind"
+        },
+        "manuscript_access": {
+          "default": true,
+          "title": "Manuscript Access",
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "network_access": {
+          "default": false,
+          "title": "Network Access",
+          "type": "boolean"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt"
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Version"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ],
+      "title": "RouteConfig",
+      "type": "object"
+    },
+    "RouteKind": {
+      "enum": [
+        "prompt",
+        "deterministic",
+        "executable",
+        "literature",
+        "visual",
+        "human"
+      ],
+      "title": "RouteKind",
+      "type": "string"
+    },
+    "StageConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        },
+        "type": {
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "StageConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "$ref": "#/$defs/ProjectConfig"
+    },
+    "routes": {
+      "items": {
+        "$ref": "#/$defs/RouteConfig"
+      },
+      "title": "Routes",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "stages": {
+      "items": {
+        "$ref": "#/$defs/StageConfig"
+      },
+      "title": "Stages",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project",
+    "stages"
+  ],
+  "title": "HarnessConfig",
+  "type": "object"
+}

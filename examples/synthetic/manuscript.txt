@@ -1,0 +1,13 @@
+Title: A Synthetic Tracking Study
+
+Abstract
+The proposed system achieves 95% accuracy and generalizes to unseen sequences.
+
+Methods
+Eight temporally related images from one specimen were randomly divided at image level. Six images were used for training and two for testing.
+
+Results
+Accuracy was reported on the two held-out images. No specimen-level split, confidence interval, repeated seed, or external test set was reported.
+
+Conclusion
+The method is ready for deployment across unseen structures.

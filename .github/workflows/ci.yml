@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests examples/synthetic/checks
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Verify committed schemas are current
+        run: |
+          schema_dir="$(mktemp -d)"
+          python -m autopaperreview schema "$schema_dir"
+          diff -ru src/autopaperreview/schemas "$schema_dir"
+
+      - name: Build wheel and verify package data
+        run: |
+          wheel_dir="$RUNNER_TEMP/wheels"
+          mkdir -p "$wheel_dir"
+          python -m pip wheel . --no-deps --wheel-dir "$wheel_dir"
+          WHEEL_DIR="$wheel_dir" python - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path(os.environ["WHEEL_DIR"]).glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected one wheel, found {len(wheels)}")
+
+          expected = {
+              "autopaperreview/prompts/closed_book_v1.md",
+              "autopaperreview/schemas/review-package.schema.json",
+          }
+          with ZipFile(wheels[0]) as archive:
+              missing = expected - set(archive.namelist())
+          if missing:
+              raise SystemExit(f"wheel is missing package data: {sorted(missing)}")
+          PY
+
+      - name: Validate and run synthetic pipeline twice
+        run: |
+          rm -rf examples/synthetic/.runs
+          python -m autopaperreview validate examples/synthetic/review.toml
+          python -m autopaperreview run examples/synthetic/review.toml
+          python -m autopaperreview run examples/synthetic/review.toml
+
+      - name: Verify second run used the cache
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifests = list(Path("examples/synthetic/.runs").glob("*/run_manifest.json"))
+          if len(manifests) != 1:
+              raise SystemExit(f"expected one synthetic manifest, found {len(manifests)}")
+
+          manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
+          stages = manifest.get("stages", [])
+          if not stages:
+              raise SystemExit("synthetic manifest has no stages")
+
+          missed = [
+              stage["id"]
+              for stage in stages
+              if stage.get("status") != "skipped"
+              or not stage.get("metadata", {}).get("cache_hit")
+          ]
+          if missed:
+              raise SystemExit(f"second run did not reuse all stages: {missed}")
+          PY

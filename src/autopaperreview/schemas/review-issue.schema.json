@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "LocalizedText": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "default": "en",
+          "minLength": 2,
+          "title": "Language",
+          "type": "string"
+        },
+        "primary": {
+          "minLength": 1,
+          "title": "Primary",
+          "type": "string"
+        },
+        "translations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Translations",
+          "type": "object"
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "title": "LocalizedText",
+      "type": "object"
+    },
+    "ReviewDecision": {
+      "enum": [
+        "open",
+        "accepted",
+        "rejected",
+        "superseded"
+      ],
+      "title": "ReviewDecision",
+      "type": "string"
+    },
+    "Severity": {
+      "enum": [
+        "critical",
+        "major",
+        "moderate",
+        "minor",
+        "editorial"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "category": {
+      "minLength": 1,
+      "title": "Category",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "consensus_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Consensus Key"
+    },
+    "decision": {
+      "$ref": "#/$defs/ReviewDecision",
+      "default": "open"
+    },
+    "evidence": {
+      "$ref": "#/$defs/LocalizedText"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "id": {
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+      "title": "Id",
+      "type": "string"
+    },
+    "impact": {
+      "$ref": "#/$defs/LocalizedText"
+    },
+    "location": {
+      "minLength": 1,
+      "title": "Location",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "required_action": {
+      "$ref": "#/$defs/LocalizedText"
+    },
+    "route_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Route Ids",
+      "type": "array"
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity"
+    },
+    "source_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Ids",
+      "type": "array"
+    },
+    "support_count": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Support Count",
+      "type": "integer"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "title": {
+      "$ref": "#/$defs/LocalizedText"
+    }
+  },
+  "required": [
+    "id",
+    "severity",
+    "category",
+    "title",
+    "location",
+    "evidence",
+    "impact",
+    "required_action",
+    "confidence"
+  ],
+  "title": "ReviewIssue",
+  "type": "object"
+}
