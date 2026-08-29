@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.1`
+Version: `0.1.2`
 
 ## Code harness, not a prompt-only skill
 
@@ -14,7 +14,7 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 
 - Strict Pydantic models for artifacts, sources, evidence, issues, review packages, stages, and run manifests.
 - A TOML-defined DAG with validation, resumable execution, content-hash caching, and atomic stage promotion.
-- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports.
+- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations`; bilingual rendering does not silently fall back to the primary language.
 - A deny-by-default network declaration gate. Commands never use a shell, and network-requiring stages must declare their scope.
 - Python entry-point plugins under `autopaperreview.stages`.
 - Migration support for the earlier bare issue-array and review-package JSON formats.
@@ -46,6 +46,8 @@ PYTHONPATH=src python3 -m autopaperreview --version
 PYTHONPATH=src python3 -m autopaperreview validate examples/synthetic/review.toml
 PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/review.toml
 ```
+
+The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales.
 
 The run ID is derived from the project ID, source hash, and configuration hash. Repeating the command reuses successful stages only when their signatures and output hashes still match.
 

@@ -13,7 +13,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..artifacts import artifact_from_path
 from ..hashing import hash_json, sha256_file
@@ -35,6 +35,7 @@ from ..models import (
     ReviewPackage,
     ReviewRoute,
 )
+from ..i18n import ensure_package_languages, normalize_languages
 from ..reporting import render_markdown, write_package_json
 from .base import StageContext, StageHandler, StageOutcome
 
@@ -641,6 +642,18 @@ class LiteratureGroundingStage(StageHandler):
 
 class ReportParams(ParamsModel):
     language: str | None = None
+    languages: list[str] | None = None
+    bilingual: bool = False
+
+    @field_validator("languages")
+    @classmethod
+    def unique_languages(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not cleaned:
+            raise ValueError("report languages cannot be empty")
+        return cleaned
 
 
 class ReportStage(StageHandler):
@@ -658,21 +671,37 @@ class ReportStage(StageHandler):
 
     def run(self, context: StageContext) -> StageOutcome:
         params = ReportParams.model_validate(context.stage.params)
-        language = params.language or context.loaded_config.config.project.default_language
+        languages = normalize_languages(
+            language=params.language,
+            languages=params.languages,
+            bilingual=params.bilingual,
+            default_language=context.loaded_config.config.project.default_language,
+        )
         package = self._package(context).model_copy(deep=True)
-        package.metadata = {**package.metadata, "run_id": context.manifest.run_id}
+        if len(languages) > 1:
+            package = ensure_package_languages(package, languages)
+        package.metadata = {
+            **package.metadata,
+            "run_id": context.manifest.run_id,
+            "report_languages": list(languages),
+        }
         package_path = context.stage_dir / "review_package.json"
         markdown_path = context.stage_dir / "review_report.md"
         summary_path = context.stage_dir / "summary.json"
         write_package_json(package, package_path)
-        markdown_path.write_text(render_markdown(package, language=language), encoding="utf-8")
+        markdown_path.write_text(
+            render_markdown(package, languages=languages, fill_missing=False),
+            encoding="utf-8",
+        )
         _write_json(
             summary_path,
             {
                 "project_id": package.project_id,
                 "source_sha256": package.manuscript.sha256,
                 "issue_count": len(package.issues),
-                "language": language,
+                "language": languages[0],
+                "languages": list(languages),
+                "bilingual": len(languages) > 1,
             },
         )
         return StageOutcome(
@@ -681,7 +710,12 @@ class ReportStage(StageHandler):
                 _artifact(markdown_path, context, "review.report.markdown"),
                 _artifact(summary_path, context, "review.summary"),
             ],
-            metadata={"issue_count": len(package.issues), "language": language},
+            metadata={
+                "issue_count": len(package.issues),
+                "language": languages[0],
+                "languages": list(languages),
+                "bilingual": len(languages) > 1,
+            },
         )
 
 
