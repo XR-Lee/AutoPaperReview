@@ -8,7 +8,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .i18n import ensure_package_languages, normalize_languages, require_language, translate_text
-from .models import LocalizedText, ReviewClaimKind, ReviewIssue, ReviewPackage, Severity
+from .models import (
+    LocalizedText,
+    ReviewClaimKind,
+    ReviewIssue,
+    ReviewPackage,
+    Severity,
+    VenueKind,
+)
 
 
 SEVERITY_ORDER = {
@@ -31,6 +38,9 @@ SECTION_ZH = {
     "Summary": "摘要",
     "Recommendation": "审稿建议",
     "Dimension Scores": "维度评分",
+    "Venue Conclusions": "会议与期刊结论",
+    "Conferences": "会议",
+    "Journals": "期刊",
     "Overall Assessment": "总体评价",
     "Strengths": "优点",
     "Weaknesses": "不足",
@@ -50,11 +60,11 @@ SEVERITY_ZH = {
 }
 
 NO_OVERALL_EN = (
-    "No overall score is assigned. AutoPaperReview does not emit a raw LLM 0–10 "
-    "by default, and this repository does not ship a fitted ICLR regression."
+    "No overall score is assigned. Each of the seven dimensions is scored 1–10; "
+    "conclusions are venue-specific and are not a fitted conference mapping."
 )
 NO_OVERALL_ZH = (
-    "未给出总体分数。AutoPaperReview 默认不输出未经校准的 LLM 0–10 分，本仓库也不附带拟合的 ICLR 回归。"
+    "未给出总体分数。七个维度各自按 1–10 打分；结论按会议或期刊分别给出，不是拟合的总分映射。"
 )
 
 
@@ -73,6 +83,77 @@ def _heading(title: str, languages: Sequence[str]) -> str:
     if len(languages) == 1 or not chinese:
         return f"## {title}"
     return f"## {title} / {chinese}"
+
+
+def _render_venue_block_monolingual(package: ReviewPackage, language: str) -> list[str]:
+    lines = ["## Venue Conclusions", "", NO_OVERALL_EN if language != "zh-Hans" else NO_OVERALL_ZH, ""]
+    if not package.venue_conclusions:
+        return lines
+    conferences = [item for item in package.venue_conclusions if item.kind == VenueKind.conference]
+    journals = [item for item in package.venue_conclusions if item.kind == VenueKind.journal]
+    for title, items in (("Conferences", conferences), ("Journals", journals)):
+        if not items:
+            continue
+        lines.extend([f"### {title}", ""])
+        for item in items:
+            label = item.label.resolve(language)
+            rationale = item.rationale.resolve(language)
+            lines.extend(
+                [
+                    f"#### {item.id}",
+                    "",
+                    f"- **Outcome:** {item.outcome.value} — {label}{_evidence_suffix(item.evidence_ids)}",
+                    "",
+                    rationale,
+                    "",
+                ]
+            )
+    return lines
+
+
+def _render_venue_block_bilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    lines = [_heading("Venue Conclusions", languages), ""]
+    no_overall = {
+        "en": NO_OVERALL_EN,
+        "zh-Hans": NO_OVERALL_ZH,
+    }
+    lines.extend(
+        _language_blocks(
+            languages,
+            {
+                language: [
+                    no_overall.get(language, translate_text(NO_OVERALL_EN, source="en", target=language))
+                ]
+                for language in languages
+            },
+        )
+    )
+    if not package.venue_conclusions:
+        return lines
+    conferences = [item for item in package.venue_conclusions if item.kind == VenueKind.conference]
+    journals = [item for item in package.venue_conclusions if item.kind == VenueKind.journal]
+    for title, items in (("Conferences", conferences), ("Journals", journals)):
+        if not items:
+            continue
+        lines.extend([_heading(title, languages).replace("## ", "### "), ""])
+        for item in items:
+            lines.append(f"#### {item.id}")
+            lines.append("")
+            lines.append(f"- **Outcome:** `{item.outcome.value}`{_evidence_suffix(item.evidence_ids)}")
+            lines.append("")
+            lines.extend(
+                _language_blocks(
+                    languages,
+                    {
+                        language: [
+                            f"**{require_language(item.label, language, field=f'{item.id}.label')}.** "
+                            f"{require_language(item.rationale, language, field=f'{item.id}.rationale')}"
+                        ]
+                        for language in languages
+                    },
+                )
+            )
+    return lines
 
 
 def _language_blocks(languages: Sequence[str], bodies: dict[str, list[str]]) -> list[str]:
@@ -153,35 +234,12 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             rationale = score.rationale.resolve(language) if score.rationale else ""
             detail = f" — {rationale}" if rationale else ""
             lines.append(
-                f"- **{score.dimension.value}:** {score.score:.1f}"
+                f"- **{score.dimension.value}:** {score.score:.1f}/10"
                 f"{_evidence_suffix(score.evidence_ids)}{detail}"
             )
         lines.append("")
 
-    lines.extend(["## Overall Assessment", ""])
-    if package.overall_score is None:
-        lines.extend(
-            [
-                NO_OVERALL_EN,
-                "",
-            ]
-        )
-    else:
-        overall = package.overall_score
-        lines.extend(
-            [
-                f"- **Score:** {overall.value:.2f} (scale {overall.scale_min:g}–{overall.scale_max:g})",
-                f"- **Method:** `{overall.method.value}`",
-                f"- **Scorer:** {overall.scorer or 'unspecified'}",
-                f"- **Coefficient set:** {overall.coefficient_set or 'none'}",
-                f"- **Model:** {overall.model_identifier or 'none'}",
-                f"- **Prompt hash:** {overall.prompt_hash or 'none'}",
-                f"- **Evidence:** {', '.join(overall.evidence_ids) or 'none'}",
-            ]
-        )
-        if overall.notes:
-            lines.append(f"- **Notes:** {overall.notes}")
-        lines.append("")
+    lines.extend(_render_venue_block_monolingual(package, language))
 
     claims_by_kind = {kind: [] for kind in CLAIM_SECTION}
     for claim in package.claims:
@@ -322,7 +380,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.extend([_heading("Dimension Scores", languages), ""])
         for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
             lines.append(
-                f"- **{score.dimension.value}:** {score.score:.1f}{_evidence_suffix(score.evidence_ids)}"
+                f"- **{score.dimension.value}:** {score.score:.1f}/10{_evidence_suffix(score.evidence_ids)}"
             )
             if score.rationale:
                 for language in languages:
@@ -332,35 +390,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
                     lines.append(f"  - **{language}:** {rationale}")
         lines.append("")
 
-    lines.extend([_heading("Overall Assessment", languages), ""])
-    if package.overall_score is None:
-        overall_text = {
-            "en": NO_OVERALL_EN,
-            "zh-Hans": NO_OVERALL_ZH,
-        }
-        bodies = {}
-        for language in languages:
-            if language in overall_text:
-                bodies[language] = [overall_text[language]]
-            else:
-                bodies[language] = [translate_text(NO_OVERALL_EN, source="en", target=language)]
-        lines.extend(_language_blocks(languages, bodies))
-    else:
-        overall = package.overall_score
-        lines.extend(
-            [
-                f"- **Score:** {overall.value:.2f} (scale {overall.scale_min:g}–{overall.scale_max:g})",
-                f"- **Method:** `{overall.method.value}`",
-                f"- **Scorer:** {overall.scorer or 'unspecified'}",
-                f"- **Coefficient set:** {overall.coefficient_set or 'none'}",
-                f"- **Model:** {overall.model_identifier or 'none'}",
-                f"- **Prompt hash:** {overall.prompt_hash or 'none'}",
-                f"- **Evidence:** {', '.join(overall.evidence_ids) or 'none'}",
-            ]
-        )
-        if overall.notes:
-            lines.append(f"- **Notes:** {overall.notes}")
-        lines.append("")
+    lines.extend(_render_venue_block_bilingual(package, languages))
 
     def _claim_section(kind: ReviewClaimKind, title: str) -> None:
         claims = claims_by_kind[kind]

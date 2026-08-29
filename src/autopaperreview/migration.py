@@ -20,6 +20,7 @@ from .models import (
     ReviewRoute,
     RouteKind,
     SourceRecord,
+    VenueConclusion,
 )
 
 
@@ -244,6 +245,9 @@ def migrate_legacy_package(
         RetrievedSourceSnapshot.model_validate(item) for item in raw.get("retrieved_snapshots", [])
     ]
     overall_score = OverallScore.model_validate(raw["overall_score"]) if raw.get("overall_score") else None
+    venue_conclusions = [
+        VenueConclusion.model_validate(item) for item in raw.get("venue_conclusions", [])
+    ]
     summary = None
     if isinstance(raw.get("summary"), dict):
         summary = LocalizedText.model_validate(raw["summary"])
@@ -264,6 +268,7 @@ def migrate_legacy_package(
         "related_work_queries",
         "retrieved_snapshots",
         "overall_score",
+        "venue_conclusions",
         "summary",
         "summary_en",
         "summary_zh",
@@ -281,6 +286,7 @@ def migrate_legacy_package(
         summary=summary,
         claims=claims,
         dimension_scores=dimension_scores,
+        venue_conclusions=venue_conclusions,
         overall_score=overall_score,
         related_work_queries=related_work_queries,
         retrieved_snapshots=retrieved_snapshots,

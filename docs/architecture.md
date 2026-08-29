@@ -60,7 +60,8 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `EvidenceRecord` | A claim and locator tied to a source and, when available, an artifact/excerpt hash. |
 | `ReviewIssue` | The current canonical issue record, including localized prose, severity, confidence, references, and consensus metadata. |
 | `ReviewPackage` | A validated collection of manuscript, route, source, evidence, issue, strength, acceptance-gate, optional SAR-shaped claim/score, query, and snapshot records. |
-| `DimensionScore` | One of the seven SAR dimensions, a 0–10 value, rationale, and required evidence IDs. |
+| `DimensionScore` | One of the seven SAR dimensions, a 1–10 value, rationale, and required evidence IDs. |
+| `VenueConclusion` | Conference or journal decision (accept/reject/revision/not-a-fit) read from the seven scores. No overall number. |
 | `OverallScore` | Optional overall score with required method/provenance. Absent by default; never an implicit LLM 0–10. |
 | `RelatedWorkQuery` / `RetrievedSourceSnapshot` | Multi-perspective search queries and retrieved source snapshots (query IDs, arXiv ID, date, abstract vs full-text). |
 | `ReviewClaim` | SAR-shaped summary/strength/weakness/question/comment text that must cite evidence IDs. |

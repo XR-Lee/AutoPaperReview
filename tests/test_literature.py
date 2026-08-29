@@ -236,7 +236,7 @@ class SarSchemaTests(unittest.TestCase):
         self.assertIn("## Questions", markdown)
         self.assertIn("## Dimension Scores", markdown)
         self.assertIn("[E1]", markdown)
-        self.assertIn("does not emit a raw LLM 0–10", markdown)
+        self.assertIn("No overall score is assigned", markdown)
         self.assertNotIn("Spearman", markdown)
 
 
