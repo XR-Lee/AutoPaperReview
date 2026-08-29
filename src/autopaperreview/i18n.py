@@ -480,4 +480,13 @@ def ensure_package_languages(package: ReviewPackage, languages: Sequence[str]) -
         )
         for score in updated.dimension_scores
     ]
+    updated.venue_conclusions = [
+        item.model_copy(
+            update={
+                "label": ensure_localized(item.label, languages),
+                "rationale": ensure_localized(item.rationale, languages),
+            }
+        )
+        for item in updated.venue_conclusions
+    ]
     return updated

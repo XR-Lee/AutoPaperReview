@@ -6,12 +6,13 @@ Required sections:
 2. Strengths — concrete positives.
 3. Weaknesses — concrete, actionable problems.
 4. Questions — items that would change the assessment if answered.
-5. Dimension scores — one numeric score on a 0–10 scale for each of: originality, importance_of_research_question, claims_supported, experimental_soundness, writing_clarity, community_value, prior_work_contextualization. Each score needs a short rationale.
-6. Related-work queries — at least one query for baselines, one for the same problem, and one for related techniques.
+5. Dimension scores — one numeric score on a 1–10 scale for each of: originality, importance_of_research_question, claims_supported, experimental_soundness, writing_clarity, community_value, prior_work_contextualization. Each score needs a short rationale. Do not combine them into an overall number.
+6. Venue conclusions — for conferences (at least ICLR, NeurIPS, AAAI, CVPR, RSS) and journals (at least TMLR, JMLR, TPAMI, T-RO), give a venue-specific outcome (reject / weak_reject / borderline / major_revision / minor_revision / weak_accept / accept / not_a_fit) and a short rationale. Journals may recommend revision; conferences typically accept or reject. Do not emit an overall 0–10.
+7. Related-work queries — at least one query for baselines, one for the same problem, and one for related techniques.
 
 Rules:
 
-- Every summary, strength, weakness, question, and dimension rationale must cite evidence IDs that already exist or that you create as EvidenceRecord entries.
-- Do not invent a raw overall 0–10. If an overall score is requested, it must carry explicit provenance (who scored, method, prompt/model hashes, and whether a named coefficient set was used). This repository does not ship a fitted ICLR regression.
+- Every summary, strength, weakness, question, dimension rationale, and venue conclusion must cite evidence IDs that already exist or that you create as EvidenceRecord entries.
+- Do not invent a raw overall 0–10 or a fitted ICLR/AAAI coefficient mapping. The seven dimension scores stay separate; conclusions differ by venue.
 - Distinguish abstract-only snapshots from full-text summaries. Do not treat a search snippet as final evidence.
 - Return schema-valid ReviewClaim, DimensionScore, RelatedWorkQuery, and ReviewIssue records. Do not return free-form prose as the only result.

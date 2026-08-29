@@ -6,10 +6,14 @@ from pydantic import ValidationError
 
 from autopaperreview.models import (
     EvidenceRecord,
+    LocalizedText,
     ReviewPackage,
     ReviewRoute,
     RouteKind,
     SourceRecord,
+    VenueConclusion,
+    VenueKind,
+    VenueOutcome,
 )
 
 from tests.support import make_artifact, make_issue
@@ -70,6 +74,27 @@ class ReviewModelTests(unittest.TestCase):
                         manuscript=make_artifact(),
                         issues=[issue],
                     )
+
+    def test_package_rejects_unknown_venue_conclusion_evidence(self) -> None:
+        source = SourceRecord(id="S1", kind="manuscript", title="Paper", locator="manuscript.txt")
+        evidence = EvidenceRecord(id="E1", source_id="S1", locator="p. 1", claim="Observed text")
+        with self.assertRaisesRegex(ValidationError, "venue conclusions reference unknown evidence"):
+            ReviewPackage(
+                project_id="model-test",
+                manuscript=make_artifact(),
+                sources=[source],
+                evidence=[evidence],
+                venue_conclusions=[
+                    VenueConclusion(
+                        id="ICLR",
+                        kind=VenueKind.conference,
+                        outcome=VenueOutcome.reject,
+                        label=LocalizedText(primary="Reject", language="en"),
+                        rationale=LocalizedText(primary="Unsupported claim.", language="en"),
+                        evidence_ids=["missing"],
+                    )
+                ],
+            )
 
     def test_package_rejects_evidence_source_when_sources_are_empty(self) -> None:
         evidence = EvidenceRecord(id="E1", source_id="missing", locator="p. 1", claim="Observed text")

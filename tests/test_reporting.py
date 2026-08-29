@@ -151,8 +151,14 @@ class BilingualRenderTests(unittest.TestCase):
         self.assertGreaterEqual(markdown.count("### zh-Hans"), 3)
 
         self.assertIsNone(package.overall_score)
-        self.assertIn("does not emit a raw LLM 0–10", markdown)
+        self.assertIn("No overall score is assigned", markdown)
         self.assertIn("未给出总体分数", markdown)
+        self.assertIn("## Venue Conclusions / 会议与期刊结论", markdown)
+        self.assertIn("#### ICLR", markdown)
+        self.assertIn("#### TMLR", markdown)
+        self.assertIn("`reject`", markdown)
+        self.assertIn("`major_revision`", markdown)
+        self.assertNotIn("**Score:**", markdown)
 
     def test_bilingual_render_fills_english_only_dimension_rationale(self) -> None:
         package = _package_with_english_only_rationale()
