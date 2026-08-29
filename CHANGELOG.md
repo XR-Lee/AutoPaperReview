@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 - 2026-08-29
+
+- Added `VenueConclusion` records: conference and journal decisions from the seven 1–10 dimension scores, with no overall numeric score.
+- Report Markdown now renders venue conclusions instead of an ICLR-style overall 0–10.
+- The synthetic fixture includes ICLR reject and TMLR major-revision conclusions.
+
 ## 0.1.2 - 2026-08-29
 
 - Added bilingual review Markdown: one report file can contain both `en` and `zh-Hans` section by section (Summary, Strengths, Weaknesses, Questions, seven dimension rationales, and issues).

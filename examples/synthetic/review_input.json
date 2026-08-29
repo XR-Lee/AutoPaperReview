@@ -332,5 +332,43 @@
         "not_iclr_calibrated": true
       }
     }
+  ],
+  "venue_conclusions": [
+    {
+      "id": "ICLR",
+      "kind": "conference",
+      "outcome": "reject",
+      "label": {
+        "primary": "Reject",
+        "language": "en",
+        "translations": {"zh-Hans": "拒稿"}
+      },
+      "rationale": {
+        "primary": "The image-level split cannot support an ICLR-style deployment or generalization claim; no overall 0–10 is assigned.",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "图像级拆分无法支撑 ICLR 所要求的部署或泛化主张；不给出总体 0–10 分。"
+        }
+      },
+      "evidence_ids": ["E1"]
+    },
+    {
+      "id": "TMLR",
+      "kind": "journal",
+      "outcome": "major_revision",
+      "label": {
+        "primary": "Major revision",
+        "language": "en",
+        "translations": {"zh-Hans": "大修"}
+      },
+      "rationale": {
+        "primary": "A journal can wait for a specimen-level split and uncertainty; the current package is not ready to accept.",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "期刊可以等待试件级拆分与不确定性报告；当前稿件尚不能接受。"
+        }
+      },
+      "evidence_ids": ["E1"]
+    }
   ]
 }
