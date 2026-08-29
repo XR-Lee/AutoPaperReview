@@ -52,15 +52,14 @@ def render_markdown(package: ReviewPackage, *, language: str) -> str:
     ]
 
     summary_text = None
-    if package.summary:
+    summaries = [claim for claim in package.claims if claim.kind == ReviewClaimKind.summary]
+    if summaries:
+        summary_text = " ".join(
+            f"{claim.text.resolve(language)}{_evidence_suffix(claim.evidence_ids)}"
+            for claim in summaries
+        )
+    elif package.summary:
         summary_text = package.summary.resolve(language)
-    else:
-        summaries = [claim for claim in package.claims if claim.kind == ReviewClaimKind.summary]
-        if summaries:
-            summary_text = " ".join(
-                f"{claim.text.resolve(language)}{_evidence_suffix(claim.evidence_ids)}"
-                for claim in summaries
-            )
     if summary_text:
         lines.extend(["## Summary", "", summary_text, ""])
 

@@ -344,12 +344,11 @@ class ReviewPackage(StrictModel):
             missing = sorted(set(self.overall_score.evidence_ids) - evidence_ids)
             if missing:
                 raise ValueError(f"overall score references unknown evidence: {missing}")
-        if self.related_work_queries:
-            missing = sorted(
-                {qid for snapshot in self.retrieved_snapshots for qid in snapshot.query_ids} - query_ids
-            )
-            if missing:
-                raise ValueError(f"retrieved snapshots reference unknown queries: {missing}")
+        missing = sorted(
+            {qid for snapshot in self.retrieved_snapshots for qid in snapshot.query_ids} - query_ids
+        )
+        if missing:
+            raise ValueError(f"retrieved snapshots reference unknown queries: {missing}")
         return self
 
 
