@@ -28,13 +28,14 @@ Known v0.1 constraints:
 
 The four data-boundary milestones below remain the schema work. Open experiments change the *order of the next executable slices*. The full comparison is [feature gaps versus stronger open experiments](oss-experiment-gaps.md).
 
-Do these first, because they make the current contract auditable without a new agent framework:
+v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. A live PydanticAI (or other) model adapter is still optional and not bundled.
 
-1. **Contract completeness.** Snapshot excerpt/hash, a report export gate, attach literature artifacts to literature-route prompt packets, and an honest `doctor` / `init`.
-2. **Typed locators.** Page, paragraph, quote, and external-snapshot locators. DeepReviewer 2.0 and OpenAIReview/reviewer2 treat anchors as the audit boundary.
-3. **Integrity family.** Optional `reference_integrity` and `results_integrity` records plus a read-only workspace inspect stage (ResearchArena / Zhang et al.). Do not replace the seven SAR dimensions.
-4. **Thin model adapter.** Optional PydanticAI (or equivalent) so `run` can produce canonical records from a new manuscript. Raw responses stay artifacts.
-5. Then ObservationRecord, dissent-preserving consensus, parser/visual adapters, and journal-platform adapters as already designed.
+Remaining after 0.1.5:
+
+1. Richer locator families and excerpt verification against parsed PDF/DOCX text.
+2. Live citation resolve (Crossref/arXiv) behind a declared adapter.
+3. Optional model-execution adapter that snapshots prompts and raw responses.
+4. Then ObservationRecord, dissent-preserving consensus, parser/visual adapters, and journal-platform adapters as already designed.
 
 Do not take MinerU, PASA, Tavily, ChatArena, a vector index, or a fitted ICLR map into core.
 

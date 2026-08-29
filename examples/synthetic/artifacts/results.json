@@ -1,0 +1,6 @@
+{
+  "accuracy": 0.5,
+  "runs": 1,
+  "split": "image-level",
+  "note": "Workspace value disagrees with the manuscript 95% claim."
+}

@@ -49,6 +49,10 @@ SECTION_ZH = {
     "Related-Work Queries": "相关工作查询",
     "Retrieved Sources": "检索到的来源",
     "Acceptance Gate": "接受条件",
+    "Claim Ledger": "主张台账",
+    "Investigation Agenda": "核查议程",
+    "Integrity": "完整性核验",
+    "Novelty": "新颖性",
 }
 
 SEVERITY_ZH = {
@@ -76,6 +80,93 @@ def _evidence_suffix(evidence_ids: list[str]) -> str:
     if not evidence_ids:
         return ""
     return " [" + ", ".join(evidence_ids) + "]"
+
+
+def _issue_location(issue: ReviewIssue) -> str:
+    if issue.anchor is not None:
+        return f"{issue.anchor.display} ({issue.anchor.kind.value})"
+    return issue.location
+
+
+def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
+    lines: list[str] = []
+    if package.ledger_claims:
+        lines.extend(["## Claim Ledger", ""])
+        for item in package.ledger_claims:
+            risk = item.risk.resolve(language) if item.risk else ""
+            lines.append(f"- `{item.id}` {item.claim.resolve(language)}{_evidence_suffix(item.in_paper_evidence_ids)}")
+            if risk:
+                lines.append(f"  - Risk: {risk}")
+        lines.append("")
+    if package.agenda:
+        lines.extend(["## Investigation Agenda", ""])
+        for item in package.agenda:
+            perspective = item.perspective.value if item.perspective else "unspecified"
+            lines.append(f"- `{item.id}` ({perspective}): {item.question}")
+        lines.append("")
+    if package.integrity_records:
+        lines.extend(["## Integrity", ""])
+        for item in package.integrity_records:
+            note = item.notes.resolve(language) if item.notes else ""
+            lines.append(
+                f"- `{item.id}` {item.kind.value}: {item.verdict.value} — {item.subject}"
+            )
+            if note:
+                lines.append(f"  - {note}")
+        lines.append("")
+    if package.novelty_assessments:
+        lines.extend(["## Novelty", ""])
+        for item in package.novelty_assessments:
+            note = item.notes.resolve(language) if item.notes else ""
+            setting = "matched" if item.matched_setting else "not-matched"
+            lines.append(
+                f"- `{item.id}` {item.tag.value} ({setting}; claim {item.claim_id}; snapshot {item.snapshot_id})"
+            )
+            if note:
+                lines.append(f"  - {note}")
+        lines.append("")
+    return lines
+
+
+def _render_audit_sections_multilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    lines: list[str] = []
+    if package.ledger_claims:
+        lines.extend([_heading("Claim Ledger", languages), ""])
+        for item in package.ledger_claims:
+            lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
+            for language in languages:
+                lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                if item.risk:
+                    lines.append(f"    - Risk: {item.risk.resolve(language)}")
+        lines.append("")
+    if package.agenda:
+        lines.extend([_heading("Investigation Agenda", languages), ""])
+        for item in package.agenda:
+            perspective = item.perspective.value if item.perspective else "unspecified"
+            lines.append(f"- `{item.id}` ({perspective}): {item.question}")
+        lines.append("")
+    if package.integrity_records:
+        lines.extend([_heading("Integrity", languages), ""])
+        for item in package.integrity_records:
+            lines.append(
+                f"- `{item.id}` {item.kind.value}: {item.verdict.value} — {item.subject}"
+            )
+            if item.notes:
+                for language in languages:
+                    lines.append(f"  - **{language}:** {item.notes.resolve(language)}")
+        lines.append("")
+    if package.novelty_assessments:
+        lines.extend([_heading("Novelty", languages), ""])
+        for item in package.novelty_assessments:
+            setting = "matched" if item.matched_setting else "not-matched"
+            lines.append(
+                f"- `{item.id}` {item.tag.value} ({setting}; claim {item.claim_id}; snapshot {item.snapshot_id})"
+            )
+            if item.notes:
+                for language in languages:
+                    lines.append(f"  - **{language}:** {item.notes.resolve(language)}")
+        lines.append("")
+    return lines
 
 
 def _heading(title: str, languages: Sequence[str]) -> str:
@@ -287,7 +378,7 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             [
                 f"### {issue.id} {issue.title.resolve(language)}",
                 "",
-                f"- **Location:** {issue.location}",
+                f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
                 f"- **Routes:** {routes}",
                 f"- **Sources:** {sources}",
@@ -312,12 +403,17 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
         lines.extend(["## Retrieved Sources", ""])
         for snapshot in package.retrieved_snapshots:
             arxiv = f"; arXiv {snapshot.arxiv_id}" if snapshot.arxiv_id else ""
+            excerpt = (snapshot.excerpt or "").strip()
             lines.append(
                 f"- `{snapshot.id}` {snapshot.title} "
                 f"({snapshot.content_kind.value}{arxiv}; {snapshot.retrieved_at.date().isoformat()}; "
                 f"queries {', '.join(snapshot.query_ids)})"
             )
+            if excerpt:
+                lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
+
+    lines.extend(_render_audit_sections(package, language))
 
     gate = package.acceptance_gate.get(language) or package.acceptance_gate.get("en") or []
     if gate:
@@ -444,7 +540,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             [
                 f"### {issue.id}",
                 "",
-                f"- **Location:** {issue.location}",
+                f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
                 f"- **Routes:** {routes}",
                 f"- **Sources:** {sources}",
@@ -474,12 +570,17 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.extend([_heading("Retrieved Sources", languages), ""])
         for snapshot in package.retrieved_snapshots:
             arxiv = f"; arXiv {snapshot.arxiv_id}" if snapshot.arxiv_id else ""
+            excerpt = (snapshot.excerpt or "").strip()
             lines.append(
                 f"- `{snapshot.id}` {snapshot.title} "
                 f"({snapshot.content_kind.value}{arxiv}; {snapshot.retrieved_at.date().isoformat()}; "
                 f"queries {', '.join(snapshot.query_ids)})"
             )
+            if excerpt:
+                lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
+
+    lines.extend(_render_audit_sections_multilingual(package, languages))
 
     if any(package.acceptance_gate.get(language) for language in languages):
         lines.extend([_heading("Acceptance Gate", languages), ""])

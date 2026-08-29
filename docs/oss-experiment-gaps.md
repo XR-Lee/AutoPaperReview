@@ -1,6 +1,6 @@
 # Feature gaps versus stronger open review experiments
 
-This is a review of AutoPaperReview `0.1.4` against stronger open-source and openly documented review experiments. It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist.
+This is a review of AutoPaperReview `0.1.5` against stronger open-source and openly documented review experiments. It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist. v0.1.5 implements the first P0–P2 slice (excerpts, anchors, export gate, execute_review, ledger/agenda, workspace inspect, integrity, matched-setting novelty). The remaining holes are live adapters and richer PDF locators.
 
 The comparison date is 2026-08-29. Versions and paper claims belong to those projects; this repository has not reproduced their scores.
 
@@ -44,7 +44,7 @@ DeepReviewer 2.0's own comparison table is the most useful framing: a fluent "fu
 
 ## Priority 0 — the current contract is incomplete
 
-These gaps make the existing 0.1.x models weaker than they look.
+v0.1.5 ships the first executable slice of items 1–4 and 6–8: snapshot excerpts, typed anchors, a report export gate, literature attached to prompt packets, honest `doctor`/`init`, and `execute_review` with bundled deterministic/fixture adapters. A live model adapter is still not bundled. The remaining P0 hole is calling a real model behind a declared adapter.
 
 ### 1. The harness cannot produce a review
 

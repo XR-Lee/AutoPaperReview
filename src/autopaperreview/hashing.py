@@ -20,6 +20,10 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def digest_excerpt(text: str) -> str:
+    return sha256_bytes(text.encode("utf-8"))
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
