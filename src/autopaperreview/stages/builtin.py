@@ -558,7 +558,7 @@ class LiteratureGroundingParams(ParamsModel):
 
 class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
-    version = "1"
+    version = "2"
     params_model = LiteratureGroundingParams
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:

@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.3`
+Version: `0.1.4`
 
 ## Code harness, not a prompt-only skill
 
@@ -22,7 +22,7 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 - Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default.
 - A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
 
-See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai. This repository does not claim Stanford's ICLR Spearman numbers.
+See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, and [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work. This repository does not claim Stanford's ICLR Spearman numbers.
 
 The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API. Those systems belong behind adapters so their release cadence does not become the review database schema.
 
