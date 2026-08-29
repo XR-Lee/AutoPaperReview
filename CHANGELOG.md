@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-08-29
+
+- Added bilingual review Markdown: one report file can contain both `en` and `zh-Hans` section by section (Summary, Strengths, Weaknesses, Questions, seven dimension rationales, and issues).
+- Added the thinnest report-stage options `bilingual = true` and `languages = ["en", "zh-Hans"]`. Switching `default_language` alone still renders one language.
+- Missing translations are filled into `LocalizedText.translations` before bilingual render. Silent fallback to the primary language while claiming bilingual is rejected.
+- Extended the synthetic fixture so dimension rationales include `zh-Hans` text rather than English-only strings.
+
 ## 0.1.1 - 2026-08-29
 
 - Added optional SAR-shaped package fields: seven dimension scores, evidence-bound claims, related-work queries, retrieved-source snapshots, and an overall score that is absent by default and requires explicit provenance.
