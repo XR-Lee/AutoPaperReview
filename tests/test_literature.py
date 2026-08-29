@@ -170,6 +170,25 @@ class SarSchemaTests(unittest.TestCase):
                 ],
             )
 
+    def test_snapshots_require_known_query_ids_even_without_a_query_catalog(self) -> None:
+        from autopaperreview.models import RetrievedSourceSnapshot, SnapshotContentKind
+
+        with self.assertRaisesRegex(ValidationError, "retrieved snapshots reference unknown queries"):
+            ReviewPackage(
+                project_id="snapshot-test",
+                manuscript=make_artifact(),
+                retrieved_snapshots=[
+                    RetrievedSourceSnapshot(
+                        id="RW1",
+                        query_ids=["Q-missing"],
+                        title="Orphan snapshot",
+                        retrieved_at=datetime(2026, 8, 21, tzinfo=timezone.utc),
+                        content_kind=SnapshotContentKind.abstract,
+                        locator="fixtures/orphan.json#RW1",
+                    )
+                ],
+            )
+
     def test_report_emits_sar_sections_with_evidence_ids_and_no_invented_overall(self) -> None:
         from autopaperreview.models import (
             DimensionScore,
@@ -186,6 +205,7 @@ class SarSchemaTests(unittest.TestCase):
             sources=[source],
             evidence=[evidence],
             issues=[make_issue(evidence_ids=["E1"], source_ids=["S1"])],
+            summary=localized("Legacy summary without an evidence suffix."),
             claims=[
                 ReviewClaim(
                     id="C-summary",
@@ -211,6 +231,8 @@ class SarSchemaTests(unittest.TestCase):
         )
         markdown = render_markdown(package, language="en")
         self.assertIn("## Summary", markdown)
+        self.assertIn("A short paper claims deployment readiness. [E1]", markdown)
+        self.assertNotIn("Legacy summary without an evidence suffix.", markdown)
         self.assertIn("## Questions", markdown)
         self.assertIn("## Dimension Scores", markdown)
         self.assertIn("[E1]", markdown)
