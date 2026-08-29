@@ -39,6 +39,42 @@ class NetworkPolicy(str, Enum):
     allow = "allow"
 
 
+class SarDimension(str, Enum):
+    originality = "originality"
+    importance_of_research_question = "importance_of_research_question"
+    claims_supported = "claims_supported"
+    experimental_soundness = "experimental_soundness"
+    writing_clarity = "writing_clarity"
+    community_value = "community_value"
+    prior_work_contextualization = "prior_work_contextualization"
+
+
+class OverallScoreMethod(str, Enum):
+    linear_regression = "linear_regression"
+    declared_formula = "declared_formula"
+    human = "human"
+    llm_direct = "llm_direct"
+
+
+class QueryPerspective(str, Enum):
+    baselines = "baselines"
+    same_problem = "same_problem"
+    related_techniques = "related_techniques"
+
+
+class SnapshotContentKind(str, Enum):
+    abstract = "abstract"
+    full_text_summary = "full_text_summary"
+
+
+class ReviewClaimKind(str, Enum):
+    summary = "summary"
+    strength = "strength"
+    weakness = "weakness"
+    question = "question"
+    comment = "comment"
+
+
 class StageStatus(str, Enum):
     pending = "pending"
     running = "running"
@@ -117,6 +153,98 @@ class EvidenceRecord(StrictModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DimensionScore(StrictModel):
+    dimension: SarDimension
+    score: float = Field(ge=0.0, le=10.0)
+    rationale: LocalizedText | None = None
+    evidence_ids: list[str] = Field(min_length=1)
+    route_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids", "route_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str], info) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if info.field_name == "evidence_ids" and not cleaned:
+            raise ValueError("at least one evidence ID is required")
+        return cleaned
+
+
+class OverallScore(StrictModel):
+    value: float = Field(ge=0.0, le=10.0)
+    scale_min: float = 0.0
+    scale_max: float = 10.0
+    method: OverallScoreMethod
+    scorer: str | None = None
+    prompt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    model_identifier: str | None = None
+    coefficient_set: str | None = None
+    notes: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @model_validator(mode="after")
+    def require_explicit_provenance(self) -> "OverallScore":
+        if self.method == OverallScoreMethod.llm_direct and not (self.notes and self.notes.strip()):
+            raise ValueError("llm_direct overall scores require notes acknowledging they are uncalibrated")
+        if self.method == OverallScoreMethod.linear_regression and not self.coefficient_set:
+            raise ValueError("linear_regression overall scores require a coefficient_set identifier")
+        return self
+
+
+class RelatedWorkQuery(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    perspective: QueryPerspective
+    query: str = Field(min_length=1)
+    generated_from: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetrievedSourceSnapshot(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    query_ids: list[str] = Field(min_length=1)
+    title: str = Field(min_length=1)
+    retrieved_at: datetime
+    content_kind: SnapshotContentKind
+    locator: str = Field(min_length=1)
+    arxiv_id: str | None = None
+    doi: str | None = None
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    authors: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("query_ids", "authors")
+    @classmethod
+    def unique_strings(cls, value: list[str], info) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if info.field_name == "query_ids" and not cleaned:
+            raise ValueError("at least one query ID is required")
+        return cleaned
+
+
+class ReviewClaim(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    kind: ReviewClaimKind
+    text: LocalizedText
+    evidence_ids: list[str] = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+    route_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids", "source_ids", "route_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str], info) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if info.field_name == "evidence_ids" and not cleaned:
+            raise ValueError("at least one evidence ID is required")
+        return cleaned
+
+
 class ReviewIssue(StrictModel):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
     severity: Severity
@@ -153,6 +281,12 @@ class ReviewPackage(StrictModel):
     issues: list[ReviewIssue] = Field(default_factory=list)
     strengths: dict[str, list[str]] = Field(default_factory=dict)
     acceptance_gate: dict[str, list[str]] = Field(default_factory=dict)
+    summary: LocalizedText | None = None
+    claims: list[ReviewClaim] = Field(default_factory=list)
+    dimension_scores: list[DimensionScore] = Field(default_factory=list)
+    overall_score: OverallScore | None = None
+    related_work_queries: list[RelatedWorkQuery] = Field(default_factory=list)
+    retrieved_snapshots: list[RetrievedSourceSnapshot] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -162,14 +296,22 @@ class ReviewPackage(StrictModel):
             "route": [route.id for route in self.routes],
             "source": [source.id for source in self.sources],
             "evidence": [item.id for item in self.evidence],
+            "claim": [claim.id for claim in self.claims],
+            "related-work query": [query.id for query in self.related_work_queries],
+            "retrieved snapshot": [snapshot.id for snapshot in self.retrieved_snapshots],
         }
         for label, identifiers in collections.items():
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError(f"{label} IDs must be unique")
 
+        dimensions = [score.dimension for score in self.dimension_scores]
+        if len(dimensions) != len(set(dimensions)):
+            raise ValueError("dimension scores must be unique per dimension")
+
         route_ids = {route.id for route in self.routes}
         source_ids = {source.id for source in self.sources}
         evidence_ids = {item.id for item in self.evidence}
+        query_ids = {query.id for query in self.related_work_queries}
 
         missing = sorted({rid for issue in self.issues for rid in issue.route_ids} - route_ids)
         if missing:
@@ -183,6 +325,30 @@ class ReviewPackage(StrictModel):
         missing = sorted({eid for issue in self.issues for eid in issue.evidence_ids} - evidence_ids)
         if missing:
             raise ValueError(f"issues reference unknown evidence: {missing}")
+        missing = sorted({eid for claim in self.claims for eid in claim.evidence_ids} - evidence_ids)
+        if missing:
+            raise ValueError(f"claims reference unknown evidence: {missing}")
+        missing = sorted({sid for claim in self.claims for sid in claim.source_ids} - source_ids)
+        if missing:
+            raise ValueError(f"claims reference unknown sources: {missing}")
+        missing = sorted({rid for claim in self.claims for rid in claim.route_ids} - route_ids)
+        if missing:
+            raise ValueError(f"claims reference unknown routes: {missing}")
+        missing = sorted({eid for score in self.dimension_scores for eid in score.evidence_ids} - evidence_ids)
+        if missing:
+            raise ValueError(f"dimension scores reference unknown evidence: {missing}")
+        missing = sorted({rid for score in self.dimension_scores for rid in score.route_ids} - route_ids)
+        if missing:
+            raise ValueError(f"dimension scores reference unknown routes: {missing}")
+        if self.overall_score is not None:
+            missing = sorted(set(self.overall_score.evidence_ids) - evidence_ids)
+            if missing:
+                raise ValueError(f"overall score references unknown evidence: {missing}")
+        missing = sorted(
+            {qid for snapshot in self.retrieved_snapshots for qid in snapshot.query_ids} - query_ids
+        )
+        if missing:
+            raise ValueError(f"retrieved snapshots reference unknown queries: {missing}")
         return self
 
 

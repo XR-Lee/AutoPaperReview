@@ -193,12 +193,16 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
             missing_routes = sorted(wanted - known_routes)
             if missing_routes:
                 errors.append(f"stage {stage.id} references unknown routes: {missing_routes}")
-        if stage.type == "command" and stage.params.get("requires_network"):
-            scope = str(stage.params.get("network_scope", "fulltext"))
+        if stage.type in {"command", "literature_grounding"} and stage.params.get("requires_network"):
+            scope = str(stage.params.get("network_scope", "fulltext" if stage.type == "command" else "metadata"))
             policy = loaded.config.project.network_policy
             allowed = policy.value == "allow" or (policy.value == "metadata_only" and scope == "metadata")
             if not allowed:
                 errors.append(f"stage {stage.id} requests {scope} network access under policy {policy.value}")
+        if stage.type == "literature_grounding" and stage.params.get("snapshot_path"):
+            path = loaded.resolve(str(stage.params["snapshot_path"]))
+            if not path.is_file():
+                errors.append(f"stage {stage.id} snapshot fixture does not exist: {path}")
     try:
         loaded.config.ordered_stages()
     except ValueError as exc:

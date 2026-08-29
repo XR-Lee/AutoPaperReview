@@ -117,7 +117,7 @@ Acceptance criteria:
 After the four data-boundary milestones above:
 
 - Parser adapters with dual-parser comparison and extraction QA.
-- External-source snapshot and literature retrieval adapters.
+- External-source snapshot and literature retrieval adapters. v0.1.1 ships query generation, snapshot records, and an optional declared retriever hook; it does not add Tavily, OpenAlex, PaperQA, a vector index, or a hosted search service.
 - Typed model-execution adapters with prompt/response provenance.
 - Rendered PDF/DOCX structural and visual QA records.
 - Release manifests that bind QA attestations to exact artifact hashes.

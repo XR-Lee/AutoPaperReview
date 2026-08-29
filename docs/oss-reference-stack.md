@@ -49,6 +49,7 @@ MinerU is not a default v0.1 recommendation because its licensing and distributi
 | [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) | DOI, title, author, venue, and date verification | Metadata-resolution adapter. Preserve the original response because records can be corrected after retrieval. |
 | [Citation.js](https://github.com/citation-js/citation-js) | BibTeX/RIS/CSL-JSON normalization and citation rendering | Optional Node subprocess adapter. Preserve raw input and convert normalized records into AutoPaperReview sources. |
 | [PaperQA2](https://github.com/Future-House/paper-qa) | Scientific retrieval and evidence-oriented question answering | Optional evidence-worker adapter, not the owner of the document store or workflow |
+| Tavily (hosted by Stanford SAR) | Web/arXiv search used by paperreview.ai | Not a core dependency. AutoPaperReview records query/snapshot artifacts; a live retriever is an optional declared adapter. |
 
 Retrieval interfaces should remain capability-based, for example `search_works`, `resolve_doi`, `fetch_metadata`, `locate_fulltext`, and `retrieve_passages`. Provider response classes must not leak into canonical issue or evidence records.
 

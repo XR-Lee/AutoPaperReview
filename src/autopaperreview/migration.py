@@ -8,7 +8,13 @@ from typing import Any
 
 from .models import (
     Artifact,
+    DimensionScore,
+    EvidenceRecord,
     LocalizedText,
+    OverallScore,
+    RelatedWorkQuery,
+    RetrievedSourceSnapshot,
+    ReviewClaim,
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
@@ -55,6 +61,7 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         "required_action_zh",
         "detected_by",
         "sources",
+        "evidence_ids",
         "confidence",
     }
     unknown = {key: value for key, value in record.items() if key not in known}
@@ -70,6 +77,7 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         confidence=float(record.get("confidence", 0.5)),
         route_ids=_string_list(record.get("detected_by")),
         source_ids=_string_list(record.get("sources")),
+        evidence_ids=_string_list(record.get("evidence_ids")),
         metadata={"legacy_v0": unknown} if unknown else {},
     )
 
@@ -226,15 +234,39 @@ def migrate_legacy_package(
         _migrate_routes(raw.get("methods", [])),
         _migrate_sources(raw.get("sources", [])),
     )
+    evidence = [EvidenceRecord.model_validate(item) for item in raw.get("evidence", [])]
+    claims = [ReviewClaim.model_validate(item) for item in raw.get("claims", [])]
+    dimension_scores = [DimensionScore.model_validate(item) for item in raw.get("dimension_scores", [])]
+    related_work_queries = [
+        RelatedWorkQuery.model_validate(item) for item in raw.get("related_work_queries", [])
+    ]
+    retrieved_snapshots = [
+        RetrievedSourceSnapshot.model_validate(item) for item in raw.get("retrieved_snapshots", [])
+    ]
+    overall_score = OverallScore.model_validate(raw["overall_score"]) if raw.get("overall_score") else None
+    summary = None
+    if isinstance(raw.get("summary"), dict):
+        summary = LocalizedText.model_validate(raw["summary"])
+    elif raw.get("summary_en") or raw.get("summary_zh") or isinstance(raw.get("summary"), str):
+        summary = _localized(raw, "summary")
     known_top_level = {
         "manuscript",
         "methods",
         "sources",
+        "evidence",
         "issues",
         "strengths_en",
         "strengths_zh",
         "acceptance_gate_en",
         "acceptance_gate_zh",
+        "claims",
+        "dimension_scores",
+        "related_work_queries",
+        "retrieved_snapshots",
+        "overall_score",
+        "summary",
+        "summary_en",
+        "summary_zh",
     }
     return ReviewPackage(
         project_id=project_id,
@@ -242,9 +274,16 @@ def migrate_legacy_package(
         recommendation=recommendation,
         routes=routes,
         sources=sources,
+        evidence=evidence,
         issues=issues,
         strengths=strengths,
         acceptance_gate=acceptance_gate,
+        summary=summary,
+        claims=claims,
+        dimension_scores=dimension_scores,
+        overall_score=overall_score,
+        related_work_queries=related_work_queries,
+        retrieved_snapshots=retrieved_snapshots,
         metadata={
             "imported_from": "legacy-v0-package",
             "legacy_manuscript": manuscript_record,

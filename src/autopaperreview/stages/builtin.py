@@ -18,10 +18,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..artifacts import artifact_from_path
 from ..hashing import hash_json, sha256_file
 from ..migration import load_review_input
+from ..literature import (
+    generate_related_work_queries,
+    load_retriever,
+    load_snapshot_fixture,
+    snapshots_to_records,
+)
 from ..models import (
     Artifact,
-    LocalizedText,
+    DimensionScore,
     NetworkPolicy,
+    RelatedWorkQuery,
+    RetrievedSourceSnapshot,
+    ReviewClaim,
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
@@ -46,6 +55,19 @@ def _artifact(path: Path, context: StageContext, role: str) -> Artifact:
         base=context.run_dir,
         base_name="run",
     )
+
+
+def _enforce_network_declaration(context: StageContext, *, requires_network: bool, network_scope: str) -> None:
+    if not requires_network:
+        return
+    policy = context.loaded_config.config.project.network_policy
+    allowed = policy == NetworkPolicy.allow or (
+        policy == NetworkPolicy.metadata_only and network_scope == "metadata"
+    )
+    if not allowed:
+        raise PermissionError(
+            f"stage {context.stage.id} requests {network_scope} network access under policy {policy.value}"
+        )
 
 
 class IngestParams(ParamsModel):
@@ -160,14 +182,9 @@ class CommandStage(StageHandler):
     def run(self, context: StageContext) -> StageOutcome:
         params = self._params(context)
         policy = context.loaded_config.config.project.network_policy
-        if params.requires_network:
-            allowed = policy == NetworkPolicy.allow or (
-                policy == NetworkPolicy.metadata_only and params.network_scope == "metadata"
-            )
-            if not allowed:
-                raise PermissionError(
-                    f"stage {context.stage.id} requests {params.network_scope} network access under policy {policy.value}"
-                )
+        _enforce_network_declaration(
+            context, requires_network=params.requires_network, network_scope=params.network_scope
+        )
 
         values = {
             "source": str(context.source_path),
@@ -442,11 +459,17 @@ class ConsensusStage(StageHandler):
         routes_by_id: dict[str, ReviewRoute] = {}
         sources_by_id = {}
         evidence_by_id = {}
+        claims_by_id: dict[str, ReviewClaim] = {}
+        queries_by_id: dict[str, RelatedWorkQuery] = {}
+        snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
         for package in packages:
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
                 ("source", package.sources, sources_by_id),
                 ("evidence", package.evidence, evidence_by_id),
+                ("claim", package.claims, claims_by_id),
+                ("related-work query", package.related_work_queries, queries_by_id),
+                ("retrieved snapshot", package.retrieved_snapshots, snapshots_by_id),
             ):
                 for value in values:
                     existing = catalog.get(value.id)
@@ -456,6 +479,9 @@ class ConsensusStage(StageHandler):
 
         strengths: dict[str, list[str]] = {}
         acceptance_gate: dict[str, list[str]] = {}
+        dimension_by_name: dict[str, DimensionScore] = {}
+        summary = None
+        overall_score = None
         for package in packages:
             for language, values in package.strengths.items():
                 strengths[language] = list(dict.fromkeys([*strengths.get(language, []), *values]))
@@ -463,6 +489,19 @@ class ConsensusStage(StageHandler):
                 acceptance_gate[language] = list(
                     dict.fromkeys([*acceptance_gate.get(language, []), *values])
                 )
+            if package.summary is not None:
+                if summary is not None and summary != package.summary:
+                    raise ValueError("conflicting summary definitions")
+                summary = package.summary
+            if package.overall_score is not None:
+                if overall_score is not None and overall_score != package.overall_score:
+                    raise ValueError("conflicting overall_score definitions")
+                overall_score = package.overall_score
+            for score in package.dimension_scores:
+                existing = dimension_by_name.get(score.dimension)
+                if existing is not None and existing != score:
+                    raise ValueError(f"conflicting dimension score for {score.dimension.value}")
+                dimension_by_name[score.dimension] = score
         recommendation = next(
             (package.recommendation for package in packages if package.recommendation is not None),
             None,
@@ -478,6 +517,12 @@ class ConsensusStage(StageHandler):
             issues=sorted(merged, key=lambda item: item.id),
             strengths=strengths,
             acceptance_gate=acceptance_gate,
+            summary=summary,
+            claims=list(claims_by_id.values()),
+            dimension_scores=list(dimension_by_name.values()),
+            overall_score=overall_score,
+            related_work_queries=list(queries_by_id.values()),
+            retrieved_snapshots=list(snapshots_by_id.values()),
             metadata={
                 **first.metadata,
                 "consensus_rule": "exact-normalized-v1",
@@ -489,6 +534,108 @@ class ConsensusStage(StageHandler):
         return StageOutcome(
             artifacts=[_artifact(output_path, context, "review.package.consensus")],
             metadata={"issue_count": len(output.issues)},
+        )
+
+
+
+class LiteratureGroundingParams(ParamsModel):
+    requires_network: bool = False
+    network_scope: str = "metadata"
+    snapshot_path: str | None = None
+    retriever: str | None = None
+    max_queries_per_perspective: int = Field(default=1, ge=1)
+    include_source_text: bool = True
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.retriever and not self.requires_network:
+            raise ValueError("a live retriever requires requires_network = true")
+
+
+class LiteratureGroundingStage(StageHandler):
+    type_name = "literature_grounding"
+    version = "1"
+    params_model = LiteratureGroundingParams
+
+    def _params(self, context: StageContext) -> LiteratureGroundingParams:
+        return LiteratureGroundingParams.model_validate(context.stage.params)
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = self._params(context)
+        material: dict[str, Any] = {}
+        if params.snapshot_path:
+            path = context.loaded_config.resolve(params.snapshot_path)
+            material["snapshot_sha256"] = sha256_file(path)
+        return material
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = self._params(context)
+        _enforce_network_declaration(
+            context, requires_network=params.requires_network, network_scope=params.network_scope
+        )
+        if params.include_source_text:
+            try:
+                manuscript_text = context.source_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("literature_grounding currently supports text sources only") from exc
+        else:
+            manuscript_text = context.source_path.name
+        queries = generate_related_work_queries(
+            manuscript_text, max_per_perspective=params.max_queries_per_perspective
+        )
+        snapshots: list[RetrievedSourceSnapshot] = []
+        if params.snapshot_path:
+            snapshots.extend(load_snapshot_fixture(context.loaded_config.resolve(params.snapshot_path)))
+        if params.retriever:
+            from ..literature import RetrievalRequest
+
+            retriever = load_retriever(params.retriever)
+            result = retriever.retrieve(
+                RetrievalRequest(
+                    manuscript_sha256=context.manifest.source.sha256,
+                    queries=queries,
+                    network_scope=params.network_scope,
+                ),
+                context.stage_dir,
+            )
+            snapshots.extend(result.snapshots)
+        query_ids = {query.id for query in queries}
+        missing = sorted({qid for snapshot in snapshots for qid in snapshot.query_ids} - query_ids)
+        if missing:
+            raise ValueError(f"retrieved snapshots reference unknown queries: {missing}")
+        sources, evidence = snapshots_to_records(snapshots, queries)
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            sources=sources,
+            evidence=evidence,
+            related_work_queries=queries,
+            retrieved_snapshots=snapshots,
+            metadata={
+                "literature_grounding": {
+                    "requires_network": params.requires_network,
+                    "network_scope": params.network_scope,
+                    "retriever": params.retriever,
+                    "snapshot_path": params.snapshot_path,
+                }
+            },
+        )
+        queries_path = context.stage_dir / "queries.json"
+        snapshots_path = context.stage_dir / "snapshots.json"
+        package_path = context.stage_dir / "package.json"
+        _write_json(queries_path, [query.model_dump(mode="json") for query in queries])
+        _write_json(snapshots_path, [snapshot.model_dump(mode="json") for snapshot in snapshots])
+        write_package_json(package, package_path)
+        return StageOutcome(
+            artifacts=[
+                _artifact(queries_path, context, "literature.queries"),
+                _artifact(snapshots_path, context, "literature.snapshots"),
+                _artifact(package_path, context, "review.package.literature"),
+            ],
+            metadata={
+                "query_count": len(queries),
+                "snapshot_count": len(snapshots),
+                "requires_network": params.requires_network,
+            },
         )
 
 
@@ -543,6 +690,7 @@ BUILTIN_STAGE_HANDLERS = (
     CommandStage,
     ImportIssuesStage,
     PromptPacketStage,
+    LiteratureGroundingStage,
     ConsensusStage,
     ReportStage,
 )

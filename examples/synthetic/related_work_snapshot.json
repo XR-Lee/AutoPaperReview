@@ -1,0 +1,18 @@
+{
+  "snapshots": [
+    {
+      "id": "RW1",
+      "query_ids": ["Q-baselines-1"],
+      "title": "Synthetic fixture: sequence-level holdout for tracking evaluation",
+      "retrieved_at": "2026-08-21T00:00:00Z",
+      "content_kind": "abstract",
+      "locator": "fixtures/related-work-snapshot.json#RW1",
+      "arxiv_id": "0000.00000",
+      "authors": ["Fixture Author"],
+      "metadata": {
+        "fixture": true,
+        "note": "Offline snapshot for the deny-policy synthetic example. Not a live arXiv record."
+      }
+    }
+  ]
+}

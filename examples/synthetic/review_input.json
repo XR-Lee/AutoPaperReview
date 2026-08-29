@@ -11,6 +11,11 @@
     {
       "id": "M2",
       "name_en": "Metric and protocol review"
+    },
+    {
+      "id": "M3",
+      "name_en": "SAR-shaped grounded review",
+      "kind": "literature"
     }
   ],
   "sources": [
@@ -35,9 +40,17 @@
       "impact_zh": "时间上高度相似的内容可能抬高准确率，无法支持对未见结构的泛化结论。",
       "required_action_en": "Use specimen- or sequence-level holdout and report results on a genuinely independent test set.",
       "required_action_zh": "采用试件级或序列级留出，并在真正独立的测试集上报告结果。",
-      "detected_by": ["M0", "M2"],
-      "sources": ["S1"],
-      "confidence": 0.99
+      "detected_by": [
+        "M0",
+        "M2"
+      ],
+      "sources": [
+        "S1"
+      ],
+      "confidence": 0.99,
+      "evidence_ids": [
+        "E1"
+      ]
     },
     {
       "id": "I002",
@@ -52,9 +65,16 @@
       "impact_zh": "所声称性能的幅度和稳定性均不明确。",
       "required_action_en": "Report repeated runs, uncertainty intervals, and an external or specimen-level test.",
       "required_action_zh": "报告重复运行、不确定性区间以及外部或试件级测试。",
-      "detected_by": ["M0"],
-      "sources": ["S1"],
-      "confidence": 0.96
+      "detected_by": [
+        "M0"
+      ],
+      "sources": [
+        "S1"
+      ],
+      "confidence": 0.96,
+      "evidence_ids": [
+        "E1"
+      ]
     }
   ],
   "strengths_en": [
@@ -70,5 +90,226 @@
   "acceptance_gate_zh": [
     "采用序列独立的数据拆分。",
     "报告重复运行与不确定性。"
+  ],
+  "evidence": [
+    {
+      "id": "E1",
+      "source_id": "S1",
+      "locator": "Methods and Results",
+      "claim": "Eight temporally related images from one specimen are randomly split into training and test images, and one accuracy is reported."
+    }
+  ],
+  "summary_en": "The manuscript claims a deployment-ready tracker from an eight-image, image-level split.",
+  "summary_zh": "稿件根据八张图像的图像级拆分声称跟踪器已可部署。",
+  "claims": [
+    {
+      "id": "C-summary",
+      "kind": "summary",
+      "text": {
+        "primary": "The paper reports 95% accuracy on two held-out images from the same specimen and concludes the method is ready for unseen structures.",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "论文在同一试件的两张留出图像上报告 95% 准确率，并认为方法可用于未见结构。"
+        }
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "source_ids": [
+        "S1"
+      ],
+      "route_ids": [
+        "M3"
+      ]
+    },
+    {
+      "id": "C-strength",
+      "kind": "strength",
+      "text": {
+        "primary": "The manuscript states a concrete deployment-oriented objective.",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "稿件提出了明确的部署导向目标。"
+        }
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "source_ids": [
+        "S1"
+      ],
+      "route_ids": [
+        "M0"
+      ]
+    },
+    {
+      "id": "C-weakness",
+      "kind": "weakness",
+      "text": {
+        "primary": "The evaluation does not establish sequence independence, so the deployment claim is unsupported.",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "评估没有建立序列独立性，因此部署结论缺少支持。"
+        }
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "source_ids": [
+        "S1"
+      ],
+      "route_ids": [
+        "M0",
+        "M2"
+      ]
+    },
+    {
+      "id": "C-question",
+      "kind": "question",
+      "text": {
+        "primary": "What is the specimen-level accuracy, with repeated seeds, on a genuinely held-out sequence?",
+        "language": "en",
+        "translations": {
+          "zh-Hans": "在真正留出的序列上，带重复种子的试件级准确率是多少？"
+        }
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "source_ids": [
+        "S1"
+      ],
+      "route_ids": [
+        "M3"
+      ]
+    }
+  ],
+  "dimension_scores": [
+    {
+      "dimension": "originality",
+      "score": 5.0,
+      "rationale": {
+        "primary": "The tracking objective is concrete but the method is not compared to prior work in this fixture.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "importance_of_research_question",
+      "score": 6.0,
+      "rationale": {
+        "primary": "Deployment-oriented tracking is a real need; the fixture does not measure community impact.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "claims_supported",
+      "score": 2.0,
+      "rationale": {
+        "primary": "The deployment claim is not supported by the reported split or uncertainty.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "experimental_soundness",
+      "score": 2.0,
+      "rationale": {
+        "primary": "Image-level split of eight temporally related images is not an independent test.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "writing_clarity",
+      "score": 7.0,
+      "rationale": {
+        "primary": "The short synthetic manuscript is readable and internally consistent.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "community_value",
+      "score": 4.0,
+      "rationale": {
+        "primary": "A cautionary evaluation example has some teaching value but no released protocol.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    },
+    {
+      "dimension": "prior_work_contextualization",
+      "score": 3.0,
+      "rationale": {
+        "primary": "The manuscript itself contains no related-work discussion; only a fixture snapshot is attached.",
+        "language": "en"
+      },
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M3"
+      ],
+      "metadata": {
+        "origin": "synthetic-example-judgment",
+        "not_iclr_calibrated": true
+      }
+    }
   ]
 }

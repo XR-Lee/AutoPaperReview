@@ -51,7 +51,7 @@ class CliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(
             payload["stage_types"],
-            ["command", "consensus", "import_issues", "ingest", "prompt_packet", "report"],
+            ["command", "consensus", "import_issues", "ingest", "literature_grounding", "prompt_packet", "report"],
         )
 
     def test_templates_command_exports_packaged_prompts(self) -> None:
@@ -63,8 +63,9 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             payload = json.loads(stdout.getvalue())
-            self.assertEqual(len(payload["templates"]), 5)
+            self.assertEqual(len(payload["templates"]), 6)
             self.assertIn("closed_book_v1.md", payload["templates"])
+            self.assertIn("sar_grounded_review_v1.md", payload["templates"])
             self.assertTrue((output_dir / "visual_qa_v1.md").is_file())
 
 

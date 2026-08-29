@@ -75,6 +75,58 @@
       "title": "Artifact",
       "type": "object"
     },
+    "DimensionScore": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/SarDimension"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalizedText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "route_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "score": {
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dimension",
+        "score",
+        "evidence_ids"
+      ],
+      "title": "DimensionScore",
+      "type": "object"
+    },
     "EvidenceRecord": {
       "additionalProperties": false,
       "properties": {
@@ -177,6 +229,327 @@
       ],
       "title": "LocalizedText",
       "type": "object"
+    },
+    "OverallScore": {
+      "additionalProperties": false,
+      "properties": {
+        "coefficient_set": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coefficient Set"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "method": {
+          "$ref": "#/$defs/OverallScoreMethod"
+        },
+        "model_identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Identifier"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Hash"
+        },
+        "scale_max": {
+          "default": 10.0,
+          "title": "Scale Max",
+          "type": "number"
+        },
+        "scale_min": {
+          "default": 0.0,
+          "title": "Scale Min",
+          "type": "number"
+        },
+        "scorer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scorer"
+        },
+        "value": {
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "method"
+      ],
+      "title": "OverallScore",
+      "type": "object"
+    },
+    "OverallScoreMethod": {
+      "enum": [
+        "linear_regression",
+        "declared_formula",
+        "human",
+        "llm_direct"
+      ],
+      "title": "OverallScoreMethod",
+      "type": "string"
+    },
+    "QueryPerspective": {
+      "enum": [
+        "baselines",
+        "same_problem",
+        "related_techniques"
+      ],
+      "title": "QueryPerspective",
+      "type": "string"
+    },
+    "RelatedWorkQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated From"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "perspective": {
+          "$ref": "#/$defs/QueryPerspective"
+        },
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "perspective",
+        "query"
+      ],
+      "title": "RelatedWorkQuery",
+      "type": "object"
+    },
+    "RetrievedSourceSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "arxiv_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Arxiv Id"
+        },
+        "authors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Authors",
+          "type": "array"
+        },
+        "content_kind": {
+          "$ref": "#/$defs/SnapshotContentKind"
+        },
+        "doi": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doi"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "locator": {
+          "minLength": 1,
+          "title": "Locator",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "query_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Query Ids",
+          "type": "array"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "query_ids",
+        "title",
+        "retrieved_at",
+        "content_kind",
+        "locator"
+      ],
+      "title": "RetrievedSourceSnapshot",
+      "type": "object"
+    },
+    "ReviewClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReviewClaimKind"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "route_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "text": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "evidence_ids"
+      ],
+      "title": "ReviewClaim",
+      "type": "object"
+    },
+    "ReviewClaimKind": {
+      "enum": [
+        "summary",
+        "strength",
+        "weakness",
+        "question",
+        "comment"
+      ],
+      "title": "ReviewClaimKind",
+      "type": "string"
     },
     "ReviewDecision": {
       "enum": [
@@ -373,6 +746,19 @@
       "title": "RouteKind",
       "type": "string"
     },
+    "SarDimension": {
+      "enum": [
+        "originality",
+        "importance_of_research_question",
+        "claims_supported",
+        "experimental_soundness",
+        "writing_clarity",
+        "community_value",
+        "prior_work_contextualization"
+      ],
+      "title": "SarDimension",
+      "type": "string"
+    },
     "Severity": {
       "enum": [
         "critical",
@@ -382,6 +768,14 @@
         "editorial"
       ],
       "title": "Severity",
+      "type": "string"
+    },
+    "SnapshotContentKind": {
+      "enum": [
+        "abstract",
+        "full_text_summary"
+      ],
+      "title": "SnapshotContentKind",
       "type": "string"
     },
     "SourceRecord": {
@@ -473,6 +867,20 @@
       "title": "Acceptance Gate",
       "type": "object"
     },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/ReviewClaim"
+      },
+      "title": "Claims",
+      "type": "array"
+    },
+    "dimension_scores": {
+      "items": {
+        "$ref": "#/$defs/DimensionScore"
+      },
+      "title": "Dimension Scores",
+      "type": "array"
+    },
     "evidence": {
       "items": {
         "$ref": "#/$defs/EvidenceRecord"
@@ -495,6 +903,17 @@
       "title": "Metadata",
       "type": "object"
     },
+    "overall_score": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OverallScore"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "project_id": {
       "minLength": 1,
       "title": "Project Id",
@@ -510,6 +929,20 @@
         }
       ],
       "default": null
+    },
+    "related_work_queries": {
+      "items": {
+        "$ref": "#/$defs/RelatedWorkQuery"
+      },
+      "title": "Related Work Queries",
+      "type": "array"
+    },
+    "retrieved_snapshots": {
+      "items": {
+        "$ref": "#/$defs/RetrievedSourceSnapshot"
+      },
+      "title": "Retrieved Snapshots",
+      "type": "array"
     },
     "routes": {
       "items": {
@@ -540,6 +973,17 @@
       },
       "title": "Strengths",
       "type": "object"
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

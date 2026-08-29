@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.0`
+Version: `0.1.1`
 
 ## Code harness, not a prompt-only skill
 
@@ -19,6 +19,10 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 - Python entry-point plugins under `autopaperreview.stages`.
 - Migration support for the earlier bare issue-array and review-package JSON formats.
 - Generated JSON Schema, a synthetic end-to-end example, unit tests, CI, and an open-source reference-stack snapshot.
+- Optional SAR-shaped records: seven dimension scores, narrative claims that require evidence IDs, related-work query sets, and retrieved-source snapshots. An overall 0–10 is optional and must carry provenance; the default is no overall score.
+- A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
+
+See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai. This repository does not claim Stanford's ICLR Spearman numbers.
 
 The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API. Those systems belong behind adapters so their release cadence does not become the review database schema.
 
@@ -94,4 +98,4 @@ The built-in network policy validates declared requirements but is not an operat
 
 Command stages inherit an explicit environment-variable allowlist rather than the complete parent environment. Add secret variable names with `inherit_env`; their values affect the cache signature but are not written to command records. Never put secret values in the TOML `env` table because configuration is snapshotted.
 
-See [Architecture](docs/architecture.md), [Open-source reference stack](docs/oss-reference-stack.md), and [Maintenance policy](docs/maintenance.md).
+See [Architecture](docs/architecture.md), [Stanford SAR comparison](docs/stanford-sar-comparison.md), [Open-source reference stack](docs/oss-reference-stack.md), and [Maintenance policy](docs/maintenance.md).
