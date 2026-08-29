@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.3`
+Version: `0.1.5`
 
 ## Code harness, not a prompt-only skill
 
@@ -21,8 +21,9 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 - Generated JSON Schema, a synthetic end-to-end example, unit tests, CI, and an open-source reference-stack snapshot.
 - Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default.
 - A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
+- P0–P2 contract stages: `execute_review` (declared adapter, no core model API), snapshot excerpts, typed `Anchor`s, a report export gate, `ledger` / `agenda`, read-only `workspace_inspect`, `integrity`, and matched-setting `novelty`.
 
-See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai. This repository does not claim Stanford's ICLR Spearman numbers.
+See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, and [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work. This repository does not claim Stanford's ICLR Spearman numbers.
 
 The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API. Those systems belong behind adapters so their release cadence does not become the review database schema.
 
@@ -47,7 +48,9 @@ PYTHONPATH=src python3 -m autopaperreview validate examples/synthetic/review.tom
 PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/review.toml
 ```
 
-The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales.
+The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales. After a successful run, inspect `stages/report/review_report.md`, `stages/prompt_packets/M3.md`, `stages/integrity/integrity.json`, and `stages/novelty/novelty.json` under the run directory.
+
+`init` writes a deterministic adapter DAG that can review a replaced `manuscript.txt` without a model API. The synthetic example uses `FixtureReviewAdapter` plus a local snapshot so literature, ledger, integrity, and novelty records are visible.
 
 The run ID is derived from the project ID, source hash, and configuration hash. Repeating the command reuses successful stages only when their signatures and output hashes still match.
 

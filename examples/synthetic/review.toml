@@ -36,11 +36,55 @@ prompt_version = "1.0"
 manuscript_access = true
 network_access = false
 
+[[routes]]
+id = "M4"
+name = "Literature audit"
+kind = "literature"
+prompt = "../../src/autopaperreview/prompts/literature_audit_v1.md"
+prompt_version = "1.0"
+manuscript_access = true
+network_access = false
+
+[[routes]]
+id = "M5"
+name = "Reproducibility audit"
+kind = "prompt"
+prompt = "../../src/autopaperreview/prompts/reproducibility_v1.md"
+prompt_version = "1.0"
+manuscript_access = true
+network_access = false
+
 [[stages]]
 id = "ingest"
 type = "ingest"
 [stages.params]
 copy = true
+
+[[stages]]
+id = "ledger"
+type = "ledger"
+depends_on = ["ingest"]
+
+[[stages]]
+id = "agenda"
+type = "agenda"
+depends_on = ["ledger"]
+
+[[stages]]
+id = "literature"
+type = "literature_grounding"
+depends_on = ["ingest", "agenda"]
+[stages.params]
+snapshot_path = "related_work_snapshot.json"
+requires_network = false
+network_scope = "metadata"
+
+[[stages]]
+id = "workspace"
+type = "workspace_inspect"
+depends_on = ["ingest"]
+[stages.params]
+paths = ["manuscript.txt", "artifacts", "related_work_snapshot.json"]
 
 [[stages]]
 id = "deterministic_check"
@@ -54,31 +98,34 @@ timeout_seconds = 30
 [[stages]]
 id = "prompt_packets"
 type = "prompt_packet"
-depends_on = ["ingest"]
+depends_on = ["ingest", "literature"]
 [stages.params]
-route_ids = ["M0", "M2", "M3"]
+route_ids = ["M0", "M2", "M3", "M4", "M5"]
 include_source_text = true
+include_literature = true
 
 [[stages]]
-id = "literature"
-type = "literature_grounding"
-depends_on = ["ingest"]
+id = "review"
+type = "execute_review"
+depends_on = ["prompt_packets", "literature", "ledger"]
 [stages.params]
-snapshot_path = "related_work_snapshot.json"
-requires_network = false
-network_scope = "metadata"
+adapter = "autopaperreview.adapters:FixtureReviewAdapter"
+fixture_path = "review_input.json"
 
 [[stages]]
-id = "issues"
-type = "import_issues"
-depends_on = ["deterministic_check", "prompt_packets"]
-[stages.params]
-path = "review_input.json"
+id = "integrity"
+type = "integrity"
+depends_on = ["workspace", "literature", "ledger"]
+
+[[stages]]
+id = "novelty"
+type = "novelty"
+depends_on = ["literature", "ledger"]
 
 [[stages]]
 id = "consensus"
 type = "consensus"
-depends_on = ["issues", "literature"]
+depends_on = ["review", "literature", "integrity", "novelty", "agenda"]
 [stages.params]
 min_independent_routes = 1
 
@@ -88,3 +135,13 @@ type = "report"
 depends_on = ["consensus"]
 [stages.params]
 bilingual = true
+min_issues = 1
+min_claims = 1
+min_anchored_issues = 1
+min_literature_snapshots = 1
+min_novelty_assessments = 1
+require_excerpt_on_snapshots = true
+require_ledger = true
+require_integrity = true
+require_literature_if_literature_route = true
+require_anchor_on_major = true

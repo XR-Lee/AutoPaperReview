@@ -9,6 +9,10 @@
       "locator": "fixtures/related-work-snapshot.json#RW1",
       "arxiv_id": "0000.00000",
       "authors": ["Fixture Author"],
+      "excerpt": "Sequence-level holdout is required before a tracker can be called deployment-ready. Image-level splits of temporally related frames are not independent tests.",
+      "task": "tracking",
+      "dataset": "sequence-level holdout",
+      "metric": "accuracy",
       "metadata": {
         "fixture": true,
         "note": "Offline snapshot for the deny-policy synthetic example. Not a live arXiv record."

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.5 - 2026-08-29
+
+- Closed the P0–P2 contract gaps from the open-experiment review.
+- Reproducibility attestation treats “No … was reported” as missing, not as a positive mention.
+- Added snapshot `excerpt` / `excerpt_hash`, typed `Anchor` locators, and a report export gate.
+- Added `execute_review` with bundled `DeterministicManuscriptAdapter` and `FixtureReviewAdapter`. The core still does not call a model API.
+- `prompt_packet` can attach literature queries and snapshot excerpts to review routes.
+- Added `ledger`, `agenda`, `workspace_inspect`, `integrity`, and matched-setting `novelty` stages.
+- `init` now writes specialist prompts, a workspace `artifacts/` folder, and a runnable deterministic review DAG.
+- `doctor` distinguishes importable optional modules from bundled adapters.
+
+## 0.1.4 - 2026-08-29
+
+- Added [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md): a prioritized feature review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, reviewer2, and related open experiments. This is not a claim that AutoPaperReview matches their scores.
+- Reordered the post-0.1.3 roadmap slices from that review: contract completeness and typed locators before ObservationRecord; an optional integrity family and thin model adapter next.
+- Literature query generation now emits distinct narrow / mid / broad variants. Extra queries no longer append a `" 2"` suffix. The `literature_grounding` handler version is now `2` so existing stage caches invalidate.
+
 ## 0.1.3 - 2026-08-29
 
 - Added `VenueConclusion` records: conference and journal decisions from the seven 1–10 dimension scores, with no overall numeric score.
