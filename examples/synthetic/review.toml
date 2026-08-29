@@ -27,6 +27,15 @@ prompt_version = "1.0"
 manuscript_access = true
 network_access = false
 
+[[routes]]
+id = "M3"
+name = "SAR-shaped grounded review"
+kind = "literature"
+prompt = "../../src/autopaperreview/prompts/sar_grounded_review_v1.md"
+prompt_version = "1.0"
+manuscript_access = true
+network_access = false
+
 [[stages]]
 id = "ingest"
 type = "ingest"
@@ -47,8 +56,17 @@ id = "prompt_packets"
 type = "prompt_packet"
 depends_on = ["ingest"]
 [stages.params]
-route_ids = ["M0", "M2"]
+route_ids = ["M0", "M2", "M3"]
 include_source_text = true
+
+[[stages]]
+id = "literature"
+type = "literature_grounding"
+depends_on = ["ingest"]
+[stages.params]
+snapshot_path = "related_work_snapshot.json"
+requires_network = false
+network_scope = "metadata"
 
 [[stages]]
 id = "issues"
@@ -60,7 +78,7 @@ path = "review_input.json"
 [[stages]]
 id = "consensus"
 type = "consensus"
-depends_on = ["issues"]
+depends_on = ["issues", "literature"]
 [stages.params]
 min_independent_routes = 1
 
