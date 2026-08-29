@@ -87,4 +87,4 @@ id = "report"
 type = "report"
 depends_on = ["consensus"]
 [stages.params]
-language = "zh-Hans"
+bilingual = true

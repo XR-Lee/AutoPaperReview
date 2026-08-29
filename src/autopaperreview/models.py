@@ -103,6 +103,19 @@ class LocalizedText(StrictModel):
             raise ValueError("localized text cannot be blank")
         return value
 
+    def get(self, language: str) -> str | None:
+        """Return text for `language` without falling back to another language."""
+        if language == self.language:
+            return self.primary
+        value = self.translations.get(language)
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    def has_language(self, language: str) -> bool:
+        return self.get(language) is not None
+
     def resolve(self, language: str | None = None) -> str:
         if language is None or language == self.language:
             return self.primary

@@ -190,7 +190,10 @@
       "score": 5.0,
       "rationale": {
         "primary": "The tracking objective is concrete but the method is not compared to prior work in this fixture.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "跟踪目标具体，但本夹具中的方法未与已有工作进行比较。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -208,7 +211,10 @@
       "score": 6.0,
       "rationale": {
         "primary": "Deployment-oriented tracking is a real need; the fixture does not measure community impact.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "面向部署的跟踪是真实需求；本夹具并未测量社区影响。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -226,7 +232,10 @@
       "score": 2.0,
       "rationale": {
         "primary": "The deployment claim is not supported by the reported split or uncertainty.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "所报告的数据拆分与不确定性并不能支持部署结论。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -244,7 +253,10 @@
       "score": 2.0,
       "rationale": {
         "primary": "Image-level split of eight temporally related images is not an independent test.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "将八张时间相关图像做图像级拆分，并不能构成独立测试。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -262,7 +274,10 @@
       "score": 7.0,
       "rationale": {
         "primary": "The short synthetic manuscript is readable and internally consistent.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "这篇简短的合成稿件可读且内部一致。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -280,7 +295,10 @@
       "score": 4.0,
       "rationale": {
         "primary": "A cautionary evaluation example has some teaching value but no released protocol.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "这一警示性评估示例有一定教学价值，但没有发布可用的协议。"
+        }
       },
       "evidence_ids": [
         "E1"
@@ -298,7 +316,10 @@
       "score": 3.0,
       "rationale": {
         "primary": "The manuscript itself contains no related-work discussion; only a fixture snapshot is attached.",
-        "language": "en"
+        "language": "en",
+        "translations": {
+          "zh-Hans": "稿件本身没有相关工作讨论；仅附带了夹具快照。"
+        }
       },
       "evidence_ids": [
         "E1"

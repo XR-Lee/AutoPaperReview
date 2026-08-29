@@ -111,7 +111,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective related-work queries from local text, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
-| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations; `default_language` / `language` still select a single language. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
