@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .hashing import digest_excerpt
+
 
 SCHEMA_VERSION = "1.0"
 
@@ -76,6 +78,40 @@ class QueryPerspective(str, Enum):
     baselines = "baselines"
     same_problem = "same_problem"
     related_techniques = "related_techniques"
+    agenda = "agenda"
+
+
+class AnchorKind(str, Enum):
+    display = "display"
+    text_offset = "text_offset"
+    quote = "quote"
+    pdf_region = "pdf_region"
+    docx_paragraph = "docx_paragraph"
+    external_snapshot = "external_snapshot"
+
+
+class IntegrityKind(str, Enum):
+    reference_integrity = "reference_integrity"
+    results_integrity = "results_integrity"
+    reproducibility_attestation = "reproducibility_attestation"
+
+
+class IntegrityVerdict(str, Enum):
+    exact = "exact"
+    minor = "minor"
+    major = "major"
+    missing = "missing"
+    mismatch = "mismatch"
+    unclear = "unclear"
+    not_comparable = "not_comparable"
+    unsupported = "unsupported"
+
+
+class NoveltyTag(str, Enum):
+    supported = "supported"
+    overlap = "overlap"
+    unclear = "unclear"
+    not_comparable = "not_comparable"
 
 
 class SnapshotContentKind(str, Enum):
@@ -138,6 +174,52 @@ class LocalizedText(StrictModel):
         return self.translations.get(language, self.primary)
 
 
+class Anchor(StrictModel):
+    """Machine-readable locator. `display` remains the human-readable location."""
+
+    kind: AnchorKind
+    display: str = Field(min_length=1)
+    artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    encoding: str | None = None
+    start: int | None = Field(default=None, ge=0)
+    end: int | None = Field(default=None, ge=0)
+    excerpt: str | None = None
+    excerpt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    page: int | None = Field(default=None, ge=1)
+    bbox: list[float] | None = None
+    paragraph_index: int | None = Field(default=None, ge=0)
+    snapshot_id: str | None = None
+    record_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_excerpt_hash(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("excerpt"):
+            digest = digest_excerpt(str(data["excerpt"]))
+            current = data.get("excerpt_hash")
+            if current and current != digest:
+                raise ValueError("excerpt_hash does not match excerpt")
+            data["excerpt_hash"] = digest
+        return data
+
+    @model_validator(mode="after")
+    def validate_kind_and_excerpt(self) -> "Anchor":
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("anchor end must be greater than or equal to start")
+        if self.bbox is not None and len(self.bbox) != 4:
+            raise ValueError("bbox must be [xmin, ymin, xmax, ymax]")
+        if self.kind == AnchorKind.text_offset and (self.start is None or self.end is None):
+            raise ValueError("text_offset anchors require start and end offsets")
+        if self.kind == AnchorKind.pdf_region and self.page is None:
+            raise ValueError("pdf_region anchors require a one-based page")
+        if self.kind == AnchorKind.quote and not (self.excerpt and self.excerpt.strip()):
+            raise ValueError("quote anchors require an excerpt")
+        if self.kind == AnchorKind.external_snapshot and not self.snapshot_id:
+            raise ValueError("external_snapshot anchors require a snapshot_id")
+        return self
+
+
 class Artifact(StrictModel):
     path: str = Field(min_length=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -176,10 +258,23 @@ class EvidenceRecord(StrictModel):
     source_id: str
     locator: str = Field(min_length=1)
     claim: str = Field(min_length=1)
+    excerpt: str | None = None
     excerpt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     retrieval_query: str | None = None
+    anchor: Anchor | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_excerpt_hash(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("excerpt"):
+            digest = digest_excerpt(str(data["excerpt"]))
+            current = data.get("excerpt_hash")
+            if current and current != digest:
+                raise ValueError("excerpt_hash does not match excerpt")
+            data["excerpt_hash"] = digest
+        return data
 
 
 class DimensionScore(StrictModel):
@@ -265,6 +360,12 @@ class RetrievedSourceSnapshot(StrictModel):
     doi: str | None = None
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     authors: list[str] = Field(default_factory=list)
+    excerpt: str | None = None
+    excerpt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    raw_artifact: str | None = None
+    task: str | None = None
+    dataset: str | None = None
+    metric: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("query_ids", "authors")
@@ -274,6 +375,17 @@ class RetrievedSourceSnapshot(StrictModel):
         if info.field_name == "query_ids" and not cleaned:
             raise ValueError("at least one query ID is required")
         return cleaned
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_excerpt_hash(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("excerpt"):
+            digest = digest_excerpt(str(data["excerpt"]))
+            current = data.get("excerpt_hash")
+            if current and current != digest:
+                raise ValueError("excerpt_hash does not match excerpt")
+            data["excerpt_hash"] = digest
+        return data
 
 
 class ReviewClaim(StrictModel):
@@ -311,12 +423,81 @@ class ReviewIssue(StrictModel):
     consensus_key: str | None = None
     support_count: int = Field(default=1, ge=1)
     decision: ReviewDecision = ReviewDecision.open
+    anchor: Anchor | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("route_ids", "source_ids", "evidence_ids", "tags")
     @classmethod
     def unique_strings(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+class LedgerClaim(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    claim: LocalizedText
+    in_paper_evidence_ids: list[str] = Field(default_factory=list)
+    risk: LocalizedText | None = None
+    anchor: Anchor | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("in_paper_evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+class AgendaQuestion(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    question: str = Field(min_length=1)
+    claim_ids: list[str] = Field(default_factory=list)
+    perspective: QueryPerspective | None = None
+    requires_network: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("claim_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+class IntegrityRecord(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    kind: IntegrityKind
+    verdict: IntegrityVerdict
+    subject: str = Field(min_length=1)
+    expected: str | None = None
+    observed: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    artifact_sha256s: list[str] = Field(default_factory=list)
+    notes: LocalizedText | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids", "artifact_sha256s")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+class NoveltyAssessment(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    claim_id: str
+    snapshot_id: str
+    tag: NoveltyTag
+    matched_task: bool = False
+    matched_dataset: bool = False
+    matched_metric: bool = False
+    evidence_ids: list[str] = Field(default_factory=list)
+    notes: LocalizedText | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @property
+    def matched_setting(self) -> bool:
+        return self.matched_task and self.matched_dataset and self.matched_metric
 
 
 class ReviewPackage(StrictModel):
@@ -337,6 +518,11 @@ class ReviewPackage(StrictModel):
     overall_score: OverallScore | None = None
     related_work_queries: list[RelatedWorkQuery] = Field(default_factory=list)
     retrieved_snapshots: list[RetrievedSourceSnapshot] = Field(default_factory=list)
+    ledger_claims: list[LedgerClaim] = Field(default_factory=list)
+    residual_risks: list[LocalizedText] = Field(default_factory=list)
+    agenda: list[AgendaQuestion] = Field(default_factory=list)
+    integrity_records: list[IntegrityRecord] = Field(default_factory=list)
+    novelty_assessments: list[NoveltyAssessment] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -350,6 +536,10 @@ class ReviewPackage(StrictModel):
             "related-work query": [query.id for query in self.related_work_queries],
             "retrieved snapshot": [snapshot.id for snapshot in self.retrieved_snapshots],
             "venue conclusion": [item.id for item in self.venue_conclusions],
+            "ledger claim": [item.id for item in self.ledger_claims],
+            "agenda question": [item.id for item in self.agenda],
+            "integrity record": [item.id for item in self.integrity_records],
+            "novelty assessment": [item.id for item in self.novelty_assessments],
         }
         for label, identifiers in collections.items():
             if len(identifiers) != len(set(identifiers)):
@@ -405,6 +595,33 @@ class ReviewPackage(StrictModel):
         )
         if missing:
             raise ValueError(f"retrieved snapshots reference unknown queries: {missing}")
+
+        ledger_ids = {item.id for item in self.ledger_claims}
+        snapshot_ids = {item.id for item in self.retrieved_snapshots}
+        missing = sorted(
+            {eid for item in self.ledger_claims for eid in item.in_paper_evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"ledger claims reference unknown evidence: {missing}")
+        missing = sorted({qid for item in self.agenda for qid in item.claim_ids} - ledger_ids)
+        if missing:
+            raise ValueError(f"agenda questions reference unknown ledger claims: {missing}")
+        missing = sorted(
+            {eid for item in self.integrity_records for eid in item.evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"integrity records reference unknown evidence: {missing}")
+        missing = sorted({item.claim_id for item in self.novelty_assessments} - ledger_ids)
+        if missing:
+            raise ValueError(f"novelty assessments reference unknown ledger claims: {missing}")
+        missing = sorted({item.snapshot_id for item in self.novelty_assessments} - snapshot_ids)
+        if missing:
+            raise ValueError(f"novelty assessments reference unknown snapshots: {missing}")
+        missing = sorted(
+            {eid for item in self.novelty_assessments for eid in item.evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"novelty assessments reference unknown evidence: {missing}")
         return self
 
 

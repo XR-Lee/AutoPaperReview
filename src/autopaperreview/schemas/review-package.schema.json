@@ -1,5 +1,232 @@
 {
   "$defs": {
+    "AgendaQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "perspective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueryPerspective"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "requires_network": {
+          "default": false,
+          "title": "Requires Network",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ],
+      "title": "AgendaQuestion",
+      "type": "object"
+    },
+    "Anchor": {
+      "additionalProperties": false,
+      "description": "Machine-readable locator. `display` remains the human-readable location.",
+      "properties": {
+        "artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Sha256"
+        },
+        "bbox": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox"
+        },
+        "display": {
+          "minLength": 1,
+          "title": "Display",
+          "type": "string"
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Encoding"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
+        },
+        "excerpt_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt Hash"
+        },
+        "kind": {
+          "$ref": "#/$defs/AnchorKind"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "paragraph_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paragraph Index"
+        },
+        "record_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Id"
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Id"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start"
+        }
+      },
+      "required": [
+        "kind",
+        "display"
+      ],
+      "title": "Anchor",
+      "type": "object"
+    },
+    "AnchorKind": {
+      "enum": [
+        "display",
+        "text_offset",
+        "quote",
+        "pdf_region",
+        "docx_paragraph",
+        "external_snapshot"
+      ],
+      "title": "AnchorKind",
+      "type": "string"
+    },
     "Artifact": {
       "additionalProperties": false,
       "properties": {
@@ -130,6 +357,17 @@
     "EvidenceRecord": {
       "additionalProperties": false,
       "properties": {
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "artifact_sha256": {
           "anyOf": [
             {
@@ -147,6 +385,18 @@
           "minLength": 1,
           "title": "Claim",
           "type": "string"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
         },
         "excerpt_hash": {
           "anyOf": [
@@ -202,6 +452,165 @@
       "title": "EvidenceRecord",
       "type": "object"
     },
+    "IntegrityKind": {
+      "enum": [
+        "reference_integrity",
+        "results_integrity",
+        "reproducibility_attestation"
+      ],
+      "title": "IntegrityKind",
+      "type": "string"
+    },
+    "IntegrityRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Sha256S",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/IntegrityKind"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalizedText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/IntegrityVerdict"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "verdict",
+        "subject"
+      ],
+      "title": "IntegrityRecord",
+      "type": "object"
+    },
+    "IntegrityVerdict": {
+      "enum": [
+        "exact",
+        "minor",
+        "major",
+        "missing",
+        "mismatch",
+        "unclear",
+        "not_comparable",
+        "unsupported"
+      ],
+      "title": "IntegrityVerdict",
+      "type": "string"
+    },
+    "LedgerClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "claim": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "in_paper_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "In Paper Evidence Ids",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "risk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalizedText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "claim"
+      ],
+      "title": "LedgerClaim",
+      "type": "object"
+    },
     "LocalizedText": {
       "additionalProperties": false,
       "properties": {
@@ -229,6 +638,83 @@
       ],
       "title": "LocalizedText",
       "type": "object"
+    },
+    "NoveltyAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "matched_dataset": {
+          "default": false,
+          "title": "Matched Dataset",
+          "type": "boolean"
+        },
+        "matched_metric": {
+          "default": false,
+          "title": "Matched Metric",
+          "type": "boolean"
+        },
+        "matched_task": {
+          "default": false,
+          "title": "Matched Task",
+          "type": "boolean"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalizedText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "snapshot_id": {
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "tag": {
+          "$ref": "#/$defs/NoveltyTag"
+        }
+      },
+      "required": [
+        "id",
+        "claim_id",
+        "snapshot_id",
+        "tag"
+      ],
+      "title": "NoveltyAssessment",
+      "type": "object"
+    },
+    "NoveltyTag": {
+      "enum": [
+        "supported",
+        "overlap",
+        "unclear",
+        "not_comparable"
+      ],
+      "title": "NoveltyTag",
+      "type": "string"
     },
     "OverallScore": {
       "additionalProperties": false,
@@ -347,7 +833,8 @@
       "enum": [
         "baselines",
         "same_problem",
-        "related_techniques"
+        "related_techniques",
+        "agenda"
       ],
       "title": "QueryPerspective",
       "type": "string"
@@ -419,6 +906,18 @@
         "content_kind": {
           "$ref": "#/$defs/SnapshotContentKind"
         },
+        "dataset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dataset"
+        },
         "doi": {
           "anyOf": [
             {
@@ -430,6 +929,31 @@
           ],
           "default": null,
           "title": "Doi"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
+        },
+        "excerpt_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt Hash"
         },
         "id": {
           "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
@@ -446,6 +970,18 @@
           "title": "Metadata",
           "type": "object"
         },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
         "query_ids": {
           "items": {
             "type": "string"
@@ -453,6 +989,18 @@
           "minItems": 1,
           "title": "Query Ids",
           "type": "array"
+        },
+        "raw_artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Artifact"
         },
         "retrieved_at": {
           "format": "date-time",
@@ -471,6 +1019,18 @@
           ],
           "default": null,
           "title": "Sha256"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task"
         },
         "title": {
           "minLength": 1,
@@ -564,6 +1124,17 @@
     "ReviewIssue": {
       "additionalProperties": false,
       "properties": {
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "category": {
           "minLength": 1,
           "title": "Category",
@@ -935,6 +1506,13 @@
       "title": "Acceptance Gate",
       "type": "object"
     },
+    "agenda": {
+      "items": {
+        "$ref": "#/$defs/AgendaQuestion"
+      },
+      "title": "Agenda",
+      "type": "array"
+    },
     "claims": {
       "items": {
         "$ref": "#/$defs/ReviewClaim"
@@ -956,11 +1534,25 @@
       "title": "Evidence",
       "type": "array"
     },
+    "integrity_records": {
+      "items": {
+        "$ref": "#/$defs/IntegrityRecord"
+      },
+      "title": "Integrity Records",
+      "type": "array"
+    },
     "issues": {
       "items": {
         "$ref": "#/$defs/ReviewIssue"
       },
       "title": "Issues",
+      "type": "array"
+    },
+    "ledger_claims": {
+      "items": {
+        "$ref": "#/$defs/LedgerClaim"
+      },
+      "title": "Ledger Claims",
       "type": "array"
     },
     "manuscript": {
@@ -970,6 +1562,13 @@
       "additionalProperties": true,
       "title": "Metadata",
       "type": "object"
+    },
+    "novelty_assessments": {
+      "items": {
+        "$ref": "#/$defs/NoveltyAssessment"
+      },
+      "title": "Novelty Assessments",
+      "type": "array"
     },
     "overall_score": {
       "anyOf": [
@@ -1003,6 +1602,13 @@
         "$ref": "#/$defs/RelatedWorkQuery"
       },
       "title": "Related Work Queries",
+      "type": "array"
+    },
+    "residual_risks": {
+      "items": {
+        "$ref": "#/$defs/LocalizedText"
+      },
+      "title": "Residual Risks",
       "type": "array"
     },
     "retrieved_snapshots": {

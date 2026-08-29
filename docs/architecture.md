@@ -63,17 +63,18 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `DimensionScore` | One of the seven SAR dimensions, a 1–10 value, rationale, and required evidence IDs. |
 | `VenueConclusion` | Conference or journal decision (accept/reject/revision/not-a-fit) read from the seven scores. No overall number. |
 | `OverallScore` | Optional overall score with required method/provenance. Absent by default; never an implicit LLM 0–10. |
-| `RelatedWorkQuery` / `RetrievedSourceSnapshot` | Multi-perspective search queries and retrieved source snapshots (query IDs, arXiv ID, date, abstract vs full-text). |
+| `RelatedWorkQuery` / `RetrievedSourceSnapshot` | Multi-perspective search queries and retrieved source snapshots (query IDs, excerpt, arXiv ID, date, abstract vs full-text, optional task/dataset/metric). |
+| `Anchor` | Typed locator (display, text offset, quote, PDF region, DOCX paragraph, external snapshot) with optional excerpt hash. |
+| `LedgerClaim` / `AgendaQuestion` | Manuscript-only claim–evidence–risk ledger and investigation agenda. |
+| `IntegrityRecord` | Artifact-aware reference, results, and reproducibility checks. |
+| `NoveltyAssessment` | Matched-setting novelty tag. Overlap evidence requires the same task, dataset, and metric. |
 | `ReviewClaim` | SAR-shaped summary/strength/weakness/question/comment text that must cite evidence IDs. |
 | `StageRecord` | Stage signature, status, attempt number, outputs, timestamps, metadata, and error. |
 | `RunManifest` | Source/config identity, immutable configuration-snapshot artifact, framework version, policy, stages, and run lifecycle. |
 
 `ReviewPackage` validates unique issue IDs and route/source/evidence references. Artifacts use relative logical paths when they are inside the project workspace or run directory. Absolute paths are permitted for imported external files but should not be released.
 
-Two v0.1 fields are intentionally transitional:
-
-- `ReviewIssue.location` and `EvidenceRecord.locator` are display strings, not typed document coordinates.
-- `ReviewIssue` represents both an imported route finding and a merged issue. Raw immutable observation records are not yet a separate entity.
+`ReviewIssue.location` and `EvidenceRecord.locator` remain display strings. Prefer the optional `anchor` field for machine-readable coordinates. `ReviewIssue` still represents both an imported route finding and a merged issue; raw immutable observation records are not yet a separate entity.
 
 ## Configuration and DAG
 
@@ -108,11 +109,16 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 |---|---|
 | `ingest` | Records the source and optionally copies it into the run. |
 | `command` | Executes an argument array with `shell=False` and an explicit environment allowlist; records stdout/stderr, logical placeholder paths, declared outputs, environment-key names, and hashes of command input files, then imports declared outputs. |
-| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. |
+| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Literature routes can attach query and snapshot excerpts. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
+| `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import and deterministic manuscript checks. |
+| `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. |
+| `workspace_inspect` | Read-only inventory of declared workspace paths. Refuses path escape. |
+| `integrity` | Reference, results, and reproducibility records from snapshots and workspace files. |
+| `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
-| `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
-| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations; `default_language` / `language` still select a single language. |
+| `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Optional export-gate budgets refuse an unauditable package. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 

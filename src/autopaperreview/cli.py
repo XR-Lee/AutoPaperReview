@@ -147,13 +147,37 @@ def command_migrate(args: argparse.Namespace) -> int:
 def command_doctor(args: argparse.Namespace) -> int:
     modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa"]
     commands = ["docker", "pandoc", "pdftotext", "promptfoo"]
+    optional_modules = {}
+    for name in modules:
+        importable = bool(importlib.util.find_spec(name))
+        optional_modules[name] = {
+            "importable": importable,
+            "bundled_adapter": False,
+            "status": "importable, not bundled" if importable else "not installed",
+        }
+    optional_commands = {}
+    for name in commands:
+        path = shutil.which(name)
+        optional_commands[name] = {
+            "path": path,
+            "status": "available" if path else "missing",
+        }
     _print_json(
         {
             "framework_version": __version__,
             "python": sys.version.split()[0],
             "core": {"pydantic": bool(importlib.util.find_spec("pydantic"))},
-            "optional_modules": {name: bool(importlib.util.find_spec(name)) for name in modules},
-            "optional_commands": {name: shutil.which(name) for name in commands},
+            "bundled_stage_types": default_registry().names(),
+            "bundled_review_adapters": [
+                "autopaperreview.adapters:DeterministicManuscriptAdapter",
+                "autopaperreview.adapters:FixtureReviewAdapter",
+            ],
+            "optional_modules": optional_modules,
+            "optional_commands": optional_commands,
+            "notes": [
+                "Optional modules are not adapters. A stage plugin must convert their output into AutoPaperReview records.",
+                "execute_review calls a declared module:attribute adapter. The core does not call a model API.",
+            ],
         }
     )
     return 0
@@ -168,7 +192,15 @@ def command_init(args: argparse.Namespace) -> int:
         "Synthetic manuscript placeholder. Replace this file with the document to review.\n",
         encoding="utf-8",
     )
-    (target / "issues.json").write_text("[]\n", encoding="utf-8")
+    artifacts_dir = target / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "results.json").write_text(
+        '{\n  "accuracy": null,\n  "note": "Replace with experimental outputs bound to the manuscript."\n}\n',
+        encoding="utf-8",
+    )
+    templates_dir = target / "prompts"
+    template_args = argparse.Namespace(output_dir=str(templates_dir), force=True)
+    command_templates(template_args)
     (target / "review.toml").write_text(
         f'''schema_version = 1
 
@@ -180,30 +212,105 @@ run_root = ".runs"
 default_language = "en"
 network_policy = "deny"
 
+[[routes]]
+id = "M0"
+name = "Structured closed-book review"
+kind = "prompt"
+prompt = "prompts/closed_book_v1.md"
+prompt_version = "1.0"
+
+[[routes]]
+id = "M2"
+name = "Metric and protocol review"
+kind = "prompt"
+prompt = "prompts/metric_protocol_v1.md"
+prompt_version = "1.0"
+
+[[routes]]
+id = "M3"
+name = "SAR-shaped grounded review"
+kind = "literature"
+prompt = "prompts/sar_grounded_review_v1.md"
+prompt_version = "1.0"
+
+[[routes]]
+id = "M4"
+name = "Literature audit"
+kind = "literature"
+prompt = "prompts/literature_audit_v1.md"
+prompt_version = "1.0"
+
+[[routes]]
+id = "M5"
+name = "Reproducibility audit"
+kind = "prompt"
+prompt = "prompts/reproducibility_v1.md"
+prompt_version = "1.0"
+
 [[stages]]
 id = "ingest"
 type = "ingest"
 
 [[stages]]
-id = "issues"
-type = "import_issues"
+id = "ledger"
+type = "ledger"
+depends_on = ["ingest"]
+
+[[stages]]
+id = "agenda"
+type = "agenda"
+depends_on = ["ledger"]
+
+[[stages]]
+id = "workspace"
+type = "workspace_inspect"
 depends_on = ["ingest"]
 [stages.params]
-path = "issues.json"
+paths = ["manuscript.txt", "artifacts"]
+
+[[stages]]
+id = "prompt_packets"
+type = "prompt_packet"
+depends_on = ["ingest"]
+[stages.params]
+include_source_text = true
+
+[[stages]]
+id = "review"
+type = "execute_review"
+depends_on = ["prompt_packets", "ledger"]
+[stages.params]
+adapter = "autopaperreview.adapters:DeterministicManuscriptAdapter"
+
+[[stages]]
+id = "integrity"
+type = "integrity"
+depends_on = ["workspace", "ledger"]
 
 [[stages]]
 id = "consensus"
 type = "consensus"
-depends_on = ["issues"]
+depends_on = ["review", "integrity", "agenda"]
 
 [[stages]]
 id = "report"
 type = "report"
 depends_on = ["consensus"]
+[stages.params]
+min_issues = 1
+require_ledger = true
+require_integrity = true
 ''',
         encoding="utf-8",
     )
-    _print_json({"status": "success", "project_dir": str(target), "config": str(target / "review.toml")})
+    _print_json(
+        {
+            "status": "success",
+            "project_dir": str(target),
+            "config": str(target / "review.toml"),
+            "adapter": "autopaperreview.adapters:DeterministicManuscriptAdapter",
+        }
+    )
     return 0
 
 

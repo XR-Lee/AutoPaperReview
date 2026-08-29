@@ -51,7 +51,21 @@ class CliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(
             payload["stage_types"],
-            ["command", "consensus", "import_issues", "ingest", "literature_grounding", "prompt_packet", "report"],
+            [
+                "agenda",
+                "command",
+                "consensus",
+                "execute_review",
+                "import_issues",
+                "ingest",
+                "integrity",
+                "ledger",
+                "literature_grounding",
+                "novelty",
+                "prompt_packet",
+                "report",
+                "workspace_inspect",
+            ],
         )
 
     def test_templates_command_exports_packaged_prompts(self) -> None:

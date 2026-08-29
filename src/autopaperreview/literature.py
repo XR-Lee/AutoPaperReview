@@ -257,12 +257,16 @@ def snapshots_to_records(
             if query_id in queries_by_id:
                 retrieval_query = queries_by_id[query_id].query
                 break
+        excerpt = snapshot.excerpt.strip() if snapshot.excerpt else ""
+        claim = excerpt or f"{snapshot.content_kind.value} snapshot of {snapshot.title}"
         evidence.append(
             EvidenceRecord(
                 id=f"E-{snapshot.id}",
                 source_id=snapshot.id,
                 locator=snapshot.locator,
-                claim=f"{snapshot.content_kind.value} snapshot of {snapshot.title}",
+                claim=claim,
+                excerpt=excerpt or None,
+                excerpt_hash=snapshot.excerpt_hash,
                 artifact_sha256=snapshot.sha256,
                 retrieval_query=retrieval_query,
                 metadata={"snapshot_id": snapshot.id, "arxiv_id": snapshot.arxiv_id},

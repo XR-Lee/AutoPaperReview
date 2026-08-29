@@ -7,10 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
+    AgendaQuestion,
+    Anchor,
     Artifact,
     DimensionScore,
     EvidenceRecord,
+    IntegrityRecord,
+    LedgerClaim,
     LocalizedText,
+    NoveltyAssessment,
     OverallScore,
     RelatedWorkQuery,
     RetrievedSourceSnapshot,
@@ -64,6 +69,7 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         "sources",
         "evidence_ids",
         "confidence",
+        "anchor",
     }
     unknown = {key: value for key, value in record.items() if key not in known}
     return ReviewIssue(
@@ -79,6 +85,7 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         route_ids=_string_list(record.get("detected_by")),
         source_ids=_string_list(record.get("sources")),
         evidence_ids=_string_list(record.get("evidence_ids")),
+        anchor=Anchor.model_validate(record["anchor"]) if record.get("anchor") else None,
         metadata={"legacy_v0": unknown} if unknown else {},
     )
 
@@ -269,10 +276,22 @@ def migrate_legacy_package(
         "retrieved_snapshots",
         "overall_score",
         "venue_conclusions",
+        "ledger_claims",
+        "residual_risks",
+        "agenda",
+        "integrity_records",
+        "novelty_assessments",
         "summary",
         "summary_en",
         "summary_zh",
     }
+    ledger_claims = [LedgerClaim.model_validate(item) for item in raw.get("ledger_claims", [])]
+    residual_risks = [LocalizedText.model_validate(item) for item in raw.get("residual_risks", [])]
+    agenda = [AgendaQuestion.model_validate(item) for item in raw.get("agenda", [])]
+    integrity_records = [IntegrityRecord.model_validate(item) for item in raw.get("integrity_records", [])]
+    novelty_assessments = [
+        NoveltyAssessment.model_validate(item) for item in raw.get("novelty_assessments", [])
+    ]
     return ReviewPackage(
         project_id=project_id,
         manuscript=manuscript,
@@ -290,6 +309,11 @@ def migrate_legacy_package(
         overall_score=overall_score,
         related_work_queries=related_work_queries,
         retrieved_snapshots=retrieved_snapshots,
+        ledger_claims=ledger_claims,
+        residual_risks=residual_risks,
+        agenda=agenda,
+        integrity_records=integrity_records,
+        novelty_assessments=novelty_assessments,
         metadata={
             "imported_from": "legacy-v0-package",
             "legacy_manuscript": manuscript_record,

@@ -16,6 +16,15 @@
       "id": "M3",
       "name_en": "SAR-shaped grounded review",
       "kind": "literature"
+    },
+    {
+      "id": "M4",
+      "name_en": "Literature audit",
+      "kind": "literature"
+    },
+    {
+      "id": "M5",
+      "name_en": "Reproducibility audit"
     }
   ],
   "sources": [
@@ -50,7 +59,12 @@
       "confidence": 0.99,
       "evidence_ids": [
         "E1"
-      ]
+      ],
+      "anchor": {
+        "kind": "quote",
+        "display": "Methods and Results",
+        "excerpt": "Eight temporally related images from one specimen were randomly divided at image level."
+      }
     },
     {
       "id": "I002",
@@ -74,7 +88,12 @@
       "confidence": 0.96,
       "evidence_ids": [
         "E1"
-      ]
+      ],
+      "anchor": {
+        "kind": "quote",
+        "display": "Results and Conclusion",
+        "excerpt": "Accuracy was reported on the two held-out images."
+      }
     }
   ],
   "strengths_en": [
@@ -96,7 +115,13 @@
       "id": "E1",
       "source_id": "S1",
       "locator": "Methods and Results",
-      "claim": "Eight temporally related images from one specimen are randomly split into training and test images, and one accuracy is reported."
+      "claim": "Eight temporally related images from one specimen are randomly split into training and test images, and one accuracy is reported.",
+      "excerpt": "Eight temporally related images from one specimen were randomly divided at image level. Six images were used for training and two for testing.",
+      "anchor": {
+        "kind": "quote",
+        "display": "Methods and Results",
+        "excerpt": "Eight temporally related images from one specimen were randomly divided at image level. Six images were used for training and two for testing."
+      }
     }
   ],
   "summary_en": "The manuscript claims a deployment-ready tracker from an eight-image, image-level split.",
