@@ -38,6 +38,21 @@ class LiteratureGroundingTests(unittest.TestCase):
             ["baselines", "same_problem", "related_techniques"],
         )
         self.assertTrue(all("Synthetic Tracking Study" in query.query for query in queries))
+        self.assertEqual({query.metadata.get("specificity") for query in queries}, {"narrow"})
+
+    def test_extra_queries_are_specificity_variants_not_index_suffixes(self) -> None:
+        manuscript = Path("examples/synthetic/manuscript.txt").read_text(encoding="utf-8")
+        queries = generate_related_work_queries(manuscript, max_per_perspective=2)
+        self.assertEqual(len(queries), 6)
+        texts = [query.query for query in queries]
+        self.assertEqual(len(texts), len(set(texts)))
+        self.assertFalse(any(query.query.endswith(" 2") for query in queries))
+        by_perspective = {query.perspective.value: [] for query in queries}
+        for query in queries:
+            by_perspective[query.perspective.value].append(query)
+        for perspective, items in by_perspective.items():
+            self.assertEqual([item.metadata.get("specificity") for item in items], ["narrow", "mid"], perspective)
+            self.assertNotEqual(items[0].query, items[1].query)
 
     def test_offline_snapshot_is_recorded_under_deny_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

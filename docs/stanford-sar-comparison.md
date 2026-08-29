@@ -52,3 +52,5 @@ The 0.1.x slice added in this comparison's companion change:
 | Network default | Hosted outbound search | Deny unless declared |
 
 The remaining SAR gap that this repo still does not close, by design: a hosted UX, a trained ICLR mapping, and a bundled Tavily/arXiv worker. Roadmap work after this slice remains ObservationRecord, typed locators, versioned adapter contracts, and consensus-with-dissent — not a second paperreview.ai.
+
+For a broader comparison with DeepReviewer 2.0, ResearchArena's artifact-aware review, AgentReview, MARG, OpenReviewer, PaperQA2, and related experiments, see [feature gaps versus stronger open experiments](oss-experiment-gaps.md). That review is the source of the post-0.1.3 slice order in [Roadmap](roadmap.md).

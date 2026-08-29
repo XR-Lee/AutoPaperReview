@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - 2026-08-29
+
+- Added [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md): a prioritized feature review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, reviewer2, and related open experiments. This is not a claim that AutoPaperReview matches their scores.
+- Reordered the post-0.1.3 roadmap slices from that review: contract completeness and typed locators before ObservationRecord; an optional integrity family and thin model adapter next.
+- Literature query generation now emits distinct narrow / mid / broad variants. Extra queries no longer append a `" 2"` suffix. The `literature_grounding` handler version is now `2` so existing stage caches invalidate.
+
 ## 0.1.3 - 2026-08-29
 
 - Added `VenueConclusion` records: conference and journal decisions from the seven 1–10 dimension scores, with no overall numeric score.

@@ -1,8 +1,9 @@
 """Local literature-grounding helpers and an optional retrieval adapter contract.
 
-The core generates multi-perspective search queries from manuscript text and
-records retrieved source snapshots as artifacts. Live search is optional and
-must be declared. Tavily, OpenAlex, and PaperQA are not core dependencies.
+The core generates multi-perspective, multi-specificity search queries from
+manuscript text and records retrieved source snapshots as artifacts. Live
+search is optional and must be declared. Tavily, OpenAlex, and PaperQA are
+not core dependencies.
 """
 
 from __future__ import annotations
@@ -135,6 +136,39 @@ def distinctive_terms(*parts: str, limit: int = 6) -> list[str]:
     return seen
 
 
+def _specificity_variants(
+    *,
+    title: str,
+    problem_terms: str,
+    technique_terms: str,
+    perspective: QueryPerspective,
+) -> list[tuple[str, str]]:
+    """Return (query, specificity) pairs from narrow to broad.
+
+    Stanford SAR uses multi-specificity search. Extra queries must differ in
+    specificity; appending an index suffix is not a search strategy.
+    """
+    problem = problem_terms or title
+    technique = technique_terms or title
+    if perspective is QueryPerspective.baselines:
+        return [
+            (f"{title} benchmark baseline comparison", "narrow"),
+            (f"{problem} baseline benchmark comparison", "mid"),
+            (f"{technique} official implementation comparison", "broad"),
+        ]
+    if perspective is QueryPerspective.same_problem:
+        return [
+            (f"{title} {problem}".strip(), "narrow"),
+            (f"{problem} evaluation protocol", "mid"),
+            (f"{title} task definition related work", "broad"),
+        ]
+    return [
+        (f"{title} related methods {technique}".strip(), "narrow"),
+        (f"{technique} alternative methods", "mid"),
+        (f"{problem} competing approaches", "broad"),
+    ]
+
+
 def generate_related_work_queries(
     manuscript_text: str,
     *,
@@ -147,24 +181,36 @@ def generate_related_work_queries(
     terms = distinctive_terms(title, parsed["abstract"], parsed["methods"], parsed["body"])
     problem_terms = " ".join(terms[:4]) or title
     technique_terms = " ".join(terms[:3]) or title
-    templates = {
-        QueryPerspective.baselines: f"{title} benchmark baseline comparison",
-        QueryPerspective.same_problem: f"{title} {problem_terms}".strip(),
-        QueryPerspective.related_techniques: f"{title} related methods {technique_terms}".strip(),
-    }
     queries: list[RelatedWorkQuery] = []
-    for perspective, query in templates.items():
-        for index in range(1, max_per_perspective + 1):
-            suffix = "" if index == 1 else f" {index}"
+    for perspective in (
+        QueryPerspective.baselines,
+        QueryPerspective.same_problem,
+        QueryPerspective.related_techniques,
+    ):
+        seen: set[str] = set()
+        index = 1
+        for query, specificity in _specificity_variants(
+            title=title,
+            problem_terms=problem_terms,
+            technique_terms=technique_terms,
+            perspective=perspective,
+        ):
+            if index > max_per_perspective:
+                break
+            normalized = " ".join(query.lower().split())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
             queries.append(
                 RelatedWorkQuery(
                     id=f"Q-{perspective.value}-{index}",
                     perspective=perspective,
-                    query=f"{query}{suffix}".strip(),
+                    query=query,
                     generated_from="title+abstract",
-                    metadata={"term_count": len(terms)},
+                    metadata={"term_count": len(terms), "specificity": specificity},
                 )
             )
+            index += 1
     return queries
 
 
