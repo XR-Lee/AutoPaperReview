@@ -59,7 +59,11 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `SourceRecord` | A manuscript or external source identity and optional immutable digest. |
 | `EvidenceRecord` | A claim and locator tied to a source and, when available, an artifact/excerpt hash. |
 | `ReviewIssue` | The current canonical issue record, including localized prose, severity, confidence, references, and consensus metadata. |
-| `ReviewPackage` | A validated collection of manuscript, route, source, evidence, issue, strength, and acceptance-gate records. |
+| `ReviewPackage` | A validated collection of manuscript, route, source, evidence, issue, strength, acceptance-gate, optional SAR-shaped claim/score, query, and snapshot records. |
+| `DimensionScore` | One of the seven SAR dimensions, a 0–10 value, rationale, and required evidence IDs. |
+| `OverallScore` | Optional overall score with required method/provenance. Absent by default; never an implicit LLM 0–10. |
+| `RelatedWorkQuery` / `RetrievedSourceSnapshot` | Multi-perspective search queries and retrieved source snapshots (query IDs, arXiv ID, date, abstract vs full-text). |
+| `ReviewClaim` | SAR-shaped summary/strength/weakness/question/comment text that must cite evidence IDs. |
 | `StageRecord` | Stage signature, status, attempt number, outputs, timestamps, metadata, and error. |
 | `RunManifest` | Source/config identity, immutable configuration-snapshot artifact, framework version, policy, stages, and run lifecycle. |
 
@@ -106,7 +110,8 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
-| `report` | Emits canonical JSON, Markdown, and a small summary. |
+| `literature_grounding` | Generates multi-perspective related-work queries from local text, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
