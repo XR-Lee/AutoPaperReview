@@ -15,28 +15,41 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..adapters import ReviewRequest, load_review_adapter
 from ..artifacts import artifact_from_path
+from ..export_gate import ExportGateParams, export_gate_errors
 from ..hashing import hash_json, sha256_file
-from ..migration import load_review_input
+from ..i18n import ensure_package_languages, normalize_languages
+from ..integrity import build_integrity_records, collect_inventory
+from ..ledger import build_agenda, build_ledger_claims
 from ..literature import (
     generate_related_work_queries,
     load_retriever,
     load_snapshot_fixture,
     snapshots_to_records,
 )
+from ..migration import load_review_input
 from ..models import (
+    AgendaQuestion,
     Artifact,
     DimensionScore,
+    EvidenceRecord,
+    IntegrityRecord,
+    LedgerClaim,
+    LocalizedText,
     NetworkPolicy,
+    NoveltyAssessment,
+    QueryPerspective,
     RelatedWorkQuery,
     RetrievedSourceSnapshot,
     ReviewClaim,
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
+    RouteKind,
     VenueConclusion,
 )
-from ..i18n import ensure_package_languages, normalize_languages
+from ..novelty import assess_novelty
 from ..reporting import render_markdown, write_package_json
 from .base import StageContext, StageHandler, StageOutcome
 
@@ -57,6 +70,30 @@ def _artifact(path: Path, context: StageContext, role: str) -> Artifact:
         base=context.run_dir,
         base_name="run",
     )
+
+
+def _load_dependency_packages(context: StageContext) -> list[ReviewPackage]:
+    packages: list[ReviewPackage] = []
+    for stage_id in context.stage.depends_on:
+        stage_dir = context.dependency_dir(stage_id)
+        for filename in ("consensus.json", "package.json", "review_package.json"):
+            candidate = stage_dir / filename
+            if candidate.is_file():
+                packages.append(ReviewPackage.model_validate_json(candidate.read_text(encoding="utf-8")))
+                break
+    return packages
+
+
+def _first_dependency_package(context: StageContext) -> ReviewPackage | None:
+    packages = _load_dependency_packages(context)
+    return packages[0] if packages else None
+
+
+def _package_with(context: StageContext, attribute: str) -> ReviewPackage | None:
+    for package in _load_dependency_packages(context):
+        if getattr(package, attribute, None):
+            return package
+    return None
 
 
 def _enforce_network_declaration(context: StageContext, *, requires_network: bool, network_scope: str) -> None:
@@ -307,11 +344,13 @@ class ImportIssuesStage(StageHandler):
 class PromptPacketParams(ParamsModel):
     route_ids: list[str] = Field(default_factory=list)
     include_source_text: bool = False
+    include_literature: bool = False
     max_source_chars: int = Field(default=200_000, ge=1)
 
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
+    version = "2"
     params_model = PromptPacketParams
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
@@ -329,7 +368,18 @@ class PromptPacketStage(StageHandler):
             if route.prompt:
                 path = context.loaded_config.resolve(route.prompt)
                 prompt_hashes[route.id] = sha256_file(path)
-        return {"prompt_hashes": prompt_hashes}
+        literature = _package_with(context, "retrieved_snapshots") or _package_with(
+            context, "related_work_queries"
+        )
+        material: dict[str, Any] = {"prompt_hashes": prompt_hashes}
+        if literature is not None:
+            material["literature_sha256"] = hash_json(
+                {
+                    "queries": [query.model_dump(mode="json") for query in literature.related_work_queries],
+                    "snapshots": [item.model_dump(mode="json") for item in literature.retrieved_snapshots],
+                }
+            )
+        return material
 
     def run(self, context: StageContext) -> StageOutcome:
         params = PromptPacketParams.model_validate(context.stage.params)
@@ -341,6 +391,15 @@ class PromptPacketStage(StageHandler):
                 source_text = context.source_path.read_text(encoding="utf-8")[: params.max_source_chars]
             except UnicodeDecodeError as exc:
                 raise ValueError("include_source_text currently supports text sources only") from exc
+        literature = _package_with(context, "retrieved_snapshots") or _package_with(
+            context, "related_work_queries"
+        )
+        if params.include_literature and (
+            literature is None or not (literature.related_work_queries or literature.retrieved_snapshots)
+        ):
+            raise FileNotFoundError(
+                "include_literature requires a dependency that emits queries or snapshots"
+            )
 
         for route in routes:
             prompt_text = ""
@@ -354,11 +413,28 @@ class PromptPacketStage(StageHandler):
                 f"- Network policy: `{context.loaded_config.config.project.network_policy.value}`",
                 f"- Prompt version: `{route.prompt_version or 'unversioned'}`",
                 f"- Manuscript access: `{str(route.manuscript_access).lower()}`",
+                f"- Route kind: `{route.kind.value}`",
                 "",
                 prompt_text.strip(),
             ]
             if source_text and route.manuscript_access:
                 body.extend(["", "## Source Text", "", source_text])
+            attach_literature = literature is not None and (
+                params.include_literature or route.kind == RouteKind.literature
+            )
+            if attach_literature and literature is not None:
+                body.extend(["", "## Related-Work Queries", ""])
+                for query in literature.related_work_queries:
+                    body.append(f"- `{query.id}` ({query.perspective.value}): {query.query}")
+                body.extend(["", "## Retrieved Sources", ""])
+                if not literature.retrieved_snapshots:
+                    body.append("- none")
+                for snapshot in literature.retrieved_snapshots:
+                    excerpt = (snapshot.excerpt or "").strip() or "(no excerpt)"
+                    body.append(
+                        f"- `{snapshot.id}` {snapshot.title} ({snapshot.content_kind.value})"
+                    )
+                    body.append(f"  Excerpt: {excerpt}")
             packet.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
             artifacts.append(_artifact(packet, context, "review.prompt_packet"))
         return StageOutcome(artifacts=artifacts, metadata={"route_count": len(artifacts)})
@@ -387,6 +463,7 @@ def _issue_key(issue: ReviewIssue) -> str:
 
 class ConsensusStage(StageHandler):
     type_name = "consensus"
+    version = "2"
     params_model = ConsensusParams
 
     def _packages(self, context: StageContext) -> list[ReviewPackage]:
@@ -465,6 +542,10 @@ class ConsensusStage(StageHandler):
         queries_by_id: dict[str, RelatedWorkQuery] = {}
         snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
         venues_by_id: dict[str, VenueConclusion] = {}
+        ledger_by_id: dict[str, LedgerClaim] = {}
+        agenda_by_id: dict[str, AgendaQuestion] = {}
+        integrity_by_id: dict[str, IntegrityRecord] = {}
+        novelty_by_id: dict[str, NoveltyAssessment] = {}
         for package in packages:
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
@@ -474,6 +555,10 @@ class ConsensusStage(StageHandler):
                 ("related-work query", package.related_work_queries, queries_by_id),
                 ("retrieved snapshot", package.retrieved_snapshots, snapshots_by_id),
                 ("venue conclusion", package.venue_conclusions, venues_by_id),
+                ("ledger claim", package.ledger_claims, ledger_by_id),
+                ("agenda question", package.agenda, agenda_by_id),
+                ("integrity record", package.integrity_records, integrity_by_id),
+                ("novelty assessment", package.novelty_assessments, novelty_by_id),
             ):
                 for value in values:
                     existing = catalog.get(value.id)
@@ -510,6 +595,15 @@ class ConsensusStage(StageHandler):
             (package.recommendation for package in packages if package.recommendation is not None),
             None,
         )
+        residual_risks: list[LocalizedText] = []
+        seen_risks: set[str] = set()
+        for package in packages:
+            for risk in package.residual_risks:
+                key = risk.primary
+                if key in seen_risks:
+                    continue
+                seen_risks.add(key)
+                residual_risks.append(risk)
 
         output = ReviewPackage(
             project_id=first.project_id,
@@ -528,6 +622,11 @@ class ConsensusStage(StageHandler):
             overall_score=overall_score,
             related_work_queries=list(queries_by_id.values()),
             retrieved_snapshots=list(snapshots_by_id.values()),
+            ledger_claims=list(ledger_by_id.values()),
+            residual_risks=residual_risks,
+            agenda=list(agenda_by_id.values()),
+            integrity_records=list(integrity_by_id.values()),
+            novelty_assessments=list(novelty_by_id.values()),
             metadata={
                 **first.metadata,
                 "consensus_rule": "exact-normalized-v1",
@@ -558,7 +657,7 @@ class LiteratureGroundingParams(ParamsModel):
 
 class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
-    version = "1"
+    version = "3"
     params_model = LiteratureGroundingParams
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:
@@ -570,6 +669,9 @@ class LiteratureGroundingStage(StageHandler):
         if params.snapshot_path:
             path = context.loaded_config.resolve(params.snapshot_path)
             material["snapshot_sha256"] = sha256_file(path)
+        agenda = _package_with(context, "agenda")
+        if agenda is not None:
+            material["agenda_sha256"] = hash_json([item.model_dump(mode="json") for item in agenda.agenda])
         return material
 
     def run(self, context: StageContext) -> StageOutcome:
@@ -587,6 +689,21 @@ class LiteratureGroundingStage(StageHandler):
         queries = generate_related_work_queries(
             manuscript_text, max_per_perspective=params.max_queries_per_perspective
         )
+        agenda_package = _package_with(context, "agenda")
+        if agenda_package is not None:
+            existing = {query.query for query in queries}
+            for question in agenda_package.agenda:
+                if question.question in existing:
+                    continue
+                queries.append(
+                    RelatedWorkQuery(
+                        id=f"Q-agenda-{question.id}",
+                        perspective=question.perspective or QueryPerspective.agenda,
+                        query=question.question,
+                        generated_from="agenda",
+                        metadata={"agenda_id": question.id, "claim_ids": question.claim_ids},
+                    )
+                )
         snapshots: list[RetrievedSourceSnapshot] = []
         if params.snapshot_path:
             snapshots.extend(load_snapshot_fixture(context.loaded_config.resolve(params.snapshot_path)))
@@ -648,6 +765,16 @@ class ReportParams(ParamsModel):
     language: str | None = None
     languages: list[str] | None = None
     bilingual: bool = False
+    min_issues: int = Field(default=0, ge=0)
+    min_claims: int = Field(default=0, ge=0)
+    min_anchored_issues: int = Field(default=0, ge=0)
+    min_literature_snapshots: int = Field(default=0, ge=0)
+    min_novelty_assessments: int = Field(default=0, ge=0)
+    require_excerpt_on_snapshots: bool = False
+    require_ledger: bool = False
+    require_integrity: bool = False
+    require_literature_if_literature_route: bool = False
+    require_anchor_on_major: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -662,6 +789,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
+    version = "2"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
@@ -675,6 +803,9 @@ class ReportStage(StageHandler):
 
     def run(self, context: StageContext) -> StageOutcome:
         params = ReportParams.model_validate(context.stage.params)
+        gate = ExportGateParams.model_validate(
+            params.model_dump(exclude={"language", "languages", "bilingual"})
+        )
         languages = normalize_languages(
             language=params.language,
             languages=params.languages,
@@ -682,6 +813,13 @@ class ReportStage(StageHandler):
             default_language=context.loaded_config.config.project.default_language,
         )
         package = self._package(context).model_copy(deep=True)
+        gate_errors = export_gate_errors(
+            package,
+            gate,
+            route_kinds=[route.kind for route in context.loaded_config.config.routes],
+        )
+        if gate_errors:
+            raise ValueError("export gate failed:\n- " + "\n- ".join(gate_errors))
         if len(languages) > 1:
             package = ensure_package_languages(package, languages)
         package.metadata = {
@@ -723,12 +861,352 @@ class ReportStage(StageHandler):
         )
 
 
+class LedgerParams(ParamsModel):
+    pass
+
+
+class LedgerStage(StageHandler):
+    type_name = "ledger"
+    version = "1"
+    params_model = LedgerParams
+
+    def run(self, context: StageContext) -> StageOutcome:
+        try:
+            text = context.source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("ledger currently supports text sources only") from exc
+        claims = build_ledger_claims(text, manuscript_sha256=context.manifest.source.sha256)
+        from ..models import SourceRecord
+
+        source = SourceRecord(
+            id="S-manuscript",
+            kind="manuscript",
+            title="Manuscript",
+            locator=context.source_path.name,
+            sha256=context.manifest.source.sha256,
+        )
+        evidence = []
+        bound_claims: list[LedgerClaim] = []
+        for claim in claims:
+            excerpt = claim.claim.primary
+            evidence_id = f"E-{claim.id}"
+            evidence.append(
+                EvidenceRecord(
+                    id=evidence_id,
+                    source_id="S-manuscript",
+                    locator=claim.anchor.display if claim.anchor else "manuscript",
+                    claim=excerpt,
+                    excerpt=excerpt,
+                    artifact_sha256=context.manifest.source.sha256,
+                    anchor=claim.anchor,
+                )
+            )
+            bound_claims.append(claim.model_copy(update={"in_paper_evidence_ids": [evidence_id]}))
+        residual = [
+            LocalizedText(
+                primary="In-paper claims have not yet been checked against workspace artifacts.",
+                language="en",
+                translations={"zh-Hans": "文中主张尚未对照工作区产物核验。"},
+            )
+        ]
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            sources=[source],
+            evidence=evidence,
+            ledger_claims=bound_claims,
+            residual_risks=residual,
+            metadata={"ledger": {"claim_count": len(bound_claims)}},
+        )
+        ledger_path = context.stage_dir / "ledger.json"
+        package_path = context.stage_dir / "package.json"
+        _write_json(ledger_path, [item.model_dump(mode="json") for item in bound_claims])
+        write_package_json(package, package_path)
+        return StageOutcome(
+            artifacts=[
+                _artifact(ledger_path, context, "review.ledger"),
+                _artifact(package_path, context, "review.package.ledger"),
+            ],
+            metadata={"claim_count": len(bound_claims)},
+        )
+
+
+class AgendaParams(ParamsModel):
+    pass
+
+
+class AgendaStage(StageHandler):
+    type_name = "agenda"
+    version = "1"
+    params_model = AgendaParams
+
+    def run(self, context: StageContext) -> StageOutcome:
+        ledger = _package_with(context, "ledger_claims")
+        if ledger is None:
+            raise FileNotFoundError("agenda stage requires a dependency that emits ledger_claims")
+        questions = build_agenda(ledger.ledger_claims)
+        package = ledger.model_copy(update={"agenda": questions})
+        agenda_path = context.stage_dir / "agenda.json"
+        package_path = context.stage_dir / "package.json"
+        _write_json(agenda_path, [item.model_dump(mode="json") for item in questions])
+        write_package_json(package, package_path)
+        return StageOutcome(
+            artifacts=[
+                _artifact(agenda_path, context, "review.agenda"),
+                _artifact(package_path, context, "review.package.agenda"),
+            ],
+            metadata={"question_count": len(questions)},
+        )
+
+
+class WorkspaceInspectParams(ParamsModel):
+    paths: list[str] = Field(default_factory=list)
+
+
+class WorkspaceInspectStage(StageHandler):
+    type_name = "workspace_inspect"
+    version = "1"
+    params_model = WorkspaceInspectParams
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = WorkspaceInspectParams.model_validate(context.stage.params)
+        paths = params.paths or [context.loaded_config.config.project.source]
+        hashes: dict[str, str] = {}
+        for raw in paths:
+            candidate = context.loaded_config.resolve(raw)
+            if candidate.is_file():
+                hashes[raw] = sha256_file(candidate)
+            elif candidate.is_dir():
+                for file_path in sorted(p for p in candidate.rglob("*") if p.is_file()):
+                    hashes[str(file_path.relative_to(context.workspace))] = sha256_file(file_path)
+        return {"inventory_input_hashes": hashes}
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = WorkspaceInspectParams.model_validate(context.stage.params)
+        paths = params.paths or [context.loaded_config.config.project.source]
+        inventory = collect_inventory(paths, workspace=context.workspace, generated_by=context.stage.id)
+        inventory_path = context.stage_dir / "inventory.json"
+        _write_json(inventory_path, [item.model_dump(mode="json") for item in inventory])
+        return StageOutcome(
+            artifacts=[_artifact(inventory_path, context, "workspace.inventory")],
+            metadata={"file_count": len(inventory), "read_only": True},
+        )
+
+
+class IntegrityParams(ParamsModel):
+    pass
+
+
+class IntegrityStage(StageHandler):
+    type_name = "integrity"
+    version = "2"
+    params_model = IntegrityParams
+
+    def run(self, context: StageContext) -> StageOutcome:
+        try:
+            text = context.source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("integrity currently supports text sources only") from exc
+        literature = _package_with(context, "retrieved_snapshots")
+        ledger = _package_with(context, "ledger_claims")
+        inventory: list[Artifact] = []
+        for stage_id in context.stage.depends_on:
+            candidate = context.dependency_dir(stage_id) / "inventory.json"
+            if candidate.is_file():
+                inventory = [Artifact.model_validate(item) for item in json.loads(candidate.read_text(encoding="utf-8"))]
+                break
+        snapshots = literature.retrieved_snapshots if literature else []
+        evidence = list(literature.evidence) if literature else []
+        if ledger is not None:
+            evidence = list({item.id: item for item in [*evidence, *ledger.evidence]}.values())
+        records = build_integrity_records(
+            manuscript_text=text,
+            snapshots=snapshots,
+            inventory=inventory,
+            evidence=evidence,
+            workspace=context.workspace,
+        )
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            sources=list(
+                {
+                    item.id: item
+                    for item in [
+                        *(literature.sources if literature else []),
+                        *(ledger.sources if ledger else []),
+                    ]
+                }.values()
+            ),
+            evidence=evidence,
+            related_work_queries=list(literature.related_work_queries) if literature else [],
+            retrieved_snapshots=snapshots,
+            ledger_claims=list(ledger.ledger_claims) if ledger else [],
+            integrity_records=records,
+            metadata={"integrity": {"record_count": len(records)}},
+        )
+        records_path = context.stage_dir / "integrity.json"
+        package_path = context.stage_dir / "package.json"
+        _write_json(records_path, [item.model_dump(mode="json") for item in records])
+        write_package_json(package, package_path)
+        return StageOutcome(
+            artifacts=[
+                _artifact(records_path, context, "review.integrity"),
+                _artifact(package_path, context, "review.package.integrity"),
+            ],
+            metadata={"record_count": len(records)},
+        )
+
+
+class NoveltyParams(ParamsModel):
+    pass
+
+
+class NoveltyStage(StageHandler):
+    type_name = "novelty"
+    version = "1"
+    params_model = NoveltyParams
+
+    def run(self, context: StageContext) -> StageOutcome:
+        try:
+            text = context.source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("novelty currently supports text sources only") from exc
+        literature = _package_with(context, "retrieved_snapshots")
+        ledger = _package_with(context, "ledger_claims")
+        if literature is None or ledger is None:
+            raise FileNotFoundError("novelty stage requires ledger_claims and retrieved_snapshots")
+        assessments = assess_novelty(
+            claims=ledger.ledger_claims,
+            snapshots=literature.retrieved_snapshots,
+            evidence=literature.evidence,
+            manuscript_text=text,
+        )
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            sources=list({item.id: item for item in [*ledger.sources, *literature.sources]}.values()),
+            evidence=list({item.id: item for item in [*ledger.evidence, *literature.evidence]}.values()),
+            related_work_queries=literature.related_work_queries,
+            retrieved_snapshots=literature.retrieved_snapshots,
+            ledger_claims=ledger.ledger_claims,
+            agenda=ledger.agenda,
+            novelty_assessments=assessments,
+            metadata={"novelty": {"assessment_count": len(assessments)}},
+        )
+        novelty_path = context.stage_dir / "novelty.json"
+        package_path = context.stage_dir / "package.json"
+        _write_json(novelty_path, [item.model_dump(mode="json") for item in assessments])
+        write_package_json(package, package_path)
+        return StageOutcome(
+            artifacts=[
+                _artifact(novelty_path, context, "review.novelty"),
+                _artifact(package_path, context, "review.package.novelty"),
+            ],
+            metadata={"assessment_count": len(assessments)},
+        )
+
+
+class ExecuteReviewParams(ParamsModel):
+    adapter: str
+    fixture_path: str | None = None
+    requires_network: bool = False
+    network_scope: str = "fulltext"
+
+
+class ExecuteReviewStage(StageHandler):
+    type_name = "execute_review"
+    version = "1"
+    params_model = ExecuteReviewParams
+
+    def _params(self, context: StageContext) -> ExecuteReviewParams:
+        return ExecuteReviewParams.model_validate(context.stage.params)
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = self._params(context)
+        material: dict[str, Any] = {"adapter": params.adapter}
+        if params.fixture_path:
+            material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
+        packets: dict[str, str] = {}
+        for stage_id in context.stage.depends_on:
+            for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
+                packets[path.name] = sha256_file(path)
+        if packets:
+            material["packet_hashes"] = packets
+        return material
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = self._params(context)
+        _enforce_network_declaration(
+            context, requires_network=params.requires_network, network_scope=params.network_scope
+        )
+        try:
+            source_text = context.source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            source_text = ""
+        packets: dict[str, str] = {}
+        for stage_id in context.stage.depends_on:
+            for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
+                packets[path.stem] = path.read_text(encoding="utf-8")
+        fixture = context.loaded_config.resolve(params.fixture_path) if params.fixture_path else None
+        request = ReviewRequest(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            source_text=source_text,
+            packets=packets,
+            literature=_package_with(context, "retrieved_snapshots"),
+            ledger=_package_with(context, "ledger_claims"),
+            fixture_path=str(fixture) if fixture else None,
+            routes=[
+                ReviewRoute(
+                    id=route.id,
+                    name=route.name,
+                    kind=route.kind,
+                    prompt_version=route.prompt_version,
+                    model=route.model,
+                    manuscript_access=route.manuscript_access,
+                    network_access=route.network_access,
+                    metadata=route.metadata,
+                )
+                for route in context.loaded_config.config.routes
+            ],
+            metadata={"network_scope": params.network_scope},
+        )
+        adapter = load_review_adapter(params.adapter)
+        result = adapter.execute(request, context.stage_dir)
+        package = result.package.model_copy(update={"manuscript": context.manifest.source})
+        if package.project_id != context.loaded_config.config.project.id:
+            raise ValueError("execute_review adapter returned a different project_id")
+        package_path = context.stage_dir / "package.json"
+        write_package_json(package, package_path)
+        artifacts = [_artifact(package_path, context, "review.package.executed")]
+        for name in result.raw_artifact_names:
+            path = context.stage_dir / name
+            if path.is_file():
+                artifacts.append(_artifact(path, context, "review.adapter.raw"))
+        return StageOutcome(
+            artifacts=artifacts,
+            metadata={
+                "adapter": params.adapter,
+                "issue_count": len(package.issues),
+                "packet_count": len(packets),
+                **result.metadata,
+            },
+        )
+
+
 BUILTIN_STAGE_HANDLERS = (
     IngestStage,
     CommandStage,
     ImportIssuesStage,
     PromptPacketStage,
     LiteratureGroundingStage,
+    LedgerStage,
+    AgendaStage,
+    WorkspaceInspectStage,
+    IntegrityStage,
+    NoveltyStage,
+    ExecuteReviewStage,
     ConsensusStage,
     ReportStage,
 )

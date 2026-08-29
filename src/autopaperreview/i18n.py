@@ -179,6 +179,76 @@ EXACT_PAIRS: tuple[tuple[str, str], ...] = (
         "by default, and this repository does not ship a fitted ICLR regression.",
         "未给出总体分数。AutoPaperReview 默认不输出未经校准的 LLM 0–10 分，本仓库也不附带拟合的 ICLR 回归。",
     ),
+    (
+        "In-paper claims have not yet been checked against workspace artifacts.",
+        "文中主张尚未对照工作区产物核验。",
+    ),
+    (
+        "In-paper evidence has not yet been checked against artifacts.",
+        "文中证据尚未对照产物核验。",
+    ),
+    (
+        "The proposed system achieves 95% accuracy and generalizes to unseen sequences.",
+        "所提出的系统达到 95% 准确率，并泛化到未见序列。",
+    ),
+    (
+        "The method is ready for deployment across unseen structures.",
+        "该方法已可部署到未见结构。",
+    ),
+    (
+        "Fixture or placeholder identifier; not treated as a resolved publication.",
+        "夹具或占位标识符；不视为已解析的正式文献。",
+    ),
+    (
+        "Workspace accuracy disagrees with the manuscript claim.",
+        "工作区准确率与稿件主张不一致。",
+    ),
+    (
+        "Manuscript does not report both a confidence interval and a seed.",
+        "稿件没有同时报告置信区间和随机种子。",
+    ),
+    (
+        "Snapshot is not a matched setting "
+        "(task=tracking, dataset=sequence-level holdout, metric=accuracy); "
+        "not used as overlap evidence.",
+        "快照不是匹配设定（任务=tracking，数据=sequence-level holdout，指标=accuracy）；不作为重叠证据。",
+    ),
+    (
+        "Snapshot has no excerpt, so novelty cannot be verified.",
+        "快照没有摘录，因此无法核验新颖性。",
+    ),
+    (
+        "Matched-setting comparison used the snapshot excerpt.",
+        "匹配设定比较使用了快照摘录。",
+    ),
+    (
+        "Matched setting, and the snapshot does not repeat the manuscript claim.",
+        "设定匹配，且快照没有重复稿件主张。",
+    ),
+    (
+        "Workspace accuracy matches the manuscript claim.",
+        "工作区准确率与稿件主张一致。",
+    ),
+    (
+        "No results.json was present in the inspected workspace.",
+        "所检查的工作区中没有 results.json。",
+    ),
+    (
+        "Manuscript reports uncertainty and seeds.",
+        "稿件报告了不确定性和随机种子。",
+    ),
+    (
+        "Identifier is present but was not resolved against a live registry.",
+        "存在标识符，但未对照在线注册库解析。",
+    ),
+    (
+        "No DOI or arXiv ID; reference integrity cannot be established.",
+        "没有 DOI 或 arXiv ID；无法建立参考文献完整性。",
+    ),
+    (
+        "Title-only ledger; no claim-like sentence was found.",
+        "台账仅有标题；没有找到类似主张的句子。",
+    ),
 )
 
 EN_ZH_PHRASES: tuple[tuple[str, str], ...] = (
@@ -488,5 +558,25 @@ def ensure_package_languages(package: ReviewPackage, languages: Sequence[str]) -
             }
         )
         for item in updated.venue_conclusions
+    ]
+    updated.ledger_claims = [
+        item.model_copy(
+            update={
+                "claim": ensure_localized(item.claim, languages),
+                "risk": ensure_localized(item.risk, languages) if item.risk else None,
+            }
+        )
+        for item in updated.ledger_claims
+    ]
+    updated.residual_risks = [
+        ensure_localized(item, languages) for item in updated.residual_risks if ensure_localized(item, languages)
+    ]
+    updated.integrity_records = [
+        item.model_copy(update={"notes": ensure_localized(item.notes, languages) if item.notes else None})
+        for item in updated.integrity_records
+    ]
+    updated.novelty_assessments = [
+        item.model_copy(update={"notes": ensure_localized(item.notes, languages) if item.notes else None})
+        for item in updated.novelty_assessments
     ]
     return updated

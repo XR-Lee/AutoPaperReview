@@ -193,7 +193,18 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
             missing_routes = sorted(wanted - known_routes)
             if missing_routes:
                 errors.append(f"stage {stage.id} references unknown routes: {missing_routes}")
-        if stage.type in {"command", "literature_grounding"} and stage.params.get("requires_network"):
+        if stage.type == "execute_review" and stage.params.get("fixture_path"):
+            path = loaded.resolve(str(stage.params["fixture_path"]))
+            if not path.is_file():
+                errors.append(f"stage {stage.id} review fixture does not exist: {path}")
+        if stage.type == "workspace_inspect":
+            for raw in stage.params.get("paths", []):
+                path = loaded.resolve(str(raw))
+                if not path.exists():
+                    errors.append(f"stage {stage.id} inspect path does not exist: {path}")
+        if stage.type in {"command", "literature_grounding", "execute_review"} and stage.params.get(
+            "requires_network"
+        ):
             scope = str(stage.params.get("network_scope", "fulltext" if stage.type == "command" else "metadata"))
             policy = loaded.config.project.network_policy
             allowed = policy.value == "allow" or (policy.value == "metadata_only" and scope == "metadata")

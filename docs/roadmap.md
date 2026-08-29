@@ -24,6 +24,21 @@ Known v0.1 constraints:
 - Declared network policy is not an operating-system sandbox.
 - Parser, model, retrieval, rendered-document QA, release packaging, and journal-platform adapters are not built in.
 
+## Priority after 0.1.3
+
+The four data-boundary milestones below remain the schema work. Open experiments change the *order of the next executable slices*. The full comparison is [feature gaps versus stronger open experiments](oss-experiment-gaps.md).
+
+v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. A live PydanticAI (or other) model adapter is still optional and not bundled.
+
+Remaining after 0.1.5:
+
+1. Richer locator families and excerpt verification against parsed PDF/DOCX text.
+2. Live citation resolve (Crossref/arXiv) behind a declared adapter.
+3. Optional model-execution adapter that snapshots prompts and raw responses.
+4. Then ObservationRecord, dissent-preserving consensus, parser/visual adapters, and journal-platform adapters as already designed.
+
+Do not take MinerU, PASA, Tavily, ChatArena, a vector index, or a fitted ICLR map into core.
+
 ## Observation records
 
 Introduce an immutable `ObservationRecord` emitted by a route or adapter before consensus.
