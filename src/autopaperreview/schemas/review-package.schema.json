@@ -853,6 +853,74 @@
       ],
       "title": "SourceRecord",
       "type": "object"
+    },
+    "VenueConclusion": {
+      "additionalProperties": false,
+      "description": "A venue-specific decision. No overall numeric score.",
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._+-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VenueKind"
+        },
+        "label": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "outcome": {
+          "$ref": "#/$defs/VenueOutcome"
+        },
+        "rationale": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "outcome",
+        "label",
+        "rationale",
+        "evidence_ids"
+      ],
+      "title": "VenueConclusion",
+      "type": "object"
+    },
+    "VenueKind": {
+      "enum": [
+        "conference",
+        "journal"
+      ],
+      "title": "VenueKind",
+      "type": "string"
+    },
+    "VenueOutcome": {
+      "enum": [
+        "reject",
+        "weak_reject",
+        "major_revision",
+        "minor_revision",
+        "borderline",
+        "weak_accept",
+        "accept",
+        "not_a_fit"
+      ],
+      "title": "VenueOutcome",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -984,6 +1052,13 @@
         }
       ],
       "default": null
+    },
+    "venue_conclusions": {
+      "items": {
+        "$ref": "#/$defs/VenueConclusion"
+      },
+      "title": "Venue Conclusions",
+      "type": "array"
     }
   },
   "required": [

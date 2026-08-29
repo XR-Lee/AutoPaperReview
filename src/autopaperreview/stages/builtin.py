@@ -34,6 +34,7 @@ from ..models import (
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
+    VenueConclusion,
 )
 from ..i18n import ensure_package_languages, normalize_languages
 from ..reporting import render_markdown, write_package_json
@@ -463,6 +464,7 @@ class ConsensusStage(StageHandler):
         claims_by_id: dict[str, ReviewClaim] = {}
         queries_by_id: dict[str, RelatedWorkQuery] = {}
         snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
+        venues_by_id: dict[str, VenueConclusion] = {}
         for package in packages:
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
@@ -471,6 +473,7 @@ class ConsensusStage(StageHandler):
                 ("claim", package.claims, claims_by_id),
                 ("related-work query", package.related_work_queries, queries_by_id),
                 ("retrieved snapshot", package.retrieved_snapshots, snapshots_by_id),
+                ("venue conclusion", package.venue_conclusions, venues_by_id),
             ):
                 for value in values:
                     existing = catalog.get(value.id)
@@ -521,6 +524,7 @@ class ConsensusStage(StageHandler):
             summary=summary,
             claims=list(claims_by_id.values()),
             dimension_scores=list(dimension_by_name.values()),
+            venue_conclusions=list(venues_by_id.values()),
             overall_score=overall_score,
             related_work_queries=list(queries_by_id.values()),
             retrieved_snapshots=list(snapshots_by_id.values()),

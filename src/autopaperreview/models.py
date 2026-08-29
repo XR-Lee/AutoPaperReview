@@ -49,6 +49,22 @@ class SarDimension(str, Enum):
     prior_work_contextualization = "prior_work_contextualization"
 
 
+class VenueKind(str, Enum):
+    conference = "conference"
+    journal = "journal"
+
+
+class VenueOutcome(str, Enum):
+    reject = "reject"
+    weak_reject = "weak_reject"
+    major_revision = "major_revision"
+    minor_revision = "minor_revision"
+    borderline = "borderline"
+    weak_accept = "weak_accept"
+    accept = "accept"
+    not_a_fit = "not_a_fit"
+
+
 class OverallScoreMethod(str, Enum):
     linear_regression = "linear_regression"
     declared_formula = "declared_formula"
@@ -210,6 +226,26 @@ class OverallScore(StrictModel):
         return self
 
 
+class VenueConclusion(StrictModel):
+    """A venue-specific decision. No overall numeric score."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._+-]*$")
+    kind: VenueKind
+    outcome: VenueOutcome
+    label: LocalizedText
+    rationale: LocalizedText
+    evidence_ids: list[str] = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if not cleaned:
+            raise ValueError("at least one evidence ID is required")
+        return cleaned
+
+
 class RelatedWorkQuery(StrictModel):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
     perspective: QueryPerspective
@@ -297,6 +333,7 @@ class ReviewPackage(StrictModel):
     summary: LocalizedText | None = None
     claims: list[ReviewClaim] = Field(default_factory=list)
     dimension_scores: list[DimensionScore] = Field(default_factory=list)
+    venue_conclusions: list[VenueConclusion] = Field(default_factory=list)
     overall_score: OverallScore | None = None
     related_work_queries: list[RelatedWorkQuery] = Field(default_factory=list)
     retrieved_snapshots: list[RetrievedSourceSnapshot] = Field(default_factory=list)
@@ -312,6 +349,7 @@ class ReviewPackage(StrictModel):
             "claim": [claim.id for claim in self.claims],
             "related-work query": [query.id for query in self.related_work_queries],
             "retrieved snapshot": [snapshot.id for snapshot in self.retrieved_snapshots],
+            "venue conclusion": [item.id for item in self.venue_conclusions],
         }
         for label, identifiers in collections.items():
             if len(identifiers) != len(set(identifiers)):
@@ -357,6 +395,11 @@ class ReviewPackage(StrictModel):
             missing = sorted(set(self.overall_score.evidence_ids) - evidence_ids)
             if missing:
                 raise ValueError(f"overall score references unknown evidence: {missing}")
+        missing = sorted(
+            {eid for item in self.venue_conclusions for eid in item.evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"venue conclusions reference unknown evidence: {missing}")
         missing = sorted(
             {qid for snapshot in self.retrieved_snapshots for qid in snapshot.query_ids} - query_ids
         )

@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .runs/
 .autopaperreview/
+reviews/
 build/
 dist/
 *.egg-info/
