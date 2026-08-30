@@ -943,7 +943,7 @@ class LedgerParams(ParamsModel):
 
 class LedgerStage(StageHandler):
     type_name = "ledger"
-    version = "2"
+    version = "3"
     params_model = LedgerParams
 
     def run(self, context: StageContext) -> StageOutcome:
