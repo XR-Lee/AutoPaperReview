@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,6 +49,7 @@ SECTION_ZH = {
     "Detailed Comments": "详细评论",
     "Related-Work Queries": "相关工作查询",
     "Retrieved Sources": "检索到的来源",
+    "Evidence Index": "证据索引",
     "Acceptance Gate": "接受条件",
     "Claim Ledger": "主张台账",
     "Investigation Agenda": "核查议程",
@@ -76,10 +78,37 @@ def sort_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     return sorted(issues, key=lambda issue: (SEVERITY_ORDER[issue.severity], issue.id))
 
 
+def record_anchor(record_id: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", record_id).strip("-").lower()
+    return f"record-{slug}"
+
+
+def _linked_ids(record_ids: list[str], *, empty: str = "none") -> str:
+    if not record_ids:
+        return empty
+    return ", ".join(f"[{item}](#{record_anchor(item)})" for item in record_ids)
+
+
 def _evidence_suffix(evidence_ids: list[str]) -> str:
     if not evidence_ids:
         return ""
-    return " [" + ", ".join(evidence_ids) + "]"
+    return " [" + _linked_ids(evidence_ids) + "]"
+
+
+def _evidence_index_lines(package: ReviewPackage) -> list[str]:
+    if not package.evidence:
+        return []
+    lines = []
+    for item in sorted(package.evidence, key=lambda record: record.id):
+        excerpt = (item.excerpt or "").strip()
+        detail = excerpt or item.claim
+        if excerpt and excerpt != item.claim:
+            detail = f"{item.claim} — {excerpt}"
+        lines.append(
+            f'- <a id="{record_anchor(item.id)}"></a>`{item.id}` '
+            f"({item.source_id}; {item.locator}) {detail}"
+        )
+    return lines
 
 
 def _issue_location(issue: ReviewIssue) -> str:
@@ -373,7 +402,7 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             lines.extend([f"## {issue.severity.value.title()} Issues", ""])
         routes = ", ".join(issue.route_ids) or "unassigned"
         sources = ", ".join(issue.source_ids) or "manuscript only"
-        evidence_ids = ", ".join(issue.evidence_ids) or "none"
+        evidence_ids = _linked_ids(issue.evidence_ids)
         lines.extend(
             [
                 f"### {issue.id} {issue.title.resolve(language)}",
@@ -392,6 +421,12 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
                 "",
             ]
         )
+
+    index_lines = _evidence_index_lines(package)
+    if index_lines:
+        lines.extend(["## Evidence Index", ""])
+        lines.extend(index_lines)
+        lines.append("")
 
     if package.related_work_queries:
         lines.extend(["## Related-Work Queries", ""])
@@ -535,7 +570,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             lines.extend([f"## {english_heading} / {SEVERITY_ZH[issue.severity]}", ""])
         routes = ", ".join(issue.route_ids) or "unassigned"
         sources = ", ".join(issue.source_ids) or "manuscript only"
-        evidence_ids = ", ".join(issue.evidence_ids) or "none"
+        evidence_ids = _linked_ids(issue.evidence_ids)
         lines.extend(
             [
                 f"### {issue.id}",
@@ -558,6 +593,12 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.append("")
         lines.append("**Required action / 需采取的行动.**")
         lines.extend(_prose_items(issue.required_action, languages, field=f"{issue.id}.required_action"))
+        lines.append("")
+
+    index_lines = _evidence_index_lines(package)
+    if index_lines:
+        lines.extend([_heading("Evidence Index", languages), ""])
+        lines.extend(index_lines)
         lines.append("")
 
     if package.related_work_queries:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 - 2026-08-30
+
+- Evidence citations such as `[E2, E3]` are Markdown (and PDF) hyperlinks into the Evidence Index. Each id is independently clickable.
+- The report stage copies `review_report.md` next to `review.toml`. With the optional `pdf` extra (`reportlab`) it also writes `review_report.pdf` with the same internal links.
+- `pip install 'autopaperreview[pdf]'` enables PDF export. Without it, Markdown and JSON reports still run.
+
 ## 0.1.5 - 2026-08-29
 
 - Closed the P0–P2 contract gaps from the open-experiment review.

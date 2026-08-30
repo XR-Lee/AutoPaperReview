@@ -789,7 +789,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "2"
+    version = "3"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
@@ -831,10 +831,22 @@ class ReportStage(StageHandler):
         markdown_path = context.stage_dir / "review_report.md"
         summary_path = context.stage_dir / "summary.json"
         write_package_json(package, package_path)
-        markdown_path.write_text(
-            render_markdown(package, languages=languages, fill_missing=False),
-            encoding="utf-8",
-        )
+        markdown = render_markdown(package, languages=languages, fill_missing=False)
+        markdown_path.write_text(markdown, encoding="utf-8")
+        project_dir = context.loaded_config.path.parent
+        (project_dir / "review_report.md").write_text(markdown, encoding="utf-8")
+        pdf_written = False
+        from ..pdf_report import reportlab_available, write_report_pdf
+
+        pdf_path = context.stage_dir / "review_report.pdf"
+        if reportlab_available():
+            write_report_pdf(
+                markdown,
+                pdf_path,
+                title=f"Review Report: {package.project_id}",
+            )
+            (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
+            pdf_written = True
         _write_json(
             summary_path,
             {
@@ -844,19 +856,22 @@ class ReportStage(StageHandler):
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "pdf": pdf_written,
             },
         )
+        artifacts = [
+            _artifact(package_path, context, "review.package.release"),
+            _artifact(markdown_path, context, "review.report.markdown"),
+            _artifact(summary_path, context, "review.summary"),
+        ]
         return StageOutcome(
-            artifacts=[
-                _artifact(package_path, context, "review.package.release"),
-                _artifact(markdown_path, context, "review.report.markdown"),
-                _artifact(summary_path, context, "review.summary"),
-            ],
+            artifacts=artifacts,
             metadata={
                 "issue_count": len(package.issues),
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "pdf": pdf_written,
             },
         )
 

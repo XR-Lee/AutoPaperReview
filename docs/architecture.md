@@ -118,7 +118,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
-| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Optional export-gate budgets refuse an unauditable package. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 

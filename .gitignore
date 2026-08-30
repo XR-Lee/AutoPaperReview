@@ -4,6 +4,9 @@ __pycache__/
 .runs/
 .autopaperreview/
 reviews/
+# generated next to review.toml by the report stage
+examples/synthetic/review_report.md
+examples/synthetic/review_report.pdf
 build/
 dist/
 *.egg-info/
