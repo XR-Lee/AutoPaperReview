@@ -58,10 +58,20 @@ def build_ledger_claims(manuscript_text: str, *, manuscript_sha256: str) -> list
             claims.append(
                 LedgerClaim(
                     id=f"C{index}",
-                    claim=_localized(body),
-                    risk=_localized(
-                        "Listed contribution: in-paper evidence and a matched-setting "
-                        "comparator have not been checked for this item."
+                    claim=LocalizedText(
+                        primary=body,
+                        language="en",
+                        translations={"zh-Hans": body},
+                    ),
+                    risk=LocalizedText(
+                        primary=(
+                            "Listed contribution: in-paper evidence and a matched-setting "
+                            "comparator have not been checked for this item."
+                        ),
+                        language="en",
+                        translations={
+                            "zh-Hans": "该条列出的贡献尚未核对其文中证据与 matched-setting 对照工作。"
+                        },
                     ),
                     anchor=_anchor(manuscript_text, body, manuscript_sha256),
                     metadata={"kind": "listed_contribution", "index": index},
