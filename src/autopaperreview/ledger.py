@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from .contributions import extract_listed_contributions
 from .hashing import digest_excerpt
 from .literature import parse_manuscript_text
 from .models import (
@@ -48,8 +49,27 @@ def _anchor(manuscript: str, excerpt: str, manuscript_sha256: str) -> Anchor | N
 
 
 def build_ledger_claims(manuscript_text: str, *, manuscript_sha256: str) -> list[LedgerClaim]:
+    listed = extract_listed_contributions(manuscript_text)
+    if listed:
+        claims: list[LedgerClaim] = []
+        for item in listed:
+            index = int(item["index"])
+            body = str(item["text"])
+            claims.append(
+                LedgerClaim(
+                    id=f"C{index}",
+                    claim=_localized(body),
+                    risk=_localized(
+                        "Listed contribution: in-paper evidence and a matched-setting "
+                        "comparator have not been checked for this item."
+                    ),
+                    anchor=_anchor(manuscript_text, body, manuscript_sha256),
+                    metadata={"kind": "listed_contribution", "index": index},
+                )
+            )
+        return claims
     parsed = parse_manuscript_text(manuscript_text)
-    claims: list[LedgerClaim] = []
+    claims = []
     seen: set[str] = set()
     for section in ("abstract", "methods", "body"):
         for sentence in _sentences(parsed.get(section, "")):
@@ -85,6 +105,35 @@ def build_agenda(claims: list[LedgerClaim]) -> list[AgendaQuestion]:
     questions: list[AgendaQuestion] = []
     for claim in claims:
         text = claim.claim.primary
+        if claim.metadata.get("kind") == "listed_contribution":
+            index = claim.metadata.get("index", claim.id)
+            questions.append(
+                AgendaQuestion(
+                    id=f"A-{claim.id}-evidence",
+                    question=(
+                        f"What table, figure, or experiment actually tests listed "
+                        f"contribution {index}: {text}"
+                    ),
+                    claim_ids=[claim.id],
+                    perspective=QueryPerspective.agenda,
+                    requires_network=False,
+                    metadata={"kind": "evidence_completeness", "contribution_id": claim.id},
+                )
+            )
+            questions.append(
+                AgendaQuestion(
+                    id=f"A-{claim.id}-prior",
+                    question=(
+                        f"Which published method is a matched-setting comparator for "
+                        f"listed contribution {index}: {text}"
+                    ),
+                    claim_ids=[claim.id],
+                    perspective=QueryPerspective.same_problem,
+                    requires_network=False,
+                    metadata={"kind": "targeted_retrieval", "contribution_id": claim.id},
+                )
+            )
+            continue
         questions.append(
             AgendaQuestion(
                 id=f"A-{claim.id}",

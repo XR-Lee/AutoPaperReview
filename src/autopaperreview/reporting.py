@@ -52,6 +52,7 @@ SECTION_ZH = {
     "Evidence Index": "证据索引",
     "Acceptance Gate": "接受条件",
     "Claim Ledger": "主张台账",
+    "Listed Contributions": "作者贡献逐条",
     "Investigation Agenda": "核查议程",
     "Integrity": "完整性核验",
     "Novelty": "新颖性",
@@ -120,13 +121,30 @@ def _issue_location(issue: ReviewIssue) -> str:
 def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
     lines: list[str] = []
     if package.ledger_claims:
-        lines.extend(["## Claim Ledger", ""])
-        for item in package.ledger_claims:
-            risk = item.risk.resolve(language) if item.risk else ""
-            lines.append(f"- `{item.id}` {item.claim.resolve(language)}{_evidence_suffix(item.in_paper_evidence_ids)}")
-            if risk:
-                lines.append(f"  - Risk: {risk}")
-        lines.append("")
+        listed = [item for item in package.ledger_claims if item.metadata.get("kind") == "listed_contribution"]
+        other = [item for item in package.ledger_claims if item.metadata.get("kind") != "listed_contribution"]
+        if listed:
+            lines.extend(["## Listed Contributions", ""])
+            for item in listed:
+                risk = item.risk.resolve(language) if item.risk else ""
+                lines.append(
+                    f"- `{item.id}` {item.claim.resolve(language)}"
+                    f"{_evidence_suffix(item.in_paper_evidence_ids)}"
+                )
+                if risk:
+                    lines.append(f"  - Risk: {risk}")
+            lines.append("")
+        if other:
+            lines.extend(["## Claim Ledger", ""])
+            for item in other:
+                risk = item.risk.resolve(language) if item.risk else ""
+                lines.append(
+                    f"- `{item.id}` {item.claim.resolve(language)}"
+                    f"{_evidence_suffix(item.in_paper_evidence_ids)}"
+                )
+                if risk:
+                    lines.append(f"  - Risk: {risk}")
+            lines.append("")
     if package.agenda:
         lines.extend(["## Investigation Agenda", ""])
         for item in package.agenda:
@@ -160,14 +178,23 @@ def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
 def _render_audit_sections_multilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
     lines: list[str] = []
     if package.ledger_claims:
-        lines.extend([_heading("Claim Ledger", languages), ""])
-        for item in package.ledger_claims:
-            lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
-            for language in languages:
-                lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
-                if item.risk:
-                    lines.append(f"    - Risk: {item.risk.resolve(language)}")
-        lines.append("")
+        listed = [item for item in package.ledger_claims if item.metadata.get("kind") == "listed_contribution"]
+        other = [item for item in package.ledger_claims if item.metadata.get("kind") != "listed_contribution"]
+
+        def _ledger_block(title: str, records: list) -> None:
+            if not records:
+                return
+            lines.extend([_heading(title, languages), ""])
+            for item in records:
+                lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
+                for language in languages:
+                    lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                    if item.risk:
+                        lines.append(f"    - Risk: {item.risk.resolve(language)}")
+            lines.append("")
+
+        _ledger_block("Listed Contributions", listed)
+        _ledger_block("Claim Ledger", other)
     if package.agenda:
         lines.extend([_heading("Investigation Agenda", languages), ""])
         for item in package.agenda:

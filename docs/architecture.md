@@ -112,12 +112,12 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Literature routes can attach query and snapshot excerpts. When a sibling `manuscript.pdf` exists, packets tell the reviewer to inspect every numbered figure on the PDF page; caption paraphrase is not inspection. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
 | `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import and deterministic manuscript checks. |
-| `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. |
+| `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. When the paper lists numbered contributions, those items are the ledger units; agenda asks evidence completeness and a matched-setting comparator per item. |
 | `workspace_inspect` | Read-only inventory of declared workspace paths. Refuses path escape. |
 | `integrity` | Reference, results, and reproducibility records from snapshots and workspace files. |
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
-| `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
+| `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, plus one same-problem and one related-technique query per listed contribution. Optionally attaches a snapshot fixture or a declared retriever. Live retrieval requires a network declaration. |
 | `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
 from ..artifacts import artifact_from_path
+from ..contributions import extract_listed_contributions
 from ..export_gate import ExportGateParams, export_gate_errors
 from ..figures import caption_inventory, sibling_pdf
 from ..hashing import hash_json, sha256_file
@@ -98,6 +99,27 @@ def _figure_packet_lines(source_path: Path, source_text: str, route_kind: RouteK
         lines.append("- Caption inventory from extracted text: none")
     if route_kind == RouteKind.visual:
         lines.append("- This visual route must cover every inventoried Figure. Skipping a teaser or qualitative panel is a review defect.")
+    return lines
+
+
+def _contribution_packet_lines(source_text: str) -> list[str]:
+    listed = extract_listed_contributions(source_text) if source_text else []
+    lines = [
+        "",
+        "## Listed contributions (audit each one)",
+        "",
+        "Confirm the official 3–4 contributions from the PDF Contributions paragraph. "
+        "Extracted candidates below may be garbled by two-column layout. For EACH item: "
+        "(1) name the table/figure/experiment that tests THIS claim, "
+        "(2) name the matched-setting comparator for THIS claim, "
+        "(3) state missing evidence. Do not write one novelty paragraph for the whole paper.",
+        "",
+    ]
+    if not listed:
+        lines.append("- Extracted candidates: none. Still inventory the PDF Contributions list and audit each item.")
+        return lines
+    for item in listed:
+        lines.append(f"- `C{item['index']}`: {item['text']}")
     return lines
 
 
@@ -379,7 +401,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "3"
+    version = "4"
     params_model = PromptPacketParams
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
@@ -453,6 +475,8 @@ class PromptPacketStage(StageHandler):
                 body.extend(["", "## Source Text", "", source_text])
             if route.manuscript_access or route.kind == RouteKind.visual:
                 body.extend(_figure_packet_lines(context.source_path, source_text, route.kind))
+            if route.manuscript_access and source_text:
+                body.extend(_contribution_packet_lines(source_text))
             attach_literature = literature is not None and (
                 params.include_literature or route.kind == RouteKind.literature
             )
@@ -691,7 +715,7 @@ class LiteratureGroundingParams(ParamsModel):
 
 class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
-    version = "3"
+    version = "4"
     params_model = LiteratureGroundingParams
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:
@@ -811,6 +835,7 @@ class ReportParams(ParamsModel):
     require_anchor_on_major: bool = False
     min_figure_citations: int = Field(default=0, ge=0)
     require_figures_if_visual_route: bool = False
+    require_contribution_coverage: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -918,7 +943,7 @@ class LedgerParams(ParamsModel):
 
 class LedgerStage(StageHandler):
     type_name = "ledger"
-    version = "1"
+    version = "2"
     params_model = LedgerParams
 
     def run(self, context: StageContext) -> StageOutcome:
