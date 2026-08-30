@@ -5,11 +5,14 @@ from __future__ import annotations
 import re
 
 _HEADER = re.compile(
-    r"\b(?:our\s+|main\s+)?contributions?\b",
+    r"\b(?:our\s+|main\s+)?contribut(?:e|ions?)\b",
     re.IGNORECASE,
 )
 _PAREN = re.compile(r"\((\d{1,2})\)\s+")
 _DOTTED = re.compile(r"(?m)^\s*(\d{1,2})[.)]\s+")
+_ROMAN = re.compile(r"\(([ivx]+)\)\s+", re.IGNORECASE)
+_BULLET = re.compile(r"(?m)^\s*[•●▪\-–]\s+")
+_ROMAN_VALUES = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6}
 _STOP = re.compile(
     r"\n\s*(?:Related Work|Related-Work|Methodology|Methods|Experiments|"
     r"Preliminaries|Background|Related works)\b",
@@ -58,21 +61,33 @@ def _extract_from_stream(text: str) -> list[dict[str, object]]:
         window = window[: offset + stop.start()]
     window = _dehyphenate(window)
     scored: list[list[dict[str, object]]] = []
-    for markers in (list(_PAREN.finditer(window)), list(_DOTTED.finditer(window))):
+    marker_sets: list[list[re.Match[str]]] = [
+        list(_PAREN.finditer(window)),
+        list(_DOTTED.finditer(window)),
+        list(_ROMAN.finditer(window)),
+        list(_BULLET.finditer(window)),
+    ]
+    for markers in marker_sets:
         if len(markers) < 2:
             continue
         found: dict[int, str] = {}
         for position, match in enumerate(markers):
-            index = int(match.group(1))
+            raw = match.group(1) if match.lastindex else str(position + 1)
+            index = _ROMAN_VALUES.get(raw.lower()) if re.fullmatch(r"[ivx]+", raw, re.I) else int(raw)
             if index < 1 or index > 6 or index in found:
                 continue
             start = match.end()
             end = markers[position + 1].start() if position + 1 < len(markers) else len(window)
-            body = _TRAILING_HEADING.sub("", _collapse(window[start:end])).strip()
-            if len(body) < 24 or not _looks_like_claim(body):
+            body = _TRAILING_HEADING.sub("", _collapse(window[start:end])).strip(" ;.")
+            body = _TRAILING_HEADING.sub("", body).strip()
+            if len(body) < 24:
                 continue
+            if not _looks_like_claim(body) and not body[:1].islower():
+                # bullet fragments often start with "a practical..."
+                if not re.match(r"^(a|an|the|our|we|this|support|an)\b", body, re.I):
+                    continue
             found[index] = body[:600]
-        items: list[dict[str, object]] = []
+        items = []
         expected = 1
         while expected in found:
             items.append({"index": expected, "text": found[expected]})
@@ -81,7 +96,13 @@ def _extract_from_stream(text: str) -> list[dict[str, object]]:
             scored.append(items)
     if not scored:
         return []
-    return max(scored, key=lambda items: (len(items), sum(str(item["text"]).lower().startswith("we ") for item in items)))
+    return max(
+        scored,
+        key=lambda items: (
+            len(items),
+            sum(str(item["text"]).lower().startswith("we ") for item in items),
+        ),
+    )
 
 
 def extract_listed_contributions(text: str) -> list[dict[str, object]]:
