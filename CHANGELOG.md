@@ -4,6 +4,7 @@
 
 - Evidence citations such as `[E2, E3]` are Markdown (and PDF) hyperlinks into the Evidence Index. Each id is independently clickable.
 - The report stage copies `review_report.md` next to `review.toml`. With the optional `pdf` extra (`reportlab`) it also writes `review_report.pdf` with the same internal links.
+- PDF layout: CJK wrapping, Heiti/Noto sans, bilingual English/中文 cards, compact header, and colored dimension scores and venue outcomes.
 - `pip install 'autopaperreview[pdf]'` enables PDF export. Without it, Markdown and JSON reports still run.
 
 ## 0.1.5 - 2026-08-29
