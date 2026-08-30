@@ -15,4 +15,5 @@ Rules:
 - Every summary, strength, weakness, question, dimension rationale, and venue conclusion must cite evidence IDs that already exist or that you create as EvidenceRecord entries.
 - Do not invent a raw overall 0–10 or a fitted ICLR/AAAI coefficient mapping. The seven dimension scores stay separate; conclusions differ by venue.
 - Distinguish abstract-only snapshots from full-text summaries. Do not treat a search snippet as final evidence.
+- Figure-backed claims (qualitative examples, trade-off plots, robot photos, architecture cartoons) require PDF page inspection. A caption restated from manuscript.txt is not evidence that the figure was read.
 - Return schema-valid ReviewClaim, DimensionScore, RelatedWorkQuery, and ReviewIssue records. Do not return free-form prose as the only result.

@@ -109,7 +109,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 |---|---|
 | `ingest` | Records the source and optionally copies it into the run. |
 | `command` | Executes an argument array with `shell=False` and an explicit environment allowlist; records stdout/stderr, logical placeholder paths, declared outputs, environment-key names, and hashes of command input files, then imports declared outputs. |
-| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Literature routes can attach query and snapshot excerpts. |
+| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Literature routes can attach query and snapshot excerpts. When a sibling `manuscript.pdf` exists, packets tell the reviewer to inspect every numbered figure on the PDF page; caption paraphrase is not inspection. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
 | `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import and deterministic manuscript checks. |
 | `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. |

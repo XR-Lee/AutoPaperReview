@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..adapters import ReviewRequest, load_review_adapter
 from ..artifacts import artifact_from_path
 from ..export_gate import ExportGateParams, export_gate_errors
+from ..figures import caption_inventory, sibling_pdf
 from ..hashing import hash_json, sha256_file
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
@@ -70,6 +71,34 @@ def _artifact(path: Path, context: StageContext, role: str) -> Artifact:
         base=context.run_dir,
         base_name="run",
     )
+
+
+def _figure_packet_lines(source_path: Path, source_text: str, route_kind: RouteKind) -> list[str]:
+    pdf = sibling_pdf(source_path)
+    inventory = caption_inventory(source_text) if source_text else []
+    if pdf is None and not inventory and route_kind != RouteKind.visual:
+        return []
+    lines = [
+        "",
+        "## Figures (mandatory inspection)",
+        "",
+        "Open the original PDF page image for every numbered figure and table graphic. "
+        "A caption restated from Source Text is not inspection. Each figure-backed issue "
+        "must name the figure id, the page, and one visible mark that is not in the caption.",
+        "",
+    ]
+    if pdf is not None:
+        lines.append(f"- PDF: `{pdf.name}`")
+        lines.append(f"- PDF SHA-256: `{sha256_file(pdf)}`")
+    else:
+        lines.append("- PDF: missing sibling `*.pdf`. Do not invent visual evidence from captions.")
+    if inventory:
+        lines.append("- Caption inventory from extracted text: " + ", ".join(inventory))
+    else:
+        lines.append("- Caption inventory from extracted text: none")
+    if route_kind == RouteKind.visual:
+        lines.append("- This visual route must cover every inventoried Figure. Skipping a teaser or qualitative panel is a review defect.")
+    return lines
 
 
 def _load_dependency_packages(context: StageContext) -> list[ReviewPackage]:
@@ -350,7 +379,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "2"
+    version = "3"
     params_model = PromptPacketParams
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
@@ -372,6 +401,9 @@ class PromptPacketStage(StageHandler):
             context, "related_work_queries"
         )
         material: dict[str, Any] = {"prompt_hashes": prompt_hashes}
+        pdf = sibling_pdf(context.source_path)
+        if pdf is not None:
+            material["manuscript_pdf_sha256"] = sha256_file(pdf)
         if literature is not None:
             material["literature_sha256"] = hash_json(
                 {
@@ -419,6 +451,8 @@ class PromptPacketStage(StageHandler):
             ]
             if source_text and route.manuscript_access:
                 body.extend(["", "## Source Text", "", source_text])
+            if route.manuscript_access or route.kind == RouteKind.visual:
+                body.extend(_figure_packet_lines(context.source_path, source_text, route.kind))
             attach_literature = literature is not None and (
                 params.include_literature or route.kind == RouteKind.literature
             )
@@ -775,6 +809,8 @@ class ReportParams(ParamsModel):
     require_integrity: bool = False
     require_literature_if_literature_route: bool = False
     require_anchor_on_major: bool = False
+    min_figure_citations: int = Field(default=0, ge=0)
+    require_figures_if_visual_route: bool = False
 
     @field_validator("languages")
     @classmethod
