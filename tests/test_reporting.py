@@ -20,7 +20,8 @@ from autopaperreview.models import (
     SourceRecord,
 )
 from autopaperreview.pipeline import run_pipeline
-from autopaperreview.reporting import render_markdown
+from autopaperreview.pdf_report import _markup, reportlab_available, write_report_pdf
+from autopaperreview.reporting import record_anchor, render_markdown
 
 from tests.support import localized, make_artifact, make_issue
 
@@ -92,7 +93,7 @@ class BilingualRenderTests(unittest.TestCase):
         package = _package_with_english_only_rationale()
         markdown = render_markdown(package, language="en")
         self.assertIn("## Summary", markdown)
-        self.assertIn("A short paper claims deployment readiness. [E1]", markdown)
+        self.assertIn("A short paper claims deployment readiness. [[E1](#record-e1)]", markdown)
         self.assertIn("## Dimension Scores", markdown)
         self.assertIn("The claim is not supported.", markdown)
         self.assertNotIn("### en", markdown)
@@ -153,6 +154,10 @@ class BilingualRenderTests(unittest.TestCase):
         self.assertIsNone(package.overall_score)
         self.assertIn("No overall score is assigned", markdown)
         self.assertIn("未给出总体分数", markdown)
+        self.assertIn("## Evidence Index / 证据索引", markdown)
+        self.assertIn("[E1](#record-e1)", markdown)
+        self.assertIn('id="record-e1"', markdown)
+        self.assertIn("`E1`", markdown)
         self.assertIn("## Venue Conclusions / 会议与期刊结论", markdown)
         self.assertIn("#### ICLR", markdown)
         self.assertIn("#### TMLR", markdown)
@@ -319,6 +324,56 @@ class BilingualReportStageTests(unittest.TestCase):
                 self.assertIn("The claim is not supported.", markdown)
             self.assertNotIn("Spearman", markdown)
             self.assertEqual((stage_dir / "review_report.md").stat().st_size, len(markdown.encode("utf-8")))
+            sidecar = workspace / "review_report.md"
+            self.assertTrue(sidecar.is_file())
+            self.assertEqual(sidecar.read_text(encoding="utf-8"), markdown)
+            self.assertIn("[[E1](#record-e1)]", markdown)
+            if reportlab_available():
+                self.assertTrue((workspace / "review_report.pdf").is_file())
+                self.assertTrue(summary["pdf"])
+
+
+class EvidenceLinkTests(unittest.TestCase):
+    def test_record_anchor_slug(self) -> None:
+        self.assertEqual(record_anchor("E1"), "record-e1")
+        self.assertEqual(record_anchor("E-L1"), "record-e-l1")
+
+    def test_evidence_ids_are_markdown_links_into_the_index(self) -> None:
+        package = load_review_input(
+            Path("examples/synthetic/review_input.json"),
+            manuscript=make_artifact(),
+            project_id="synthetic-tracking-review",
+        )
+        markdown = render_markdown(package, bilingual=True)
+        self.assertIn("[[E1](#record-e1)]", markdown)
+        self.assertIn('<a id="record-e1"></a>', markdown)
+        self.assertIn("## Evidence Index / 证据索引", markdown)
+
+    def test_pdf_markup_keeps_citation_brackets_and_one_target_per_id(self) -> None:
+        dests, markup = _markup(
+            '- <a id="record-e2"></a>`E2` ([E2](#record-e2), [E3](#record-e3)) [[E2](#record-e2), [E3](#record-e3)]'
+        )
+        self.assertEqual(dests, ["record-e2"])
+        self.assertIn('href="#record-e2"', markup)
+        self.assertIn('href="#record-e3"', markup)
+        self.assertNotIn("[[E2", markup)
+        self.assertIn("[<link", markup)
+
+    @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
+    def test_pdf_contains_internal_evidence_links(self) -> None:
+        package = load_review_input(
+            Path("examples/synthetic/review_input.json"),
+            manuscript=make_artifact(),
+            project_id="synthetic-tracking-review",
+        )
+        markdown = render_markdown(package, bilingual=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.pdf"
+            write_report_pdf(markdown, path, title="Synthetic review")
+            payload = path.read_bytes()
+            self.assertIn(b"/Link", payload)
+            self.assertIn(b"/Dest", payload)
+            self.assertGreaterEqual(payload.count(b"/Subtype /Link"), markdown.count("[E1](#record-e1)"))
 
 
 if __name__ == "__main__":
