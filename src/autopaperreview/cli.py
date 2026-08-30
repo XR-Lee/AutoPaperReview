@@ -254,6 +254,13 @@ kind = "visual"
 prompt = "prompts/figure_grounded_v1.md"
 prompt_version = "1.0"
 
+[[routes]]
+id = "M7"
+name = "Per-contribution evidence and retrieval audit"
+kind = "prompt"
+prompt = "prompts/contribution_audit_v1.md"
+prompt_version = "1.0"
+
 [[stages]]
 id = "ingest"
 type = "ingest"

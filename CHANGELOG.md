@@ -7,6 +7,7 @@
 - PDF layout: CJK wrapping, Heiti/Noto sans, bilingual English/中文 cards, compact header, and colored dimension scores and venue outcomes.
 - `pip install 'autopaperreview[pdf]'` enables PDF export. Without it, Markdown and JSON reports still run.
 - Figure-grounded review: `figure_grounded_v1` is a visual route. Prompt packets require PDF page inspection for every numbered figure; caption paraphrase is not inspection. Export can require figure citations (`min_figure_citations` / `require_figures_if_visual_route`).
+- Listed contributions are audit units: ledger extracts the 3–4 author-numbered items, literature emits per-item retrieval queries, agenda asks evidence-completeness and matched-setting comparator per item, and `contribution_audit_v1` forbids a single paper-level novelty paragraph.
 
 ## 0.1.5 - 2026-08-29
 

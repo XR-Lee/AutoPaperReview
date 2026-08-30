@@ -25,10 +25,33 @@ class ExportGateParams(BaseModel):
     require_anchor_on_major: bool = False
     min_figure_citations: int = Field(default=0, ge=0)
     require_figures_if_visual_route: bool = False
+    require_contribution_coverage: bool = False
 
 
 def _is_major(issue: ReviewIssue) -> bool:
     return issue.severity in {Severity.critical, Severity.major}
+
+
+def _uncovered_contributions(package: ReviewPackage) -> list[str]:
+    listed = [
+        item for item in package.ledger_claims if item.metadata.get("kind") == "listed_contribution"
+    ]
+    if not listed:
+        return []
+    blob = " ".join(
+        [
+            *[issue.location for issue in package.issues],
+            *[issue.evidence.primary for issue in package.issues],
+            *[issue.title.primary for issue in package.issues],
+        ]
+    ).lower()
+    missing: list[str] = []
+    for item in listed:
+        index = item.metadata.get("index")
+        markers = [item.id.lower(), f"contribution {index}", f"contribution ({index})"]
+        if not any(marker in blob for marker in markers):
+            missing.append(item.id)
+    return missing
 
 
 def _cited_figures(package: ReviewPackage) -> set[str]:
@@ -95,6 +118,13 @@ def export_gate_errors(
             f"export gate requires at least {required_figures} distinct figure/table citations; "
             f"found {sorted(cited_figures) or 'none'}"
         )
+    if params.require_contribution_coverage:
+        missing_contrib = _uncovered_contributions(package)
+        if missing_contrib:
+            errors.append(
+                "export gate requires an issue covering each listed contribution; "
+                f"missing: {missing_contrib}"
+            )
     if not package.issues and not package.claims and (
         params.min_issues or params.min_claims or params.require_ledger
     ):
