@@ -65,6 +65,27 @@ class ExtractListedContributionsTests(unittest.TestCase):
         self.assertNotIn("TokenLearner", joined)
         self.assertIn("pair construction", joined)
 
+    def test_roman_and_bullet_lists(self) -> None:
+        roman = (
+            "We contribute (i) a markerless framework that jointly solves pose and latency "
+            "on one manifold; (ii) a 2D-3D rendering loss fusing metric depth with masks; "
+            "(iii) an offline excitation-maximizing trajectory planner; and (iv) support "
+            "for Eye-to-Hand and Eye-in-Hand setups.\nRelated Work\n"
+        )
+        items = extract_listed_contributions("Contributions. " + roman)
+        self.assertEqual([item["index"] for item in items], [1, 2, 3, 4])
+        bullets = """
+Our contributions are:
+• a practical depth-centric RGB-D SLAM architecture for long-horizon reconstruction.
+• a geometry-primary frontend that combines GICP with depth-lifted anchors.
+• an extensive all-real evaluation on public benchmarks and floor-scale capture.
+
+Related Work
+"""
+        items = extract_listed_contributions(bullets)
+        self.assertEqual([item["index"] for item in items], [1, 2, 3])
+        self.assertIn("depth-centric", str(items[0]["text"]))
+
     def test_synthetic_manuscript_has_no_listed_contributions(self) -> None:
         from pathlib import Path
 
