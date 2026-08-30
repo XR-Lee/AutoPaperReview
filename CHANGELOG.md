@@ -6,6 +6,7 @@
 - The report stage copies `review_report.md` next to `review.toml`. With the optional `pdf` extra (`reportlab`) it also writes `review_report.pdf` with the same internal links.
 - PDF layout: CJK wrapping, Heiti/Noto sans, bilingual English/中文 cards, compact header, and colored dimension scores and venue outcomes.
 - `pip install 'autopaperreview[pdf]'` enables PDF export. Without it, Markdown and JSON reports still run.
+- Figure-grounded review: `figure_grounded_v1` is a visual route. Prompt packets require PDF page inspection for every numbered figure; caption paraphrase is not inspection. Export can require figure citations (`min_figure_citations` / `require_figures_if_visual_route`).
 
 ## 0.1.5 - 2026-08-29
 
