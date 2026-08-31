@@ -4,6 +4,7 @@ import json
 import tempfile
 import textwrap
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from autopaperreview.hashing import sha256_file
@@ -12,13 +13,24 @@ from autopaperreview.migration import load_review_input
 from autopaperreview.models import (
     DimensionScore,
     EvidenceRecord,
+    IntegrityKind,
+    IntegrityRecord,
+    IntegrityVerdict,
+    LedgerClaim,
     LocalizedText,
+    NoveltyAssessment,
+    NoveltyTag,
+    QueryPerspective,
+    RelatedWorkQuery,
+    RetrievedSourceSnapshot,
     ReviewClaim,
     ReviewClaimKind,
     ReviewPackage,
     SarDimension,
+    SnapshotContentKind,
     SourceRecord,
 )
+from autopaperreview.status_notes import classify_status_note
 from autopaperreview.pipeline import run_pipeline
 from autopaperreview.pdf_report import _markup, reportlab_available, write_report_pdf
 from autopaperreview.reporting import record_anchor, render_markdown
@@ -374,6 +386,216 @@ class EvidenceLinkTests(unittest.TestCase):
             self.assertIn(b"/Link", payload)
             self.assertIn(b"/Dest", payload)
             self.assertGreaterEqual(payload.count(b"/Subtype /Link"), markdown.count("[E1](#record-e1)"))
+
+
+    @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
+    def test_pdf_has_contents_and_outline(self) -> None:
+        package = load_review_input(
+            Path("examples/synthetic/review_input.json"),
+            manuscript=make_artifact(),
+            project_id="synthetic-tracking-review",
+        )
+        markdown = render_markdown(package, bilingual=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.pdf"
+            write_report_pdf(markdown, path, title="Synthetic review")
+            payload = path.read_bytes()
+        self.assertIn(b"/Outlines", payload)
+        self.assertIn(b"Contents", payload)
+
+
+
+class StatusNoteRenderTests(unittest.TestCase):
+    def test_fixture_sentence_is_a_status_code(self) -> None:
+        note = classify_status_note(
+            "Fixture or placeholder identifier; not treated as a resolved publication."
+        )
+        self.assertIsNotNone(note.status)
+        self.assertEqual(note.status.code, "fixture")
+
+    def test_interpolated_matched_setting_is_one_code(self) -> None:
+        note = classify_status_note(
+            "Snapshot is not a matched setting "
+            "(task=none, dataset=none, metric=none); not used as overlap evidence."
+        )
+        self.assertIsNotNone(note.status)
+        self.assertEqual(note.status.code, "not-matched")
+        self.assertEqual(note.params, "task=none, dataset=none, metric=none")
+
+    def test_repeated_template_notes_collapse_in_bilingual_report(self) -> None:
+        records = [
+            IntegrityRecord(
+                id=f"INT-REF-RW{index}",
+                kind=IntegrityKind.reference_integrity,
+                verdict=IntegrityVerdict.missing,
+                subject=f"Paper {index}",
+                notes=LocalizedText(
+                    primary="Fixture or placeholder identifier; not treated as a resolved publication.",
+                    language="en",
+                    translations={"zh-Hans": "夹具或占位标识符；不视为已解析的正式文献。"},
+                ),
+            )
+            for index in range(1, 4)
+        ]
+        records.append(
+            IntegrityRecord(
+                id="INT-REPRO-reporting",
+                kind=IntegrityKind.reproducibility_attestation,
+                verdict=IntegrityVerdict.major,
+                subject="repeated-run and uncertainty reporting",
+                notes=LocalizedText(
+                    primary="Manuscript does not report both a confidence interval and a seed.",
+                    language="en",
+                    translations={"zh-Hans": "稿件没有同时报告置信区间和随机种子。"},
+                ),
+            )
+        )
+        novelty = [
+            NoveltyAssessment(
+                id=f"N-C{claim}-RW{snap}",
+                claim_id=f"C{claim}",
+                snapshot_id=f"RW{snap}",
+                tag=NoveltyTag.not_comparable,
+                notes=LocalizedText(
+                    primary=(
+                        "Snapshot is not a matched setting "
+                        "(task=none, dataset=none, metric=none); not used as overlap evidence."
+                    ),
+                    language="en",
+                    translations={
+                        "zh-Hans": "快照不是匹配设定（task=none, dataset=none, metric=none）；不作为重叠证据。"
+                    },
+                ),
+            )
+            for claim in (1, 2)
+            for snap in (1, 2, 3)
+        ]
+        package = ReviewPackage(
+            project_id="status-notes",
+            manuscript=make_artifact(),
+            issues=[make_issue()],
+            ledger_claims=[
+                LedgerClaim(
+                    id="C1",
+                    claim=LocalizedText(
+                        primary="Pair construction.",
+                        language="en",
+                        translations={"zh-Hans": "配对构建。"},
+                    ),
+                ),
+                LedgerClaim(
+                    id="C2",
+                    claim=LocalizedText(
+                        primary="Deterministic merge.",
+                        language="en",
+                        translations={"zh-Hans": "确定性合并。"},
+                    ),
+                ),
+            ],
+            related_work_queries=[
+                RelatedWorkQuery(id="Q1", perspective=QueryPerspective.baselines, query="token merging"),
+            ],
+            retrieved_snapshots=[
+                RetrievedSourceSnapshot(
+                    id=f"RW{index}",
+                    query_ids=["Q1"],
+                    title=f"Paper {index}",
+                    retrieved_at=datetime(2026, 8, 21, tzinfo=timezone.utc),
+                    content_kind=SnapshotContentKind.abstract,
+                    locator="offline",
+                    excerpt="abstract text",
+                )
+                for index in range(1, 4)
+            ],
+            integrity_records=records,
+            novelty_assessments=novelty,
+        )
+        markdown = render_markdown(package, bilingual=True)
+        self.assertEqual(markdown.count("**fixture**"), 1)
+        self.assertEqual(markdown.count("**not-matched**"), 1)
+        self.assertEqual(markdown.count("**no-CI/seed**"), 1)
+        self.assertNotIn(
+            "Fixture or placeholder identifier; not treated as a resolved publication.",
+            markdown,
+        )
+        self.assertNotIn("夹具或占位标识符；不视为已解析的正式文献。", markdown)
+        integrity = markdown.split("## Integrity")[1].split("## ")[0]
+        self.assertNotIn("**en:**", integrity)
+        self.assertNotIn("**zh-Hans:**", integrity)
+        self.assertIn("`INT-REF-RW1`", markdown)
+        self.assertIn("`INT-REF-RW3`", markdown)
+        self.assertIn("C1 x RW1–RW3", markdown)
+        self.assertIn("C2 x RW1–RW3", markdown)
+        self.assertIn("占位", markdown)
+        self.assertIn("设定不匹配", markdown)
+
+    def test_listed_contribution_risk_is_a_status_code_not_a_bilingual_card(self) -> None:
+        risk_en = (
+            "Listed contribution: in-paper evidence and a matched-setting "
+            "comparator have not been checked for this item."
+        )
+        risk_zh = "该条列出的贡献尚未核对其文中证据与 matched-setting 对照工作。"
+        note = classify_status_note(risk_en)
+        self.assertIsNotNone(note.status)
+        self.assertEqual(note.status.code, "unchecked")
+        claims = [
+            LedgerClaim(
+                id=f"C{index}",
+                claim=LocalizedText(
+                    primary=body,
+                    language="en",
+                    translations={"zh-Hans": zh},
+                ),
+                risk=LocalizedText(primary=risk_en, language="en", translations={"zh-Hans": risk_zh}),
+                metadata={"kind": "listed_contribution", "index": index, "note_code": "unchecked"},
+            )
+            for index, (body, zh) in enumerate(
+                (("Pair construction.", "配对构建。"), ("Deterministic merge.", "确定性合并。")),
+                start=1,
+            )
+        ]
+        package = ReviewPackage(
+            project_id="listed-status",
+            manuscript=make_artifact(),
+            issues=[make_issue()],
+            ledger_claims=claims,
+        )
+        markdown = render_markdown(package, bilingual=True)
+        listed = markdown.split("## Listed Contributions")[1].split("## ")[0]
+        self.assertEqual(markdown.count("**unchecked**"), 1)
+        self.assertIn("尚未核对", listed)
+        self.assertNotIn(risk_en, markdown)
+        self.assertNotIn(risk_zh, markdown)
+        self.assertNotIn("**en:**", listed)
+        self.assertNotIn("**zh-Hans:**", listed)
+        self.assertIn("`C1`", listed)
+        self.assertIn("`C2`", listed)
+
+    def test_unique_prose_notes_stay_bilingual(self) -> None:
+
+        package = ReviewPackage(
+            project_id="status-notes-prose",
+            manuscript=make_artifact(),
+            issues=[make_issue()],
+            integrity_records=[
+                IntegrityRecord(
+                    id="INT-CUSTOM",
+                    kind=IntegrityKind.results_integrity,
+                    verdict=IntegrityVerdict.mismatch,
+                    subject="custom check",
+                    notes=LocalizedText(
+                        primary="The tracking objective is concrete but the method is not compared to prior work in this fixture.",
+                        language="en",
+                        translations={"zh-Hans": "跟踪目标具体，但本夹具中的方法未与已有工作进行比较。"},
+                    ),
+                )
+            ],
+        )
+        markdown = render_markdown(package, bilingual=True)
+        integrity = markdown.split("## Integrity")[1].split("## ")[0]
+        self.assertIn("**en:**", integrity)
+        self.assertIn("**zh-Hans:**", integrity)
+        self.assertIn("The tracking objective is concrete", integrity)
 
 
 if __name__ == "__main__":

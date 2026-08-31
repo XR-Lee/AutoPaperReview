@@ -103,6 +103,7 @@ def _route_kind(route_id: str, record: dict[str, Any]) -> RouteKind:
         "M4": RouteKind.executable,
         "M5": RouteKind.executable,
         "M6": RouteKind.visual,
+        "M7": RouteKind.prompt,
     }.get(route_id, RouteKind.prompt)
 
 

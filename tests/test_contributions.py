@@ -3,13 +3,18 @@ from __future__ import annotations
 import unittest
 
 from autopaperreview.contributions import extract_listed_contributions
-from autopaperreview.ledger import build_agenda, build_ledger_claims
+from autopaperreview.ledger import (
+    PENDING_CONTRIBUTION_RISK_EN,
+    apply_contribution_audits,
+    build_agenda,
+    build_ledger_claims,
+)
 from autopaperreview.literature import generate_related_work_queries
 from autopaperreview.reporting import render_markdown
 from autopaperreview.export_gate import ExportGateParams, export_gate_errors
-from autopaperreview.models import ReviewPackage
+from autopaperreview.models import LocalizedText, ReviewPackage, ReviewRoute, RouteKind
 
-from tests.support import make_artifact, make_issue
+from tests.support import make_artifact, make_issue, localized
 
 
 PAREN_MANUSCRIPT = """
@@ -111,6 +116,40 @@ class ContributionLedgerTests(unittest.TestCase):
         self.assertIn("Q-C3-related_techniques", ids)
         targeted = [query for query in queries if query.generated_from == "listed_contribution"]
         self.assertEqual(len(targeted), 6)
+
+
+    def test_covering_issue_replaces_pending_contribution_risk(self) -> None:
+        claims = build_ledger_claims(PAREN_MANUSCRIPT, manuscript_sha256="a" * 64)
+        self.assertEqual(claims[0].risk.primary, PENDING_CONTRIBUTION_RISK_EN)
+        issue = make_issue(
+            id="I012",
+            location="Contribution 1; Table 1",
+            title=localized("Contribution 1 is not isolated"),
+            evidence=LocalizedText(
+                primary="Tests: Table 1. Comparator: none. Missing: factorial.",
+                language="en",
+                translations={"zh-Hans": "测了：表 1。对照：无。缺什么：因子实验。"},
+            ),
+            route_ids=["M7"],
+            category="contribution_audit",
+        )
+        package = ReviewPackage(
+            project_id="contrib-audit",
+            manuscript=make_artifact(),
+            routes=[ReviewRoute(id="M7", name="contribution audit", kind=RouteKind.prompt)],
+            ledger_claims=claims,
+            issues=[issue],
+        )
+        filled = apply_contribution_audits(package)
+        self.assertEqual(filled.ledger_claims[0].metadata.get("audit"), "checked")
+        self.assertIn("Tests: Table 1", filled.ledger_claims[0].risk.primary)
+        self.assertNotEqual(filled.ledger_claims[0].risk.primary, PENDING_CONTRIBUTION_RISK_EN)
+        self.assertEqual(filled.ledger_claims[1].risk.primary, PENDING_CONTRIBUTION_RISK_EN)
+        markdown = render_markdown(filled, bilingual=True)
+        listed = markdown.split("## Listed Contributions")[1].split("## ")[0]
+        self.assertIn("Tests: Table 1", listed)
+        self.assertIn("测了：表 1", listed)
+        self.assertNotIn(PENDING_CONTRIBUTION_RISK_EN, listed.split("`C2`")[0])
 
     def test_report_renders_listed_contributions_section(self) -> None:
         claims = build_ledger_claims(PAREN_MANUSCRIPT, manuscript_sha256="a" * 64)

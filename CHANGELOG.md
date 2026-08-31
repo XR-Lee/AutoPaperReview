@@ -4,10 +4,13 @@
 
 - Evidence citations such as `[E2, E3]` are Markdown (and PDF) hyperlinks into the Evidence Index. Each id is independently clickable.
 - The report stage copies `review_report.md` next to `review.toml`. With the optional `pdf` extra (`reportlab`) it also writes `review_report.pdf` with the same internal links.
+- PDF contents page with page numbers, clickable jumps, and a document outline (bookmarks) for sections and issues.
 - PDF layout: CJK wrapping, Heiti/Noto sans, bilingual English/中文 cards, compact header, and colored dimension scores and venue outcomes.
+- Canned integrity/novelty/ledger notes render as status codes with one bilingual legend, not a repeated English/中文 card on every row. Identical novelty cells collapse to `C1–C3 x RW1–RW7`.
 - `pip install 'autopaperreview[pdf]'` enables PDF export. Without it, Markdown and JSON reports still run.
 - Figure-grounded review: `figure_grounded_v1` is a visual route. Prompt packets require PDF page inspection for every numbered figure; caption paraphrase is not inspection. Export can require figure citations (`min_figure_citations` / `require_figures_if_visual_route`).
 - Listed contributions are audit units: ledger extracts the 3–4 author-numbered items, literature emits per-item retrieval queries, agenda asks evidence-completeness and matched-setting comparator per item, and `contribution_audit_v1` forbids a single paper-level novelty paragraph.
+- M7 contribution audits replace the pending C_i risk. Each listed contribution gets Tests / Comparator / Missing content from covering issues; the canned "have not been checked" sentence is only the empty state.
 
 ## 0.1.5 - 2026-08-29
 
