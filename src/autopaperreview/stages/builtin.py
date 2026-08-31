@@ -850,7 +850,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "3"
+    version = "4"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
