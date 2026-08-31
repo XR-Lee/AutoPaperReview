@@ -181,19 +181,27 @@ def _render_audit_sections_multilingual(package: ReviewPackage, languages: Seque
         listed = [item for item in package.ledger_claims if item.metadata.get("kind") == "listed_contribution"]
         other = [item for item in package.ledger_claims if item.metadata.get("kind") != "listed_contribution"]
 
-        def _ledger_block(title: str, records: list) -> None:
+        def _ledger_block(title: str, records: list, *, quote_once: bool = False) -> None:
             if not records:
                 return
             lines.extend([_heading(title, languages), ""])
             for item in records:
-                lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
-                for language in languages:
-                    lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                if quote_once:
+                    lines.append(
+                        f"- `{item.id}` {item.claim.primary}{_evidence_suffix(item.in_paper_evidence_ids)}"
+                    )
                     if item.risk:
-                        lines.append(f"    - Risk: {item.risk.resolve(language)}")
+                        for language in languages:
+                            lines.append(f"  - **{language}:** {item.risk.resolve(language)}")
+                else:
+                    lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
+                    for language in languages:
+                        lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                        if item.risk:
+                            lines.append(f"    - Risk: {item.risk.resolve(language)}")
             lines.append("")
 
-        _ledger_block("Listed Contributions", listed)
+        _ledger_block("Listed Contributions", listed, quote_once=True)
         _ledger_block("Claim Ledger", other)
     if package.agenda:
         lines.extend([_heading("Investigation Agenda", languages), ""])
