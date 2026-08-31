@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..adapters import ReviewRequest, load_review_adapter
 from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
+from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
 from ..figures import caption_inventory, sibling_pdf
 from ..hashing import hash_json, sha256_file
@@ -519,6 +520,26 @@ def _issue_key(issue: ReviewIssue) -> str:
     )
 
 
+
+def _prefer_ledger_claim(left, right):
+    """Keep an M7-filled C_i audit over the pending ledger placeholder."""
+    if left == right:
+        return left
+    left_checked = (left.metadata or {}).get("audit") == "checked"
+    right_checked = (right.metadata or {}).get("audit") == "checked"
+    if right_checked and not left_checked:
+        return right
+    if left_checked and not right_checked:
+        return left
+    left_pending = left.risk is not None and left.risk.primary == PENDING_CONTRIBUTION_RISK_EN
+    right_pending = right.risk is not None and right.risk.primary == PENDING_CONTRIBUTION_RISK_EN
+    if right_pending and not left_pending:
+        return left
+    if left_pending and not right_pending:
+        return right
+    return None
+
+
 class ConsensusStage(StageHandler):
     type_name = "consensus"
     version = "2"
@@ -621,6 +642,11 @@ class ConsensusStage(StageHandler):
                 for value in values:
                     existing = catalog.get(value.id)
                     if existing is not None and existing != value:
+                        if label == "ledger claim":
+                            chosen = _prefer_ledger_claim(existing, value)
+                            if chosen is not None:
+                                catalog[value.id] = chosen
+                                continue
                         raise ValueError(f"conflicting {label} definition for ID {value.id}")
                     catalog[value.id] = value
 
@@ -691,6 +717,7 @@ class ConsensusStage(StageHandler):
                 "input_package_count": len(packages),
             },
         )
+        output = apply_contribution_audits(output)
         output_path = context.stage_dir / "consensus.json"
         write_package_json(output, output_path)
         return StageOutcome(
@@ -850,7 +877,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "4"
+    version = "7"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:

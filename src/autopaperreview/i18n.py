@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 
 from .models import LocalizedText, ReviewPackage
+from .status_notes import translate_matched_setting_note
 
 BILINGUAL_LANGUAGES = ("en", "zh-Hans")
 
@@ -458,6 +459,9 @@ def translate_text(text: str, *, source: str, target: str) -> str:
         hit = TRANSLATION_TABLE.get((source, target, candidate))
         if hit:
             return hit
+    matched = translate_matched_setting_note(stripped, source=source, target=target)
+    if matched:
+        return matched
     if source == "en" and target == "zh-Hans":
         generated = _generate_en_to_zh(stripped)
     elif source == "zh-Hans" and target == "en":
