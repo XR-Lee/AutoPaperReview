@@ -27,6 +27,7 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertEqual(issue.source_ids, ["S1"])
         self.assertEqual(issue.confidence, 0.75)
         self.assertEqual(issue.metadata["legacy_v0"]["legacy_note"], {"reviewer": "synthetic"})
+        self.assertIsNone(issue.first_read)
         self.assertEqual([route.id for route in package.routes], ["M0"])
         self.assertTrue(package.routes[0].metadata["legacy_placeholder"])
         self.assertEqual([source.id for source in package.sources], ["S1"])

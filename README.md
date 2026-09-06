@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.5`
+Version: `0.1.6`
 
 ## Code harness, not a prompt-only skill
 
@@ -22,8 +22,9 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 - Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default.
 - A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
 - P0–P2 contract stages: `execute_review` (declared adapter, no core model API), snapshot excerpts, typed `Anchor`s, a report export gate, `ledger` / `agenda`, read-only `workspace_inspect`, `integrity`, and matched-setting `novelty`.
+- First-read review writing: issues can carry a `FirstReadNote` (what the paper said, a quote, why it matters). Prompt packets prepend a shared writing contract. Reports lead with a how-to-read note and inline quotes so a first-time reader can follow the argument without already knowing the paper.
 
-See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, and [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work. This repository does not claim Stanford's ICLR Spearman numbers.
+See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work, and [first-read review writing](docs/first-read-review.md) for the ICLR / ARR / Reviewer2 / Conventional Comments strategy this slice implements. This repository does not claim Stanford's ICLR Spearman numbers.
 
 The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API. Those systems belong behind adapters so their release cadence does not become the review database schema.
 

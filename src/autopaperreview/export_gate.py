@@ -6,7 +6,8 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import ReviewIssue, ReviewPackage, RouteKind, Severity
+from .models import ReviewPackage, RouteKind
+from .readability import first_read_gate_errors, is_major
 
 
 class ExportGateParams(BaseModel):
@@ -22,10 +23,13 @@ class ExportGateParams(BaseModel):
     require_integrity: bool = False
     require_literature_if_literature_route: bool = False
     require_anchor_on_major: bool = False
+    require_first_read_on_major: bool = False
+    require_quote_on_major: bool = False
+    min_explanation_chars: int = Field(default=0, ge=0)
 
 
 def _is_major(issue: ReviewIssue) -> bool:
-    return issue.severity in {Severity.critical, Severity.major}
+    return is_major(issue)
 
 
 def export_gate_errors(
@@ -68,6 +72,14 @@ def export_gate_errors(
         missing = [issue.id for issue in package.issues if _is_major(issue) and issue.anchor is None]
         if missing:
             errors.append(f"export gate requires anchors on major/critical issues; missing: {missing}")
+    errors.extend(
+        first_read_gate_errors(
+            package,
+            require_first_read_on_major=params.require_first_read_on_major,
+            require_quote_on_major=params.require_quote_on_major,
+            min_explanation_chars=params.min_explanation_chars,
+        )
+    )
     if not package.issues and not package.claims and (
         params.min_issues or params.min_claims or params.require_ledger
     ):

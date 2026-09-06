@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.6 - 2026-09-06
+
+- Made review comments readable for a first-time reader of the manuscript (area chair, author, or reviewer who has not internalized the paper yet).
+- Added optional `FirstReadNote` on `ReviewIssue`: restated claim, explanation, quote, Conventional Comments intent, and blocking flag. Existing packages remain valid.
+- Added packaged `first_read_v1.md` writing contract. `prompt_packet` prepends it to every route packet. Specialist prompts now require a self-contained argument, not an evidence ID.
+- Reports open with a how-to-read note, human dimension labels, inlined quotes, and an evidence catalog. Internal IDs stay as audit handles.
+- Export gate can require first-read notes and quotes on major/critical issues (`require_first_read_on_major`, `require_quote_on_major`, `min_explanation_chars`).
+- Deterministic adapter, synthetic fixture, and `init` now emit first-read notes. `init` adds a first-read clarity route (`M6`).
+- Documented the open-source strategy in [docs/first-read-review.md](docs/first-read-review.md). This is not a claim that AutoPaperReview matches ICLR, ARR, Reviewer2, or ReviewEval scores.
+
 ## 0.1.5 - 2026-08-29
 
 - Closed the P0–P2 contract gaps from the open-experiment review.

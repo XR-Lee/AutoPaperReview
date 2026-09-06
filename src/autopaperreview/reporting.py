@@ -16,6 +16,12 @@ from .models import (
     Severity,
     VenueKind,
 )
+from .readability import (
+    dimension_label,
+    how_to_read,
+    intent_heading,
+    issue_quote,
+)
 
 
 SEVERITY_ORDER = {
@@ -35,6 +41,7 @@ CLAIM_SECTION = {
 }
 
 SECTION_ZH = {
+    "How to Read This Review": "如何阅读本审稿",
     "Summary": "摘要",
     "Recommendation": "审稿建议",
     "Dimension Scores": "维度评分",
@@ -53,6 +60,8 @@ SECTION_ZH = {
     "Investigation Agenda": "核查议程",
     "Integrity": "完整性核验",
     "Novelty": "新颖性",
+    "Evidence Catalog": "证据目录",
+    "Appendix": "附录",
 }
 
 SEVERITY_ZH = {
@@ -86,6 +95,96 @@ def _issue_location(issue: ReviewIssue) -> str:
     if issue.anchor is not None:
         return f"{issue.anchor.display} ({issue.anchor.kind.value})"
     return issue.location
+
+
+def _quoted_passage(issue: ReviewIssue, package: ReviewPackage) -> str | None:
+    return issue_quote(issue, package)
+
+
+def _render_how_to_read(languages: Sequence[str]) -> list[str]:
+    lines = [_heading("How to Read This Review", languages), ""]
+    if len(languages) == 1:
+        lines.extend([how_to_read(languages[0]), ""])
+        return lines
+    lines.extend(
+        _language_blocks(
+            languages,
+            {language: [how_to_read(language)] for language in languages},
+        )
+    )
+    return lines
+
+
+def _render_first_read_mono(
+    issue: ReviewIssue, package: ReviewPackage, language: str
+) -> list[str]:
+    lines: list[str] = []
+    quote = _quoted_passage(issue, package)
+    heading = intent_heading(issue, language)
+    lines.append(f"- **Kind:** {heading}")
+    if issue.first_read is not None:
+        lines.append("")
+        lines.append(f"**What the paper said.** {issue.first_read.paper_said.resolve(language)}")
+        lines.append("")
+        if quote:
+            lines.append(f"**Quoted passage.** {quote}")
+            lines.append("")
+        lines.append(f"**Why this matters.** {issue.first_read.explanation.resolve(language)}")
+        lines.append("")
+    elif quote:
+        lines.append("")
+        lines.append(f"**Quoted passage.** {quote}")
+        lines.append("")
+    return lines
+
+
+def _render_first_read_bilingual(
+    issue: ReviewIssue, package: ReviewPackage, languages: Sequence[str]
+) -> list[str]:
+    lines: list[str] = []
+    quote = _quoted_passage(issue, package)
+    kinds = " / ".join(intent_heading(issue, language) for language in languages)
+    lines.append(f"- **Kind:** {kinds}")
+    lines.append("")
+    if issue.first_read is not None:
+        lines.append("**What the paper said / 论文写了什么.**")
+        lines.extend(
+            _prose_items(
+                issue.first_read.paper_said,
+                languages,
+                field=f"{issue.id}.first_read.paper_said",
+            )
+        )
+        lines.append("")
+        if quote:
+            lines.append(f"**Quoted passage / 原文摘录.** {quote}")
+            lines.append("")
+        lines.append("**Why this matters / 为何重要.**")
+        lines.extend(
+            _prose_items(
+                issue.first_read.explanation,
+                languages,
+                field=f"{issue.id}.first_read.explanation",
+            )
+        )
+        lines.append("")
+    elif quote:
+        lines.append(f"**Quoted passage / 原文摘录.** {quote}")
+        lines.append("")
+    return lines
+
+
+def _render_evidence_catalog(package: ReviewPackage) -> list[str]:
+    if not package.evidence:
+        return []
+    lines = ["## Evidence Catalog", ""]
+    for item in package.evidence:
+        excerpt = (item.excerpt or "").strip()
+        lines.append(f"- `{item.id}` {item.locator}: {item.claim}")
+        if excerpt:
+            lines.append(f"  Quote: {excerpt}")
+    lines.append("")
+    return lines
 
 
 def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
@@ -303,6 +402,7 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
         f"- Editorial: {counts['editorial']}",
         "",
     ]
+    lines.extend(_render_how_to_read([language]))
 
     summary_text = None
     summaries = [claim for claim in package.claims if claim.kind == ReviewClaimKind.summary]
@@ -324,8 +424,9 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
         for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
             rationale = score.rationale.resolve(language) if score.rationale else ""
             detail = f" — {rationale}" if rationale else ""
+            label = dimension_label(score.dimension, language)
             lines.append(
-                f"- **{score.dimension.value}:** {score.score:.1f}/10"
+                f"- **{score.dimension.value}:** {label} — {score.score:.1f}/10"
                 f"{_evidence_suffix(score.evidence_ids)}{detail}"
             )
         lines.append("")
@@ -378,6 +479,11 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             [
                 f"### {issue.id} {issue.title.resolve(language)}",
                 "",
+            ]
+        )
+        lines.extend(_render_first_read_mono(issue, package, language))
+        lines.extend(
+            [
                 f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
                 f"- **Routes:** {routes}",
@@ -413,6 +519,9 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
                 lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
 
+    if package.evidence:
+        lines.extend(["## Appendix", ""])
+        lines.extend(_render_evidence_catalog(package))
     lines.extend(_render_audit_sections(package, language))
 
     gate = package.acceptance_gate.get(language) or package.acceptance_gate.get("en") or []
@@ -438,6 +547,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         f"- Editorial: {counts['editorial']}",
         "",
     ]
+    lines.extend(_render_how_to_read(languages))
 
     claims_by_kind = {kind: [] for kind in CLAIM_SECTION}
     for claim in package.claims:
@@ -475,8 +585,10 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
     if package.dimension_scores:
         lines.extend([_heading("Dimension Scores", languages), ""])
         for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
+            labels = " / ".join(dimension_label(score.dimension, language) for language in languages)
             lines.append(
-                f"- **{score.dimension.value}:** {score.score:.1f}/10{_evidence_suffix(score.evidence_ids)}"
+                f"- **{score.dimension.value}:** {labels} — {score.score:.1f}/10"
+                f"{_evidence_suffix(score.evidence_ids)}"
             )
             if score.rationale:
                 for language in languages:
@@ -540,6 +652,11 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             [
                 f"### {issue.id}",
                 "",
+            ]
+        )
+        lines.extend(_render_first_read_bilingual(issue, package, languages))
+        lines.extend(
+            [
                 f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
                 f"- **Routes:** {routes}",
@@ -580,6 +697,15 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
                 lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
 
+    if package.evidence:
+        lines.extend([_heading("Appendix", languages), ""])
+        lines.extend([_heading("Evidence Catalog", languages).replace("## ", "### "), ""])
+        for item in package.evidence:
+            excerpt = (item.excerpt or "").strip()
+            lines.append(f"- `{item.id}` {item.locator}: {item.claim}")
+            if excerpt:
+                lines.append(f"  Quote: {excerpt}")
+        lines.append("")
     lines.extend(_render_audit_sections_multilingual(package, languages))
 
     if any(package.acceptance_gate.get(language) for language in languages):
