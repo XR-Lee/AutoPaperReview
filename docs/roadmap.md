@@ -30,7 +30,9 @@ The four data-boundary milestones below remain the schema work. Open experiments
 
 v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. A live PydanticAI (or other) model adapter is still optional and not bundled.
 
-Remaining after 0.1.5:
+v0.1.6 shipped first-read review writing: optional `FirstReadNote`, a packaged writing contract prepended to prompt packets, reader-facing report prose, and optional export-gate checks for restated arguments and quotes. See [first-read review writing](first-read-review.md).
+
+Remaining after 0.1.6:
 
 1. Richer locator families and excerpt verification against parsed PDF/DOCX text.
 2. Live citation resolve (Crossref/arXiv) behind a declared adapter.

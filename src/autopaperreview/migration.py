@@ -12,6 +12,7 @@ from .models import (
     Artifact,
     DimensionScore,
     EvidenceRecord,
+    FirstReadNote,
     IntegrityRecord,
     LedgerClaim,
     LocalizedText,
@@ -70,6 +71,12 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         "evidence_ids",
         "confidence",
         "anchor",
+        "first_read",
+        "paper_said_en",
+        "paper_said_zh",
+        "explanation_en",
+        "explanation_zh",
+        "quote",
     }
     unknown = {key: value for key, value in record.items() if key not in known}
     return ReviewIssue(
@@ -86,7 +93,26 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         source_ids=_string_list(record.get("sources")),
         evidence_ids=_string_list(record.get("evidence_ids")),
         anchor=Anchor.model_validate(record["anchor"]) if record.get("anchor") else None,
+        first_read=_migrate_first_read(record),
         metadata={"legacy_v0": unknown} if unknown else {},
+    )
+
+
+def _migrate_first_read(record: dict[str, Any]) -> FirstReadNote | None:
+    if record.get("first_read"):
+        return FirstReadNote.model_validate(record["first_read"])
+    has_paper = any(record.get(key) for key in ("paper_said_en", "paper_said_zh", "paper_said"))
+    has_explanation = any(
+        record.get(key) for key in ("explanation_en", "explanation_zh", "explanation")
+    )
+    if not (has_paper or has_explanation):
+        return None
+    return FirstReadNote(
+        paper_said=_localized(record, "paper_said") if has_paper else _localized(record, "evidence"),
+        explanation=(
+            _localized(record, "explanation") if has_explanation else _localized(record, "impact")
+        ),
+        quote=str(record["quote"]).strip() if record.get("quote") else None,
     )
 
 

@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from .figures import caption_inventory
-from .models import ReviewIssue, ReviewPackage, RouteKind, Severity
+from .models import ReviewIssue, ReviewPackage, RouteKind
+from .readability import first_read_gate_errors, is_major
 
 
 class ExportGateParams(BaseModel):
@@ -26,10 +27,13 @@ class ExportGateParams(BaseModel):
     min_figure_citations: int = Field(default=0, ge=0)
     require_figures_if_visual_route: bool = False
     require_contribution_coverage: bool = False
+    require_first_read_on_major: bool = False
+    require_quote_on_major: bool = False
+    min_explanation_chars: int = Field(default=0, ge=0)
 
 
 def _is_major(issue: ReviewIssue) -> bool:
-    return issue.severity in {Severity.critical, Severity.major}
+    return is_major(issue)
 
 
 def _uncovered_contributions(package: ReviewPackage) -> list[str]:
@@ -125,6 +129,14 @@ def export_gate_errors(
                 "export gate requires an issue covering each listed contribution; "
                 f"missing: {missing_contrib}"
             )
+    errors.extend(
+        first_read_gate_errors(
+            package,
+            require_first_read_on_major=params.require_first_read_on_major,
+            require_quote_on_major=params.require_quote_on_major,
+            min_explanation_chars=params.min_explanation_chars,
+        )
+    )
     if not package.issues and not package.claims and (
         params.min_issues or params.min_claims or params.require_ledger
     ):

@@ -14,7 +14,7 @@ id = "M0"
 name = "Structured closed-book review"
 kind = "prompt"
 prompt = "../../src/autopaperreview/prompts/closed_book_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 manuscript_access = true
 network_access = false
 
@@ -23,7 +23,7 @@ id = "M2"
 name = "Metric and protocol review"
 kind = "prompt"
 prompt = "../../src/autopaperreview/prompts/metric_protocol_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 manuscript_access = true
 network_access = false
 
@@ -32,7 +32,7 @@ id = "M3"
 name = "SAR-shaped grounded review"
 kind = "literature"
 prompt = "../../src/autopaperreview/prompts/sar_grounded_review_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 manuscript_access = true
 network_access = false
 
@@ -41,7 +41,7 @@ id = "M4"
 name = "Literature audit"
 kind = "literature"
 prompt = "../../src/autopaperreview/prompts/literature_audit_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 manuscript_access = true
 network_access = false
 
@@ -50,6 +50,15 @@ id = "M5"
 name = "Reproducibility audit"
 kind = "prompt"
 prompt = "../../src/autopaperreview/prompts/reproducibility_v1.md"
+prompt_version = "1.1"
+manuscript_access = true
+network_access = false
+
+[[routes]]
+id = "M6"
+name = "First-read clarity review"
+kind = "prompt"
+prompt = "../../src/autopaperreview/prompts/first_read_v1.md"
 prompt_version = "1.0"
 manuscript_access = true
 network_access = false
@@ -100,7 +109,7 @@ id = "prompt_packets"
 type = "prompt_packet"
 depends_on = ["ingest", "literature"]
 [stages.params]
-route_ids = ["M0", "M2", "M3", "M4", "M5"]
+route_ids = ["M0", "M2", "M3", "M4", "M5", "M6"]
 include_source_text = true
 include_literature = true
 
@@ -145,3 +154,5 @@ require_ledger = true
 require_integrity = true
 require_literature_if_literature_route = true
 require_anchor_on_major = true
+require_first_read_on_major = true
+require_quote_on_major = true

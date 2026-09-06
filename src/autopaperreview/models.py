@@ -127,6 +127,26 @@ class ReviewClaimKind(str, Enum):
     comment = "comment"
 
 
+class CommentIntent(str, Enum):
+    """Conventional Comments-style intent. Optional; reports remain readable without it."""
+
+    praise = "praise"
+    issue = "issue"
+    suggestion = "suggestion"
+    question = "question"
+    note = "note"
+
+
+class FirstReadNote(StrictModel):
+    """Self-contained argument for a reader who is seeing the paper for the first time."""
+
+    paper_said: LocalizedText
+    explanation: LocalizedText
+    quote: str | None = None
+    intent: CommentIntent = CommentIntent.issue
+    blocking: bool | None = None
+
+
 class StageStatus(str, Enum):
     pending = "pending"
     running = "running"
@@ -424,6 +444,7 @@ class ReviewIssue(StrictModel):
     support_count: int = Field(default=1, ge=1)
     decision: ReviewDecision = ReviewDecision.open
     anchor: Anchor | None = None
+    first_read: FirstReadNote | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("route_ids", "source_ids", "evidence_ids", "tags")
