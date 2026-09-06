@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .hashing import digest_excerpt
 from .integrity import reporting_is_present
+from .ledger import apply_contribution_audits
 from .migration import load_review_input
 from .models import (
     Anchor,
@@ -133,6 +134,7 @@ class FixtureReviewAdapter:
             package = package.model_copy(update={"routes": list(known.values())})
         package = _merge_literature(package, request.literature)
         package = _merge_ledger(package, request.ledger)
+        package = apply_contribution_audits(package)
         return ReviewResult(
             package=package,
             raw_artifact_names=["raw_review.json"],

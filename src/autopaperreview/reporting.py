@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
 from .i18n import ensure_package_languages, normalize_languages, require_language, translate_text
 from .models import (
+    IntegrityRecord,
+    LedgerClaim,
     LocalizedText,
+    NoveltyAssessment,
     ReviewClaimKind,
     ReviewIssue,
     ReviewPackage,
     Severity,
     VenueKind,
 )
+from .status_notes import ClassifiedNote, StatusNote, classify_status_note
 
 
 SEVERITY_ORDER = {
@@ -48,8 +53,10 @@ SECTION_ZH = {
     "Detailed Comments": "详细评论",
     "Related-Work Queries": "相关工作查询",
     "Retrieved Sources": "检索到的来源",
+    "Evidence Index": "证据索引",
     "Acceptance Gate": "接受条件",
     "Claim Ledger": "主张台账",
+    "Listed Contributions": "作者贡献逐条",
     "Investigation Agenda": "核查议程",
     "Integrity": "完整性核验",
     "Novelty": "新颖性",
@@ -76,10 +83,37 @@ def sort_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     return sorted(issues, key=lambda issue: (SEVERITY_ORDER[issue.severity], issue.id))
 
 
+def record_anchor(record_id: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", record_id).strip("-").lower()
+    return f"record-{slug}"
+
+
+def _linked_ids(record_ids: list[str], *, empty: str = "none") -> str:
+    if not record_ids:
+        return empty
+    return ", ".join(f"[{item}](#{record_anchor(item)})" for item in record_ids)
+
+
 def _evidence_suffix(evidence_ids: list[str]) -> str:
     if not evidence_ids:
         return ""
-    return " [" + ", ".join(evidence_ids) + "]"
+    return " [" + _linked_ids(evidence_ids) + "]"
+
+
+def _evidence_index_lines(package: ReviewPackage) -> list[str]:
+    if not package.evidence:
+        return []
+    lines = []
+    for item in sorted(package.evidence, key=lambda record: record.id):
+        excerpt = (item.excerpt or "").strip()
+        detail = excerpt or item.claim
+        if excerpt and excerpt != item.claim:
+            detail = f"{item.claim} — {excerpt}"
+        lines.append(
+            f'- <a id="{record_anchor(item.id)}"></a>`{item.id}` '
+            f"({item.source_id}; {item.locator}) {detail}"
+        )
+    return lines
 
 
 def _issue_location(issue: ReviewIssue) -> str:
@@ -88,57 +122,233 @@ def _issue_location(issue: ReviewIssue) -> str:
     return issue.location
 
 
-def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
-    lines: list[str] = []
-    if package.ledger_claims:
-        lines.extend(["## Claim Ledger", ""])
-        for item in package.ledger_claims:
-            risk = item.risk.resolve(language) if item.risk else ""
-            lines.append(f"- `{item.id}` {item.claim.resolve(language)}{_evidence_suffix(item.in_paper_evidence_ids)}")
-            if risk:
-                lines.append(f"  - Risk: {risk}")
-        lines.append("")
-    if package.agenda:
-        lines.extend(["## Investigation Agenda", ""])
-        for item in package.agenda:
-            perspective = item.perspective.value if item.perspective else "unspecified"
-            lines.append(f"- `{item.id}` ({perspective}): {item.question}")
-        lines.append("")
-    if package.integrity_records:
-        lines.extend(["## Integrity", ""])
-        for item in package.integrity_records:
-            note = item.notes.resolve(language) if item.notes else ""
-            lines.append(
-                f"- `{item.id}` {item.kind.value}: {item.verdict.value} — {item.subject}"
-            )
-            if note:
-                lines.append(f"  - {note}")
-        lines.append("")
-    if package.novelty_assessments:
-        lines.extend(["## Novelty", ""])
-        for item in package.novelty_assessments:
-            note = item.notes.resolve(language) if item.notes else ""
-            setting = "matched" if item.matched_setting else "not-matched"
-            lines.append(
-                f"- `{item.id}` {item.tag.value} ({setting}; claim {item.claim_id}; snapshot {item.snapshot_id})"
-            )
-            if note:
-                lines.append(f"  - {note}")
-        lines.append("")
-    return lines
+_ID_NUM = re.compile(r"^([A-Za-z]+[-]?)(\d+)$")
 
 
-def _render_audit_sections_multilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+def _compact_ids(ids: Sequence[str]) -> str:
+    cleaned = list(dict.fromkeys(item for item in ids if item))
+    if len(cleaned) <= 2:
+        return ", ".join(cleaned)
+    matches = [_ID_NUM.match(item) for item in cleaned]
+    if all(matches) and len({item.group(1) for item in matches if item}) == 1:
+        nums = [int(item.group(2)) for item in matches if item]
+        if nums == list(range(nums[0], nums[0] + len(nums))):
+            prefix = matches[0].group(1) if matches[0] else ""
+            return f"{prefix}{nums[0]}–{prefix}{nums[-1]}"
+    return ", ".join(cleaned)
+
+
+def _legend_line(status: StatusNote, languages: Sequence[str], params: str | None = None) -> str:
+    extra = f" ({params})" if params else ""
+    if len(languages) == 1:
+        language = languages[0]
+        badge = status.badge_zh if language == "zh-Hans" else status.code
+        legend = status.legend_zh if language == "zh-Hans" else status.legend_en
+        return f"**{badge}**{extra} — {legend}"
+    return (
+        f"**{status.code}** {status.badge_zh}{extra} — "
+        f"{status.legend_en} / {status.legend_zh}"
+    )
+
+
+def _classify_note(text: LocalizedText | None, metadata: dict) -> ClassifiedNote:
+    primary = text.primary if text else ""
+    return classify_status_note(primary, metadata)
+
+
+def _prose_note_lines(text: LocalizedText, languages: Sequence[str], *, indent: str = "  ") -> list[str]:
+    if len(languages) == 1:
+        return [f"{indent}- {text.resolve(languages[0])}"]
+    return [f"{indent}- **{language}:** {text.resolve(language)}" for language in languages]
+
+
+def _ordered_groups(items: Sequence, key_fn):
+    groups: list[tuple[object, list]] = []
+    index: dict[object, int] = {}
+    for item in items:
+        key = key_fn(item)
+        if key not in index:
+            index[key] = len(groups)
+            groups.append((key, []))
+        groups[index[key]][1].append(item)
+    return groups
+
+
+def _render_ledger_records(
+    records: Sequence[LedgerClaim],
+    languages: Sequence[str],
+    *,
+    quote_once: bool,
+) -> list[str]:
     lines: list[str] = []
-    if package.ledger_claims:
-        lines.extend([_heading("Claim Ledger", languages), ""])
-        for item in package.ledger_claims:
+    classified = [_classify_note(item.risk, item.metadata) for item in records]
+    status_keys = {
+        (item.status.code, item.params)
+        for item in classified
+        if item.status is not None
+    }
+    shared = all(item.status is not None for item in classified) and len(status_keys) == 1
+    if shared and records:
+        first = classified[0]
+        assert first.status is not None
+        lines.append(f"- {_legend_line(first.status, languages, first.params)}")
+        for item in records:
+            if quote_once:
+                claim = item.claim.primary
+                lines.append(f"- `{item.id}` {claim}{_evidence_suffix(item.in_paper_evidence_ids)}")
+            elif len(languages) == 1:
+                lines.append(
+                    f"- `{item.id}` {item.claim.resolve(languages[0])}"
+                    f"{_evidence_suffix(item.in_paper_evidence_ids)}"
+                )
+            else:
+                lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
+                for language in languages:
+                    lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+        return lines
+    for item, note in zip(records, classified):
+        if quote_once:
+            lines.append(
+                f"- `{item.id}` {item.claim.primary}{_evidence_suffix(item.in_paper_evidence_ids)}"
+            )
+        elif len(languages) == 1:
+            lines.append(
+                f"- `{item.id}` {item.claim.resolve(languages[0])}"
+                f"{_evidence_suffix(item.in_paper_evidence_ids)}"
+            )
+        else:
             lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
             for language in languages:
                 lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
-                if item.risk:
-                    lines.append(f"    - Risk: {item.risk.resolve(language)}")
-        lines.append("")
+        if note.status is not None:
+            lines.append(f"  - {_legend_line(note.status, languages, note.params)}")
+        elif item.risk:
+            if quote_once or len(languages) > 1:
+                lines.extend(_prose_note_lines(item.risk, languages, indent="  "))
+            else:
+                lines.append(f"  - Risk: {item.risk.resolve(languages[0])}")
+    return lines
+
+
+def _integrity_group_key(item: IntegrityRecord) -> tuple:
+    note = _classify_note(item.notes, item.metadata)
+    if note.status is not None:
+        return ("status", item.kind.value, item.verdict.value, note.status.code, note.params or "")
+    primary = item.notes.primary if item.notes else ""
+    return ("prose", item.kind.value, item.verdict.value, primary)
+
+
+def _render_integrity_records(records: Sequence[IntegrityRecord], languages: Sequence[str]) -> list[str]:
+    lines: list[str] = []
+    for key, items in _ordered_groups(records, _integrity_group_key):
+        kind, = (key[1],)
+        verdict = key[2]
+        if key[0] == "status":
+            status = classify_status_note(None, {"note_code": key[3]}).status
+            assert status is not None
+            params = key[4] or None
+            lines.append(
+                f"- {_legend_line(status, languages, params)} · `{kind}` {verdict}"
+            )
+            for item in items:
+                lines.append(f"  - `{item.id}` {item.subject}")
+            continue
+        if len(items) == 1:
+            item = items[0]
+            lines.append(
+                f"- `{item.id}` {item.kind.value}: {item.verdict.value} — {item.subject}"
+            )
+            if item.notes:
+                if len(languages) == 1:
+                    lines.append(f"  - {item.notes.resolve(languages[0])}")
+                else:
+                    lines.extend(_prose_note_lines(item.notes, languages, indent="  "))
+            continue
+        lines.append(f"- `{kind}` {verdict}")
+        if items[0].notes:
+            if len(languages) == 1:
+                lines.append(f"  - {items[0].notes.resolve(languages[0])}")
+            else:
+                lines.extend(_prose_note_lines(items[0].notes, languages, indent="  "))
+        for item in items:
+            lines.append(f"  - `{item.id}` {item.subject}")
+    return lines
+
+
+def _novelty_group_key(item: NoveltyAssessment) -> tuple:
+    note = _classify_note(item.notes, item.metadata)
+    setting = "matched" if item.matched_setting else "not-matched"
+    if note.status is not None:
+        return ("status", item.tag.value, setting, note.status.code, note.params or "")
+    primary = item.notes.primary if item.notes else ""
+    return ("prose", item.tag.value, setting, primary)
+
+
+def _novelty_cells(items: Sequence[NoveltyAssessment]) -> str:
+    by_claim: dict[str, list[str]] = {}
+    for item in items:
+        by_claim.setdefault(item.claim_id, []).append(item.snapshot_id)
+    return "; ".join(
+        f"{claim_id} x {_compact_ids(snapshot_ids)}"
+        for claim_id, snapshot_ids in by_claim.items()
+    )
+
+
+def _render_novelty_assessments(
+    records: Sequence[NoveltyAssessment],
+    languages: Sequence[str],
+) -> list[str]:
+    lines: list[str] = []
+    for key, items in _ordered_groups(records, _novelty_group_key):
+        tag, setting = key[1], key[2]
+        if key[0] == "status":
+            status = classify_status_note(None, {"note_code": key[3]}).status
+            assert status is not None
+            params = key[4] or None
+            lines.append(
+                f"- {_legend_line(status, languages, params)} · `{tag}` {setting}"
+            )
+            if len(items) == 1:
+                item = items[0]
+                lines.append(
+                    f"  - `{item.id}` claim {item.claim_id} · snapshot {item.snapshot_id}"
+                )
+            else:
+                lines.append(f"  - {_novelty_cells(items)}")
+            continue
+        for item in items:
+            lines.append(
+                f"- `{item.id}` {item.tag.value} ({setting}; claim {item.claim_id}; snapshot {item.snapshot_id})"
+            )
+            if item.notes:
+                if len(languages) == 1:
+                    lines.append(f"  - {item.notes.resolve(languages[0])}")
+                else:
+                    lines.extend(_prose_note_lines(item.notes, languages, indent="  "))
+    return lines
+
+
+def _render_audit_sections(package: ReviewPackage, language: str) -> list[str]:
+    return _render_audit(package, [language])
+
+
+def _render_audit_sections_multilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    return _render_audit(package, languages)
+
+
+def _render_audit(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    lines: list[str] = []
+    if package.ledger_claims:
+        listed = [item for item in package.ledger_claims if item.metadata.get("kind") == "listed_contribution"]
+        other = [item for item in package.ledger_claims if item.metadata.get("kind") != "listed_contribution"]
+        if listed:
+            lines.extend([_heading("Listed Contributions", languages), ""])
+            lines.extend(_render_ledger_records(listed, languages, quote_once=len(languages) > 1))
+            lines.append("")
+        if other:
+            lines.extend([_heading("Claim Ledger", languages), ""])
+            lines.extend(_render_ledger_records(other, languages, quote_once=False))
+            lines.append("")
     if package.agenda:
         lines.extend([_heading("Investigation Agenda", languages), ""])
         for item in package.agenda:
@@ -147,24 +357,11 @@ def _render_audit_sections_multilingual(package: ReviewPackage, languages: Seque
         lines.append("")
     if package.integrity_records:
         lines.extend([_heading("Integrity", languages), ""])
-        for item in package.integrity_records:
-            lines.append(
-                f"- `{item.id}` {item.kind.value}: {item.verdict.value} — {item.subject}"
-            )
-            if item.notes:
-                for language in languages:
-                    lines.append(f"  - **{language}:** {item.notes.resolve(language)}")
+        lines.extend(_render_integrity_records(package.integrity_records, languages))
         lines.append("")
     if package.novelty_assessments:
         lines.extend([_heading("Novelty", languages), ""])
-        for item in package.novelty_assessments:
-            setting = "matched" if item.matched_setting else "not-matched"
-            lines.append(
-                f"- `{item.id}` {item.tag.value} ({setting}; claim {item.claim_id}; snapshot {item.snapshot_id})"
-            )
-            if item.notes:
-                for language in languages:
-                    lines.append(f"  - **{language}:** {item.notes.resolve(language)}")
+        lines.extend(_render_novelty_assessments(package.novelty_assessments, languages))
         lines.append("")
     return lines
 
@@ -213,7 +410,9 @@ def _render_venue_block_bilingual(package: ReviewPackage, languages: Sequence[st
             languages,
             {
                 language: [
-                    no_overall.get(language, translate_text(NO_OVERALL_EN, source="en", target=language))
+                    no_overall[language]
+                    if language in no_overall
+                    else translate_text(NO_OVERALL_EN, source="en", target=language)
                 ]
                 for language in languages
             },
@@ -373,7 +572,7 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             lines.extend([f"## {issue.severity.value.title()} Issues", ""])
         routes = ", ".join(issue.route_ids) or "unassigned"
         sources = ", ".join(issue.source_ids) or "manuscript only"
-        evidence_ids = ", ".join(issue.evidence_ids) or "none"
+        evidence_ids = _linked_ids(issue.evidence_ids)
         lines.extend(
             [
                 f"### {issue.id} {issue.title.resolve(language)}",
@@ -392,6 +591,12 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
                 "",
             ]
         )
+
+    index_lines = _evidence_index_lines(package)
+    if index_lines:
+        lines.extend(["## Evidence Index", ""])
+        lines.extend(index_lines)
+        lines.append("")
 
     if package.related_work_queries:
         lines.extend(["## Related-Work Queries", ""])
@@ -535,7 +740,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             lines.extend([f"## {english_heading} / {SEVERITY_ZH[issue.severity]}", ""])
         routes = ", ".join(issue.route_ids) or "unassigned"
         sources = ", ".join(issue.source_ids) or "manuscript only"
-        evidence_ids = ", ".join(issue.evidence_ids) or "none"
+        evidence_ids = _linked_ids(issue.evidence_ids)
         lines.extend(
             [
                 f"### {issue.id}",
@@ -558,6 +763,12 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.append("")
         lines.append("**Required action / 需采取的行动.**")
         lines.extend(_prose_items(issue.required_action, languages, field=f"{issue.id}.required_action"))
+        lines.append("")
+
+    index_lines = _evidence_index_lines(package)
+    if index_lines:
+        lines.extend([_heading("Evidence Index", languages), ""])
+        lines.extend(index_lines)
         lines.append("")
 
     if package.related_work_queries:

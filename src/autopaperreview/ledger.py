@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from .contributions import extract_listed_contributions
 from .hashing import digest_excerpt
 from .literature import parse_manuscript_text
 from .models import (
@@ -13,6 +14,7 @@ from .models import (
     LedgerClaim,
     LocalizedText,
     QueryPerspective,
+    ReviewPackage,
 )
 
 _SENTENCE = re.compile(r"(?<=[.!?。？！])\s+|(?<=\n)")
@@ -22,8 +24,86 @@ _CLAIM_HINT = re.compile(
 )
 
 
+PENDING_CONTRIBUTION_RISK_EN = (
+    "Listed contribution: in-paper evidence and a matched-setting "
+    "comparator have not been checked for this item."
+)
+PENDING_CONTRIBUTION_RISK_ZH = "该条列出的贡献尚未核对其文中证据与 matched-setting 对照工作。"
+
+
 def _localized(text: str) -> LocalizedText:
     return LocalizedText(primary=text.strip(), language="en")
+
+
+def _pending_contribution_risk() -> LocalizedText:
+    return LocalizedText(
+        primary=PENDING_CONTRIBUTION_RISK_EN,
+        language="en",
+        translations={"zh-Hans": PENDING_CONTRIBUTION_RISK_ZH},
+    )
+
+
+def _contribution_markers(claim: LedgerClaim) -> list[str]:
+    index = claim.metadata.get("index", claim.id)
+    return [str(claim.id).lower(), f"contribution {index}", f"contribution ({index})"]
+
+
+def covering_contribution_issues(package: ReviewPackage, claim: LedgerClaim) -> list:
+    markers = _contribution_markers(claim)
+    hits = []
+    for issue in package.issues:
+        blob = " ".join(
+            [
+                issue.location,
+                issue.title.primary,
+                issue.evidence.primary,
+                " ".join(issue.tags),
+                str(issue.metadata.get("contribution_id") or ""),
+            ]
+        ).lower()
+        if any(marker in blob for marker in markers):
+            hits.append(issue)
+    preferred = [
+        issue
+        for issue in hits
+        if "M7" in issue.route_ids or issue.category == "contribution_audit"
+    ]
+    return preferred or hits
+
+
+def apply_contribution_audits(package: ReviewPackage) -> ReviewPackage:
+    """Replace pending C_i risks with the M7 audit once covering issues exist."""
+    updated: list[LedgerClaim] = []
+    changed = False
+    for claim in package.ledger_claims:
+        if claim.metadata.get("kind") != "listed_contribution":
+            updated.append(claim)
+            continue
+        issues = covering_contribution_issues(package, claim)
+        if not issues:
+            updated.append(claim)
+            continue
+        issue = issues[0]
+        evidence_ids = list(dict.fromkeys([*claim.in_paper_evidence_ids, *issue.evidence_ids]))
+        metadata = {
+            **claim.metadata,
+            "audit": "checked",
+            "audit_issue_id": issue.id,
+            "note_code": "audited",
+        }
+        updated.append(
+            claim.model_copy(
+                update={
+                    "risk": issue.evidence,
+                    "in_paper_evidence_ids": evidence_ids,
+                    "metadata": metadata,
+                }
+            )
+        )
+        changed = True
+    if not changed:
+        return package
+    return package.model_copy(update={"ledger_claims": updated})
 
 
 def _sentences(text: str) -> list[str]:
@@ -48,8 +128,33 @@ def _anchor(manuscript: str, excerpt: str, manuscript_sha256: str) -> Anchor | N
 
 
 def build_ledger_claims(manuscript_text: str, *, manuscript_sha256: str) -> list[LedgerClaim]:
+    listed = extract_listed_contributions(manuscript_text)
+    if listed:
+        claims: list[LedgerClaim] = []
+        for item in listed:
+            index = int(item["index"])
+            body = str(item["text"])
+            claims.append(
+                LedgerClaim(
+                    id=f"C{index}",
+                    claim=LocalizedText(
+                        primary=body,
+                        language="en",
+                        translations={"zh-Hans": body},
+                    ),
+                    risk=_pending_contribution_risk(),
+                    anchor=_anchor(manuscript_text, body, manuscript_sha256),
+                    metadata={
+                        "kind": "listed_contribution",
+                        "index": index,
+                        "audit": "pending",
+                        "note_code": "unchecked",
+                    },
+                )
+            )
+        return claims
     parsed = parse_manuscript_text(manuscript_text)
-    claims: list[LedgerClaim] = []
+    claims = []
     seen: set[str] = set()
     for section in ("abstract", "methods", "body"):
         for sentence in _sentences(parsed.get(section, "")):
@@ -85,6 +190,35 @@ def build_agenda(claims: list[LedgerClaim]) -> list[AgendaQuestion]:
     questions: list[AgendaQuestion] = []
     for claim in claims:
         text = claim.claim.primary
+        if claim.metadata.get("kind") == "listed_contribution":
+            index = claim.metadata.get("index", claim.id)
+            questions.append(
+                AgendaQuestion(
+                    id=f"A-{claim.id}-evidence",
+                    question=(
+                        f"What table, figure, or experiment actually tests listed "
+                        f"contribution {index}: {text}"
+                    ),
+                    claim_ids=[claim.id],
+                    perspective=QueryPerspective.agenda,
+                    requires_network=False,
+                    metadata={"kind": "evidence_completeness", "contribution_id": claim.id},
+                )
+            )
+            questions.append(
+                AgendaQuestion(
+                    id=f"A-{claim.id}-prior",
+                    question=(
+                        f"Which published method is a matched-setting comparator for "
+                        f"listed contribution {index}: {text}"
+                    ),
+                    claim_ids=[claim.id],
+                    perspective=QueryPerspective.same_problem,
+                    requires_network=False,
+                    metadata={"kind": "targeted_retrieval", "contribution_id": claim.id},
+                )
+            )
+            continue
         questions.append(
             AgendaQuestion(
                 id=f"A-{claim.id}",

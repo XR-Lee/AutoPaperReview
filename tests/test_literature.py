@@ -246,7 +246,7 @@ class SarSchemaTests(unittest.TestCase):
         )
         markdown = render_markdown(package, language="en")
         self.assertIn("## Summary", markdown)
-        self.assertIn("A short paper claims deployment readiness. [E1]", markdown)
+        self.assertIn("A short paper claims deployment readiness. [[E1](#record-e1)]", markdown)
         self.assertNotIn("Legacy summary without an evidence suffix.", markdown)
         self.assertIn("## Questions", markdown)
         self.assertIn("## Dimension Scores", markdown)

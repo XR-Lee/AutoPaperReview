@@ -63,13 +63,19 @@ def assess_novelty(
             if not snapshot.excerpt:
                 tag = NoveltyTag.unclear
                 note = "Snapshot has no excerpt, so novelty cannot be verified."
+                note_code = "no-excerpt"
+                note_params = None
             elif not comparable:
                 tag = NoveltyTag.not_comparable
+                note_params = (
+                    f"task={snapshot.task or 'none'}, dataset={snapshot.dataset or 'none'}, "
+                    f"metric={snapshot.metric or 'none'}"
+                )
                 note = (
                     "Snapshot is not a matched setting "
-                    f"(task={snapshot.task or 'none'}, dataset={snapshot.dataset or 'none'}, "
-                    f"metric={snapshot.metric or 'none'}); not used as overlap evidence."
+                    f"({note_params}); not used as overlap evidence."
                 )
+                note_code = "not-matched"
             else:
                 haystack = " ".join(
                     part for part in (snapshot.title, snapshot.excerpt) if part
@@ -82,6 +88,15 @@ def assess_novelty(
                     if overlap
                     else "Matched setting, and the snapshot does not repeat the manuscript claim."
                 )
+                note_code = "overlap" if overlap else "distinct"
+                note_params = None
+            metadata = {
+                "manuscript_setting": setting,
+                "comparable": comparable,
+                "note_code": note_code,
+            }
+            if note_params:
+                metadata["note_params"] = note_params
             assessments.append(
                 NoveltyAssessment(
                     id=f"N-{claim.id}-{snapshot.id}",
@@ -93,7 +108,7 @@ def assess_novelty(
                     matched_metric=matched_metric,
                     evidence_ids=cited,
                     notes=LocalizedText(primary=note, language="en"),
-                    metadata={"manuscript_setting": setting, "comparable": comparable},
+                    metadata=metadata,
                 )
             )
     return assessments

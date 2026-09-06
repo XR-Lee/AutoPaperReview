@@ -17,6 +17,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .contributions import extract_listed_contributions
 from .models import (
     EvidenceRecord,
     QueryPerspective,
@@ -211,6 +212,37 @@ def generate_related_work_queries(
                 )
             )
             index += 1
+    for item in extract_listed_contributions(manuscript_text):
+        contribution_index = int(item["index"])
+        body = str(item["text"])
+        terms = distinctive_terms(body, limit=5)
+        nugget = " ".join(terms) or body[:80]
+        queries.append(
+            RelatedWorkQuery(
+                id=f"Q-C{contribution_index}-same_problem",
+                perspective=QueryPerspective.same_problem,
+                query=f"{nugget} matched setting comparison",
+                generated_from="listed_contribution",
+                metadata={
+                    "contribution_index": contribution_index,
+                    "specificity": "narrow",
+                    "kind": "targeted_retrieval",
+                },
+            )
+        )
+        queries.append(
+            RelatedWorkQuery(
+                id=f"Q-C{contribution_index}-related_techniques",
+                perspective=QueryPerspective.related_techniques,
+                query=f"{nugget} alternative methods prior work",
+                generated_from="listed_contribution",
+                metadata={
+                    "contribution_index": contribution_index,
+                    "specificity": "narrow",
+                    "kind": "targeted_retrieval",
+                },
+            )
+        )
     return queries
 
 

@@ -128,12 +128,15 @@ def build_integrity_records(
         if fixture:
             verdict = IntegrityVerdict.missing
             notes = "Fixture or placeholder identifier; not treated as a resolved publication."
+            note_code = "fixture"
         elif snapshot.doi or snapshot.arxiv_id:
             verdict = IntegrityVerdict.unclear
             notes = "Identifier is present but was not resolved against a live registry."
+            note_code = "unresolved"
         else:
             verdict = IntegrityVerdict.missing
             notes = "No DOI or arXiv ID; reference integrity cannot be established."
+            note_code = "no-id"
         records.append(
             IntegrityRecord(
                 id=f"INT-REF-{snapshot.id}",
@@ -144,7 +147,7 @@ def build_integrity_records(
                 observed=None,
                 evidence_ids=cited,
                 notes=_localized(notes),
-                metadata={"snapshot_id": snapshot.id, "fixture": fixture},
+                metadata={"snapshot_id": snapshot.id, "fixture": fixture, "note_code": note_code},
             )
         )
 
@@ -170,6 +173,11 @@ def build_integrity_records(
                         if verdict is IntegrityVerdict.exact
                         else "Workspace accuracy disagrees with the manuscript claim."
                     ),
+                    metadata={
+                        "note_code": (
+                            "match" if verdict is IntegrityVerdict.exact else "mismatch"
+                        )
+                    },
                 )
             )
     elif percents:
@@ -181,6 +189,7 @@ def build_integrity_records(
                 subject="manuscript accuracy claim",
                 expected=str(percents[0]),
                 notes=_localized("No results.json was present in the inspected workspace."),
+                metadata={"note_code": "no-results"},
             )
         )
 
@@ -203,6 +212,7 @@ def build_integrity_records(
                 if has_ci and has_seed
                 else "Manuscript does not report both a confidence interval and a seed."
             ),
+            metadata={"note_code": "CI+seed" if has_ci and has_seed else "no-CI/seed"},
         )
     )
     return records
