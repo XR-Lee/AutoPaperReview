@@ -11,6 +11,8 @@
 - Figure-grounded review: `figure_grounded_v1` is a visual route. Prompt packets require PDF page inspection for every numbered figure; caption paraphrase is not inspection. Export can require figure citations (`min_figure_citations` / `require_figures_if_visual_route`).
 - Listed contributions are audit units: ledger extracts the 3–4 author-numbered items, literature emits per-item retrieval queries, agenda asks evidence-completeness and matched-setting comparator per item, and `contribution_audit_v1` forbids a single paper-level novelty paragraph.
 - M7 contribution audits replace the pending C_i risk. Each listed contribution gets Tests / Comparator / Missing content from covering issues; the canned "have not been checked" sentence is only the empty state.
+- Bilingual export is fail-closed. `bilingual = true` now refuses unpaired `en` / `zh-Hans` prose, mismatched language-prefix counts, and incomplete strength/gate lists before Markdown or PDF is written. Word-substitution fill is limited to short fixture phrases; long review prose must already be `LocalizedText`.
+- PDF tokenization no longer joins `**en:**` / `**zh-Hans:**` into one body run. Issue headings such as `R01` / `C01` are recognized as issue cards.
 
 ## 0.1.5 - 2026-08-29
 

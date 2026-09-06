@@ -181,6 +181,11 @@ EXACT_PAIRS: tuple[tuple[str, str], ...] = (
         "未给出总体分数。AutoPaperReview 默认不输出未经校准的 LLM 0–10 分，本仓库也不附带拟合的 ICLR 回归。",
     ),
     (
+        "No overall score is assigned. Each of the seven dimensions is scored 1–10; "
+        "conclusions are venue-specific and are not a fitted conference mapping.",
+        "未给出总体分数。七个维度各自按 1–10 打分；结论按会议或期刊分别给出，不是拟合的总分映射。",
+    ),
+    (
         "In-paper claims have not yet been checked against workspace artifacts.",
         "文中主张尚未对照工作区产物核验。",
     ),
@@ -417,6 +422,10 @@ TRANSLATION_TABLE = _build_translation_table()
 
 
 def _generate_en_to_zh(text: str) -> str:
+    # Word substitution is only safe for short fixture phrases. Real review
+    # prose must be supplied as LocalizedText, not invented here.
+    if len(_WORD_RE.findall(text)) > 16:
+        return ""
     remaining = text
     for source, target in sorted(EN_ZH_PHRASES, key=lambda item: len(item[0]), reverse=True):
         remaining = re.sub(re.escape(source), target, remaining, flags=re.IGNORECASE)
@@ -437,6 +446,8 @@ def _generate_en_to_zh(text: str) -> str:
 
 
 def _generate_zh_to_en(text: str) -> str:
+    if sum(1 for ch in text if "\u3400" <= ch <= "\u9fff") > 40:
+        return ""
     remaining = text
     for english, chinese in sorted(EN_ZH_PHRASES, key=lambda item: len(item[1]), reverse=True):
         remaining = remaining.replace(chinese, english)

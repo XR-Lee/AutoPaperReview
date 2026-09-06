@@ -143,7 +143,7 @@ These are optimizations of code that already shipped.
 
 | Issue | Why it matters |
 |---|---|
-| Bilingual fill is a fixture phrase table plus word substitution | Fine for the synthetic example; garbage on a real paper. Either require human/model translations or label auto-fill as `machine_unverified`. |
+| Bilingual fill is a fixture phrase table plus word substitution | Long review prose now fails instead of becoming word-salad, and unpaired Markdown/PDF is refused. Short fixture phrases can still be auto-filled. Real papers still need human or model `LocalizedText`. |
 | `strengths` / `acceptance_gate` are `dict[str, list[str]]` | Inconsistent with `LocalizedText` on claims and issues. |
 | `init` writes a three-stage stub | No routes, no prompts, no literature, no bilingual report. First-run UX under-sells the product. |
 | `doctor` lists adapters that are not implemented | Misleading. Report "not bundled" vs "importable". |

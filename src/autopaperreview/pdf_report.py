@@ -31,8 +31,11 @@ _STATUS_LEGEND_RE = re.compile(r"^\*\*([^*]+)\*\*(?:\s+(\S+))?\s+[—–-]\s+(.*
 _OUTCOME_RE = re.compile(r"^\*\*Outcome:\*\*\s*`?([A-Za-z_]+)`?(.*)$")
 _SCORE_RE = re.compile(r"^\*\*([a-z_]+):\*\*\s*([0-9]+(?:\.[0-9]+)?)/10(.*)$")
 _LANG_PREFIX_RE = re.compile(r"^\*\*(en|zh-Hans):\*\*\s*(.*)$")
-_META_KEY_RE = re.compile(r"^\*\*(Location|Confidence|Routes|Sources|Evidence IDs):\*\*\s*(.*)$")
-_ISSUE_RE = re.compile(r"^I\d+\b")
+_META_KEY_RE = re.compile(
+    r"^\*\*(Location|Confidence|Routes|Sources|Evidence IDs|Old ID):\*\*\s*(.*)$"
+)
+_ISSUE_RE = re.compile(r"^[A-Z]{1,3}\d+\b")
+_LANG_LINE_RE = re.compile(r"^\*\*(en|zh-Hans):\*\*\s*(.*)$")
 _KICKER_RE = re.compile(r"^\*\*[^*]+\.\*\*\s*$")
 _OUTCOME_COLOR = {
     "reject": "#b91c1c",
@@ -267,12 +270,15 @@ def _tokens(markdown: str) -> list[tuple[str, str, int]]:
             tokens.append(("h2", stripped[3:].strip(), indent))
         elif stripped.startswith("- "):
             tokens.append(("bullet", stripped[2:].strip(), indent))
+        elif _LANG_LINE_RE.match(stripped):
+            tokens.append(("langline", stripped, indent))
         else:
             buf = [stripped]
             while (
                 index + 1 < len(lines)
                 and lines[index + 1].strip()
                 and not lines[index + 1].lstrip().startswith(("#", "- "))
+                and not _LANG_LINE_RE.match(lines[index + 1].lstrip())
             ):
                 index += 1
                 buf.append(lines[index].strip())
@@ -281,8 +287,15 @@ def _tokens(markdown: str) -> list[tuple[str, str, int]]:
     return tokens
 
 
+def _is_lang_token(kind: str, text: str) -> bool:
+    return kind == "langline" or (kind == "bullet" and _LANG_PREFIX_RE.match(text) is not None)
+
+
 def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
     """Write a linked PDF. Requires the optional reportlab extra."""
+    from .bilingual_coverage import require_bilingual_markdown
+
+    require_bilingual_markdown(markdown)
     from reportlab.lib.colors import HexColor
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4
@@ -486,10 +499,8 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             if kind == "blank":
                 cursor += 1
                 continue
-            if kind != "bullet":
-                break
             match = _LANG_PREFIX_RE.match(text)
-            if not match:
+            if not _is_lang_token(kind, text) or not match:
                 break
             dests, body = _markup(match.group(2))
             cell = [_destination(dest) for dest in dests]
@@ -501,7 +512,11 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 if nested_kind == "blank":
                     cursor += 1
                     continue
-                if nested_kind != "bullet" or nested_indent <= indent or _LANG_PREFIX_RE.match(nested_text):
+                if (
+                    nested_kind != "bullet"
+                    or nested_indent <= indent
+                    or _LANG_PREFIX_RE.match(nested_text)
+                ):
                     break
                 cell.extend(flow(_markup(nested_text), styles["sub"]))
                 cursor += 1
@@ -682,12 +697,12 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 pairs.append((language, [Paragraph(_chip_html(language), styles["chip"]), *cell]))
             story.extend(lang_card(pairs))
             continue
+        if kind == "langline" or (kind == "bullet" and _LANG_PREFIX_RE.match(text)):
+            flush_issue()
+            pairs, index = collect_lang_prefix_run(tokens, index)
+            story.extend(lang_card(pairs))
+            continue
         if kind == "bullet":
-            if _LANG_PREFIX_RE.match(text):
-                flush_issue()
-                pairs, index = collect_lang_prefix_run(tokens, index)
-                story.extend(lang_card(pairs))
-                continue
             items = flow(_bullet_markup(text), styles["sub"] if indent >= 2 else styles["bullet"])
             if current_issue is not None and _META_KEY_RE.match(text):
                 meta_line: list[str] = []
@@ -729,9 +744,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                     current_issue.append(Paragraph("  ·  ".join(compact), styles["meta"]))
                 while index < len(tokens) and tokens[index][0] == "blank":
                     index += 1
-                if index < len(tokens) and tokens[index][0] == "bullet" and _LANG_PREFIX_RE.match(
-                    tokens[index][1]
-                ):
+                if index < len(tokens) and _is_lang_token(tokens[index][0], tokens[index][1]):
                     pairs, index = collect_lang_prefix_run(tokens, index)
                     current_issue.extend(lang_card(pairs))
                 flush_issue()
@@ -741,8 +754,8 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 lookahead = index + 1
                 while lookahead < len(tokens) and tokens[lookahead][0] == "blank":
                     lookahead += 1
-                if lookahead < len(tokens) and tokens[lookahead][0] == "bullet" and _LANG_PREFIX_RE.match(
-                    tokens[lookahead][1]
+                if lookahead < len(tokens) and _is_lang_token(
+                    tokens[lookahead][0], tokens[lookahead][1]
                 ):
                     block = list(items)
                     index = lookahead
@@ -755,7 +768,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 index += 1
                 while index < len(tokens) and tokens[index][0] == "blank":
                     index += 1
-                if index < len(tokens) and tokens[index][0] == "bullet" and _LANG_PREFIX_RE.match(tokens[index][1]):
+                if index < len(tokens) and _is_lang_token(tokens[index][0], tokens[index][1]):
                     pairs, index = collect_lang_prefix_run(tokens, index)
                     block.extend(lang_card(pairs))
                 story.append(KeepTogether(block))

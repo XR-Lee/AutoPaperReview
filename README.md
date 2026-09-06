@@ -14,7 +14,7 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 
 - Strict Pydantic models for artifacts, sources, evidence, issues, review packages, stages, and run manifests.
 - A TOML-defined DAG with validation, resumable execution, content-hash caching, and atomic stage promotion.
-- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations`; bilingual rendering does not silently fall back to the primary language.
+- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations` only for short fixture phrases; bilingual rendering does not silently fall back to the primary language, and incomplete pairing is refused before Markdown/PDF export.
 - A deny-by-default network declaration gate. Commands never use a shell, and network-requiring stages must declare their scope.
 - Python entry-point plugins under `autopaperreview.stages`.
 - Migration support for the earlier bare issue-array and review-package JSON formats.
