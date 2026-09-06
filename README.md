@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.5`
+Version: `0.1.6`
 
 ## Code harness, not a prompt-only skill
 
@@ -14,14 +14,16 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 
 - Strict Pydantic models for artifacts, sources, evidence, issues, review packages, stages, and run manifests.
 - A TOML-defined DAG with validation, resumable execution, content-hash caching, and atomic stage promotion.
-- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations`; bilingual rendering does not silently fall back to the primary language.
+- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations` only for short fixture phrases; bilingual rendering does not silently fall back to the primary language, and incomplete pairing is refused before Markdown/PDF export.
 - A deny-by-default network declaration gate. Commands never use a shell, and network-requiring stages must declare their scope.
 - Python entry-point plugins under `autopaperreview.stages`.
 - Migration support for the earlier bare issue-array and review-package JSON formats.
 - Generated JSON Schema, a synthetic end-to-end example, unit tests, CI, and an open-source reference-stack snapshot.
-- Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default.
+- Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default. Report Markdown (and PDF, if `reportlab` is installed) links each `[E2]` to the Evidence Index.
 - A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
 - P0–P2 contract stages: `execute_review` (declared adapter, no core model API), snapshot excerpts, typed `Anchor`s, a report export gate, `ledger` / `agenda`, read-only `workspace_inspect`, `integrity`, and matched-setting `novelty`.
+- Figure-grounded review: a visual route (`figure_grounded_v1`) plus prompt packets that require inspecting every numbered figure on the sibling PDF page. Caption paraphrase is not inspection.
+- Listed contributions: the 3–4 author-numbered items are extracted, retrieved against, and audited one by one for evidence completeness. A single paper-level novelty paragraph is not sufficient.
 
 See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, and [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work. This repository does not claim Stanford's ICLR Spearman numbers.
 
@@ -32,7 +34,7 @@ The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, Pape
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[pdf]"
 ```
 
 For development without installation:
@@ -48,7 +50,7 @@ PYTHONPATH=src python3 -m autopaperreview validate examples/synthetic/review.tom
 PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/review.toml
 ```
 
-The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales. After a successful run, inspect `stages/report/review_report.md`, `stages/prompt_packets/M3.md`, `stages/integrity/integrity.json`, and `stages/novelty/novelty.json` under the run directory.
+The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales. After a successful run, `review_report.md` (and `review_report.pdf` if `reportlab` is installed) is also copied next to `review.toml`. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Inspect `stages/report/review_report.md`, `stages/prompt_packets/M3.md`, `stages/integrity/integrity.json`, and `stages/novelty/novelty.json` under the run directory.
 
 `init` writes a deterministic adapter DAG that can review a replaced `manuscript.txt` without a model API. The synthetic example uses `FixtureReviewAdapter` plus a local snapshot so literature, ledger, integrity, and novelty records are visible.
 

@@ -1,6 +1,6 @@
 [project]
 name = "autopaperreview"
-version = "0.1.5"
+version = "0.1.6"
 description = "A local-first, evidence-traceable harness for reproducible scholarly manuscript review."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +25,9 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/XR-Lee/AutoPaperReview"
 Issues = "https://github.com/XR-Lee/AutoPaperReview/issues"
+
+[project.optional-dependencies]
+pdf = ["reportlab>=4"]
 
 [project.scripts]
 autopaperreview = "autopaperreview.cli:main"

@@ -77,10 +77,13 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             payload = json.loads(stdout.getvalue())
-            self.assertEqual(len(payload["templates"]), 6)
+            self.assertEqual(len(payload["templates"]), 8)
             self.assertIn("closed_book_v1.md", payload["templates"])
             self.assertIn("sar_grounded_review_v1.md", payload["templates"])
+            self.assertIn("figure_grounded_v1.md", payload["templates"])
+            self.assertIn("contribution_audit_v1.md", payload["templates"])
             self.assertTrue((output_dir / "visual_qa_v1.md").is_file())
+            self.assertTrue((output_dir / "figure_grounded_v1.md").is_file())
 
 
 if __name__ == "__main__":

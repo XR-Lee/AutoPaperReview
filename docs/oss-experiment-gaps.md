@@ -134,7 +134,7 @@ Fine-tuned critic models (OpenReviewer, CycleReviewer, DeepReviewer-14B) belong 
 `include_source_text` and `literature_grounding` are UTF-8 text only. Real submissions are PDF or DOCX.
 
 - Parser adapter (Docling first, GROBID as academic-PDF sidecar, PaperMage if page entities are required). Dual-parser disagreement stays as two artifacts until adjudicated.
-- `visual_qa_v1.md` needs a render + inspect stage (page images, clipping, broken tables). Findings must cite page numbers and must not invent scientific facts from layout.
+- `visual_qa_v1.md` remains layout QA (clipping, broken tables). Scientific reading of plots, diagrams, and photos is `figure_grounded_v1`: inspect the PDF page, cite a visible mark that is not in the caption. Prompt packets now attach a sibling-PDF inventory. Rendering page PNGs into hashed artifacts is still optional.
 - Quote excerpts should be hashed and checked against the parsed text.
 
 ## Priority 5 — internal quality
@@ -143,7 +143,7 @@ These are optimizations of code that already shipped.
 
 | Issue | Why it matters |
 |---|---|
-| Bilingual fill is a fixture phrase table plus word substitution | Fine for the synthetic example; garbage on a real paper. Either require human/model translations or label auto-fill as `machine_unverified`. |
+| Bilingual fill is a fixture phrase table plus word substitution | Long review prose now fails instead of becoming word-salad, and unpaired Markdown/PDF is refused. Short fixture phrases can still be auto-filled. Real papers still need human or model `LocalizedText`. |
 | `strengths` / `acceptance_gate` are `dict[str, list[str]]` | Inconsistent with `LocalizedText` on claims and issues. |
 | `init` writes a three-stage stub | No routes, no prompts, no literature, no bilingual report. First-run UX under-sells the product. |
 | `doctor` lists adapters that are not implemented | Misleading. Report "not bundled" vs "importable". |

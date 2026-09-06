@@ -17,8 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
 from ..artifacts import artifact_from_path
+from ..contributions import extract_listed_contributions
+from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
+from ..figures import caption_inventory, sibling_pdf
 from ..hashing import hash_json, sha256_file
+from ..bilingual_coverage import package_bilingual_gaps, require_bilingual_markdown
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
 from ..ledger import build_agenda, build_ledger_claims
@@ -70,6 +74,55 @@ def _artifact(path: Path, context: StageContext, role: str) -> Artifact:
         base=context.run_dir,
         base_name="run",
     )
+
+
+def _figure_packet_lines(source_path: Path, source_text: str, route_kind: RouteKind) -> list[str]:
+    pdf = sibling_pdf(source_path)
+    inventory = caption_inventory(source_text) if source_text else []
+    if pdf is None and not inventory and route_kind != RouteKind.visual:
+        return []
+    lines = [
+        "",
+        "## Figures (mandatory inspection)",
+        "",
+        "Open the original PDF page image for every numbered figure and table graphic. "
+        "A caption restated from Source Text is not inspection. Each figure-backed issue "
+        "must name the figure id, the page, and one visible mark that is not in the caption.",
+        "",
+    ]
+    if pdf is not None:
+        lines.append(f"- PDF: `{pdf.name}`")
+        lines.append(f"- PDF SHA-256: `{sha256_file(pdf)}`")
+    else:
+        lines.append("- PDF: missing sibling `*.pdf`. Do not invent visual evidence from captions.")
+    if inventory:
+        lines.append("- Caption inventory from extracted text: " + ", ".join(inventory))
+    else:
+        lines.append("- Caption inventory from extracted text: none")
+    if route_kind == RouteKind.visual:
+        lines.append("- This visual route must cover every inventoried Figure. Skipping a teaser or qualitative panel is a review defect.")
+    return lines
+
+
+def _contribution_packet_lines(source_text: str) -> list[str]:
+    listed = extract_listed_contributions(source_text) if source_text else []
+    lines = [
+        "",
+        "## Listed contributions (audit each one)",
+        "",
+        "Confirm the official 3–4 contributions from the PDF Contributions paragraph. "
+        "Extracted candidates below may be garbled by two-column layout. For EACH item: "
+        "(1) name the table/figure/experiment that tests THIS claim, "
+        "(2) name the matched-setting comparator for THIS claim, "
+        "(3) state missing evidence. Do not write one novelty paragraph for the whole paper.",
+        "",
+    ]
+    if not listed:
+        lines.append("- Extracted candidates: none. Still inventory the PDF Contributions list and audit each item.")
+        return lines
+    for item in listed:
+        lines.append(f"- `C{item['index']}`: {item['text']}")
+    return lines
 
 
 def _load_dependency_packages(context: StageContext) -> list[ReviewPackage]:
@@ -350,7 +403,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "2"
+    version = "4"
     params_model = PromptPacketParams
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
@@ -372,6 +425,9 @@ class PromptPacketStage(StageHandler):
             context, "related_work_queries"
         )
         material: dict[str, Any] = {"prompt_hashes": prompt_hashes}
+        pdf = sibling_pdf(context.source_path)
+        if pdf is not None:
+            material["manuscript_pdf_sha256"] = sha256_file(pdf)
         if literature is not None:
             material["literature_sha256"] = hash_json(
                 {
@@ -419,6 +475,10 @@ class PromptPacketStage(StageHandler):
             ]
             if source_text and route.manuscript_access:
                 body.extend(["", "## Source Text", "", source_text])
+            if route.manuscript_access or route.kind == RouteKind.visual:
+                body.extend(_figure_packet_lines(context.source_path, source_text, route.kind))
+            if route.manuscript_access and source_text:
+                body.extend(_contribution_packet_lines(source_text))
             attach_literature = literature is not None and (
                 params.include_literature or route.kind == RouteKind.literature
             )
@@ -459,6 +519,26 @@ def _issue_key(issue: ReviewIssue) -> str:
             "location": _normalize(issue.location),
         }
     )
+
+
+
+def _prefer_ledger_claim(left, right):
+    """Keep an M7-filled C_i audit over the pending ledger placeholder."""
+    if left == right:
+        return left
+    left_checked = (left.metadata or {}).get("audit") == "checked"
+    right_checked = (right.metadata or {}).get("audit") == "checked"
+    if right_checked and not left_checked:
+        return right
+    if left_checked and not right_checked:
+        return left
+    left_pending = left.risk is not None and left.risk.primary == PENDING_CONTRIBUTION_RISK_EN
+    right_pending = right.risk is not None and right.risk.primary == PENDING_CONTRIBUTION_RISK_EN
+    if right_pending and not left_pending:
+        return left
+    if left_pending and not right_pending:
+        return right
+    return None
 
 
 class ConsensusStage(StageHandler):
@@ -563,6 +643,11 @@ class ConsensusStage(StageHandler):
                 for value in values:
                     existing = catalog.get(value.id)
                     if existing is not None and existing != value:
+                        if label == "ledger claim":
+                            chosen = _prefer_ledger_claim(existing, value)
+                            if chosen is not None:
+                                catalog[value.id] = chosen
+                                continue
                         raise ValueError(f"conflicting {label} definition for ID {value.id}")
                     catalog[value.id] = value
 
@@ -633,6 +718,7 @@ class ConsensusStage(StageHandler):
                 "input_package_count": len(packages),
             },
         )
+        output = apply_contribution_audits(output)
         output_path = context.stage_dir / "consensus.json"
         write_package_json(output, output_path)
         return StageOutcome(
@@ -657,7 +743,7 @@ class LiteratureGroundingParams(ParamsModel):
 
 class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
-    version = "3"
+    version = "4"
     params_model = LiteratureGroundingParams
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:
@@ -775,6 +861,9 @@ class ReportParams(ParamsModel):
     require_integrity: bool = False
     require_literature_if_literature_route: bool = False
     require_anchor_on_major: bool = False
+    min_figure_citations: int = Field(default=0, ge=0)
+    require_figures_if_visual_route: bool = False
+    require_contribution_coverage: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -789,7 +878,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "2"
+    version = "8"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
@@ -822,6 +911,9 @@ class ReportStage(StageHandler):
             raise ValueError("export gate failed:\n- " + "\n- ".join(gate_errors))
         if len(languages) > 1:
             package = ensure_package_languages(package, languages)
+            package_gaps = package_bilingual_gaps(package, languages)
+            if package_gaps:
+                raise ValueError("bilingual package is incomplete:\n- " + "\n- ".join(package_gaps[:20]))
         package.metadata = {
             **package.metadata,
             "run_id": context.manifest.run_id,
@@ -831,10 +923,24 @@ class ReportStage(StageHandler):
         markdown_path = context.stage_dir / "review_report.md"
         summary_path = context.stage_dir / "summary.json"
         write_package_json(package, package_path)
-        markdown_path.write_text(
-            render_markdown(package, languages=languages, fill_missing=False),
-            encoding="utf-8",
-        )
+        markdown = render_markdown(package, languages=languages, fill_missing=False)
+        if len(languages) > 1:
+            require_bilingual_markdown(markdown)
+        markdown_path.write_text(markdown, encoding="utf-8")
+        project_dir = context.loaded_config.path.parent
+        (project_dir / "review_report.md").write_text(markdown, encoding="utf-8")
+        pdf_written = False
+        from ..pdf_report import reportlab_available, write_report_pdf
+
+        pdf_path = context.stage_dir / "review_report.pdf"
+        if reportlab_available():
+            write_report_pdf(
+                markdown,
+                pdf_path,
+                title=f"Review Report: {package.project_id}",
+            )
+            (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
+            pdf_written = True
         _write_json(
             summary_path,
             {
@@ -844,19 +950,22 @@ class ReportStage(StageHandler):
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "pdf": pdf_written,
             },
         )
+        artifacts = [
+            _artifact(package_path, context, "review.package.release"),
+            _artifact(markdown_path, context, "review.report.markdown"),
+            _artifact(summary_path, context, "review.summary"),
+        ]
         return StageOutcome(
-            artifacts=[
-                _artifact(package_path, context, "review.package.release"),
-                _artifact(markdown_path, context, "review.report.markdown"),
-                _artifact(summary_path, context, "review.summary"),
-            ],
+            artifacts=artifacts,
             metadata={
                 "issue_count": len(package.issues),
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "pdf": pdf_written,
             },
         )
 
@@ -867,7 +976,7 @@ class LedgerParams(ParamsModel):
 
 class LedgerStage(StageHandler):
     type_name = "ledger"
-    version = "1"
+    version = "3"
     params_model = LedgerParams
 
     def run(self, context: StageContext) -> StageOutcome:
