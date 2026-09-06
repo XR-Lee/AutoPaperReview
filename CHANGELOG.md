@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.6 - 2026-08-30
+## 0.1.6 - 2026-09-06
 
 - Evidence citations such as `[E2, E3]` are Markdown (and PDF) hyperlinks into the Evidence Index. Each id is independently clickable.
 - The report stage copies `review_report.md` next to `review.toml`. With the optional `pdf` extra (`reportlab`) it also writes `review_report.pdf` with the same internal links.
@@ -13,6 +13,13 @@
 - M7 contribution audits replace the pending C_i risk. Each listed contribution gets Tests / Comparator / Missing content from covering issues; the canned "have not been checked" sentence is only the empty state.
 - Bilingual export is fail-closed. `bilingual = true` now refuses unpaired `en` / `zh-Hans` prose, mismatched language-prefix counts, and incomplete strength/gate lists before Markdown or PDF is written. Word-substitution fill is limited to short fixture phrases; long review prose must already be `LocalizedText`.
 - PDF tokenization no longer joins `**en:**` / `**zh-Hans:**` into one body run. Issue headings such as `R01` / `C01` are recognized as issue cards.
+- Made review comments readable for a first-time reader of the manuscript (area chair, author, or reviewer who has not internalized the paper yet).
+- Added optional `FirstReadNote` on `ReviewIssue`: restated claim, explanation, quote, Conventional Comments intent, and blocking flag. Existing packages remain valid.
+- Added packaged `first_read_v1.md` writing contract. `prompt_packet` prepends it to every route packet. Specialist prompts now require a self-contained argument, not an evidence ID.
+- Reports open with a how-to-read note, human dimension labels, inlined quotes, and an evidence catalog. Internal IDs stay as audit handles.
+- Export gate can require first-read notes and quotes on major/critical issues (`require_first_read_on_major`, `require_quote_on_major`, `min_explanation_chars`).
+- Deterministic adapter, synthetic fixture, and `init` now emit first-read notes. `init` adds a first-read clarity route (`M8`).
+- Documented the open-source strategy in [docs/first-read-review.md](docs/first-read-review.md). This is not a claim that AutoPaperReview matches ICLR, ARR, Reviewer2, or ReviewEval scores.
 
 ## 0.1.5 - 2026-08-29
 

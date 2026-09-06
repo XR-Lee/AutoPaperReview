@@ -1,6 +1,6 @@
 # Feature gaps versus stronger open review experiments
 
-This is a review of AutoPaperReview `0.1.5` against stronger open-source and openly documented review experiments. It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist. v0.1.5 implements the first P0–P2 slice (excerpts, anchors, export gate, execute_review, ledger/agenda, workspace inspect, integrity, matched-setting novelty). The remaining holes are live adapters and richer PDF locators.
+This is a review of AutoPaperReview `0.1.6` against stronger open-source and openly documented review experiments. It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist. v0.1.5 implemented the first P0–P2 slice (excerpts, anchors, export gate, execute_review, ledger/agenda, workspace inspect, integrity, matched-setting novelty). v0.1.6 added first-read review writing so comments are self-contained for a reader who has not yet internalized the paper. The remaining holes are live adapters and richer PDF locators.
 
 The comparison date is 2026-08-29. Versions and paper claims belong to those projects; this repository has not reproduced their scores.
 
@@ -38,7 +38,7 @@ The core still does not call a model, parse PDF/DOCX, or retrieve live literatur
 | [PaperMage](https://github.com/allenai/papermage) / Docling / GROBID | Layout-aware scientific parsing with page coordinates | Parser adapter that emits canonical spans, not native objects | Making TEI or magelib the review schema |
 | [CiteME](https://github.com/bethgelab/CiteME/) / CiteCheck | Citation existence and claim-support verification | `reference_integrity` records: exists / metadata-corrupt / does-not-support-sentence | Treating a search snippet as a citation verdict |
 | [The AI Scientist](https://sakana.ai/ai-scientist-first-publication/) | Full research loop plus an internal reviewer; still hallucinates citations | Reproducibility and citation-integrity routes; repeated-run checks | Automating paper *writing* in this repo |
-| ReviewEval / TreeReview / PaperBench / CORE-Bench | Review *quality* metrics; hierarchical questions; artifact replication benches | Evaluate the review package (coverage, constructiveness, unsupported claims); optional artifact-replication command stages | Replacing evidence hashes with LLM-as-judge scores |
+| ReviewEval / TreeReview / PaperBench / CORE-Bench | Review *quality* metrics; hierarchical questions; artifact replication benches | Evaluate the review package (coverage, constructiveness, unsupported claims); first-read notes already encode constructiveness as restatement + quote + feasible repair | Replacing evidence hashes with LLM-as-judge scores |
 
 DeepReviewer 2.0's own comparison table is the most useful framing: a fluent "full review" is not the same output as an evidence-bound package with traceable anchors. AutoPaperReview already chose the second target. The work left is to make that target *complete and executable*.
 
@@ -123,7 +123,7 @@ Worth having as *stages*, not as a new framework:
 
 - **Author rebuttal and area-chair meta-review** (AgentReview). `RouteKind.human` exists but has no handler. A human stage should pause for a JSON/Markdown drop and record the attestor.
 - **Dissent-preserving consensus** (MARG + the existing roadmap). The current stage picks one representative, counts distinct `route_id`s, and *drops* groups below `min_independent_routes`. Opposition and contradiction are not first-class.
-- **Review-quality eval** (ReviewEval): factuality of the review, constructiveness, unsupported claims. Promptfoo stays external; deterministic checks remain the release gate.
+- **Review-quality eval** (ReviewEval): factuality of the review, constructiveness, unsupported claims. v0.1.6 ships the writing contract and optional first-read/quote budgets; Promptfoo stays external and deterministic checks remain the release gate. See [first-read review writing](first-read-review.md).
 - **Venue checklists**, not only `VenueConclusion` labels. ICLR/NeurIPS/ARR/TMLR have different required questions (code, limitations, compute, dual submission). Bind checklist answers to evidence IDs.
 - **Citation accuracy pass** (reviewer2, CiteME, CiteCheck): resolve each bibliography entry; test whether the citing sentence is supported.
 

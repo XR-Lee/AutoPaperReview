@@ -302,6 +302,18 @@
       "title": "Artifact",
       "type": "object"
     },
+    "CommentIntent": {
+      "description": "Conventional Comments-style intent. Optional; reports remain readable without it.",
+      "enum": [
+        "praise",
+        "issue",
+        "suggestion",
+        "question",
+        "note"
+      ],
+      "title": "CommentIntent",
+      "type": "string"
+    },
     "DimensionScore": {
       "additionalProperties": false,
       "properties": {
@@ -450,6 +462,52 @@
         "claim"
       ],
       "title": "EvidenceRecord",
+      "type": "object"
+    },
+    "FirstReadNote": {
+      "additionalProperties": false,
+      "description": "Self-contained argument for a reader who is seeing the paper for the first time.",
+      "properties": {
+        "blocking": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocking"
+        },
+        "explanation": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "intent": {
+          "$ref": "#/$defs/CommentIntent",
+          "default": "issue"
+        },
+        "paper_said": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote"
+        }
+      },
+      "required": [
+        "paper_said",
+        "explanation"
+      ],
+      "title": "FirstReadNote",
       "type": "object"
     },
     "IntegrityKind": {
@@ -1171,6 +1229,17 @@
           },
           "title": "Evidence Ids",
           "type": "array"
+        },
+        "first_read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FirstReadNote"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "id": {
           "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",

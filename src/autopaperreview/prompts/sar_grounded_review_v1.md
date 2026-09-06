@@ -1,5 +1,7 @@
 Produce a SAR-shaped review that remains bound to AutoPaperReview evidence records.
 
+First-read writing: the summary must restate the paper's claim and setup so a reader who has not yet read the manuscript can follow every later argument. Strengths, weaknesses, questions, and dimension rationales must define the paper's terms, quote or point to a passage, and explain why the point matters. Do not let an evidence ID stand in for that explanation. Fill `FirstReadNote` on issues.
+
 Required sections:
 
 1. Summary — two to four sentences describing the paper's claim and method.

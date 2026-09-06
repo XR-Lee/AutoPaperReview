@@ -16,7 +16,9 @@ from .models import (
     Anchor,
     AnchorKind,
     Artifact,
+    CommentIntent,
     EvidenceRecord,
+    FirstReadNote,
     LocalizedText,
     ReviewIssue,
     ReviewPackage,
@@ -146,6 +148,25 @@ def _bilingual(english: str, chinese: str) -> LocalizedText:
     return LocalizedText(primary=english, language="en", translations={"zh-Hans": chinese})
 
 
+def _first_read(
+    *,
+    paper_said_en: str,
+    paper_said_zh: str,
+    explanation_en: str,
+    explanation_zh: str,
+    quote: str | None = None,
+    intent: CommentIntent = CommentIntent.issue,
+    blocking: bool | None = None,
+) -> FirstReadNote:
+    return FirstReadNote(
+        paper_said=_bilingual(paper_said_en, paper_said_zh),
+        explanation=_bilingual(explanation_en, explanation_zh),
+        quote=quote,
+        intent=intent,
+        blocking=blocking,
+    )
+
+
 class DeterministicManuscriptAdapter:
     """Produce a schema-valid review from local manuscript text. No model call."""
 
@@ -202,6 +223,15 @@ class DeterministicManuscriptAdapter:
                     source_ids=["S1"],
                     evidence_ids=["E1"],
                     anchor=evidence.anchor,
+                    first_read=_first_read(
+                        paper_said_en="The current file is still the init placeholder, not a scientific manuscript.",
+                        paper_said_zh="当前文件仍是初始化占位稿，还不是一篇科学稿件。",
+                        explanation_en="A first-time reader cannot evaluate a claim, method, or result because none have been supplied yet. Replace the placeholder before treating any later finding as a review of the work.",
+                        explanation_zh="第一次读稿的人还看不到主张、方法或结果，因为这些内容尚未提供。在把后续意见当成对工作的审稿之前，先替换占位稿。",
+                        quote=excerpt,
+                        intent=CommentIntent.note,
+                        blocking=True,
+                    ),
                 )
             )
         if "image level" in lowered or "image-level" in lowered:
@@ -232,6 +262,32 @@ class DeterministicManuscriptAdapter:
                     source_ids=["S1"],
                     evidence_ids=["E1"],
                     anchor=evidence.anchor,
+                    first_read=_first_read(
+                        paper_said_en=(
+                            "The paper trains and tests on eight images taken over time from one specimen. "
+                            "Six images are randomly assigned to training and two to testing. The authors then "
+                            "treat high accuracy on those two images as evidence that the method will work on unseen structures."
+                        ),
+                        paper_said_zh=(
+                            "论文用同一试件在不同时间拍摄的八张图像做训练和测试：随机把六张分到训练集、两张分到测试集，"
+                            "再把这两张上的高准确率当作方法可用于未见结构的证据。"
+                        ),
+                        explanation_en=(
+                            "A first-time reader can easily read 'image-level split' as a normal train/test split. "
+                            "It is not. The eight images are temporally related and come from one specimen, so the "
+                            "test images are near-duplicates of the training images. Accuracy can look high even if "
+                            "the method cannot handle a new specimen. The generalization and deployment claims do "
+                            "not follow from this experiment."
+                        ),
+                        explanation_zh=(
+                            "第一次读稿的人很容易把「图像级拆分」理解成普通的训练/测试划分，但这里不是。"
+                            "八张图来自同一试件且时间相关，测试图几乎是训练图的近重复。即使方法不能处理新试件，"
+                            "准确率也可能显得很高。因此泛化和部署结论并不能由这个实验推出。"
+                        ),
+                        quote="Eight temporally related images from one specimen were randomly divided at image level.",
+                        intent=CommentIntent.issue,
+                        blocking=True,
+                    ),
                 )
             )
         if "95%" in text and not reporting_is_present(text, "confidence interval"):
@@ -262,6 +318,26 @@ class DeterministicManuscriptAdapter:
                     source_ids=["S1"],
                     evidence_ids=["E1"],
                     anchor=evidence.anchor,
+                    first_read=_first_read(
+                        paper_said_en=(
+                            "The paper reports a single accuracy number (95%) on the two held-out images "
+                            "and concludes the method is ready for deployment."
+                        ),
+                        paper_said_zh="论文只在两张留出图像上报告了一个准确率（95%），并据此认为方法已可部署。",
+                        explanation_en=(
+                            "One number from one split does not show whether the result is stable. A first-time "
+                            "reader cannot tell if 95% would appear again with a different seed, a different pair "
+                            "of images, or a new specimen. Without repeated runs, an uncertainty interval, or an "
+                            "external test, the deployment claim cannot be checked."
+                        ),
+                        explanation_zh=(
+                            "一次划分得到的一个数字不能说明结果是否稳定。第一次读稿的人无法判断换一个随机种子、"
+                            "换两张图或换一个试件后是否仍是 95%。没有重复运行、不确定性区间或外部测试，部署结论无法核验。"
+                        ),
+                        quote="Accuracy was reported on the two held-out images.",
+                        intent=CommentIntent.issue,
+                        blocking=True,
+                    ),
                 )
             )
         if not issues:
@@ -283,6 +359,15 @@ class DeterministicManuscriptAdapter:
                     source_ids=["S1"],
                     evidence_ids=["E1"],
                     anchor=evidence.anchor,
+                    first_read=_first_read(
+                        paper_said_en="The manuscript does not state a data split, a named metric protocol, or an uncertainty rule.",
+                        paper_said_zh="稿件没有写明数据拆分、具名指标协议或不确定性规则。",
+                        explanation_en="A first-time reader cannot tell what experiment was run or what number would count as success. Until those protocol sentences exist, later performance claims cannot be interpreted.",
+                        explanation_zh="第一次读稿的人无法判断做了什么实验、什么数字算成功。在写出这些协议句子之前，后续性能主张无法解释。",
+                        quote=excerpt,
+                        intent=CommentIntent.question,
+                        blocking=None,
+                    ),
                 )
             )
         package = ReviewPackage(

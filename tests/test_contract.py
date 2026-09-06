@@ -71,6 +71,8 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(any(issue.id == "I001" for issue in result.package.issues))
         self.assertTrue(any(issue.id == "I002" for issue in result.package.issues))
         self.assertTrue(all(issue.anchor is not None for issue in result.package.issues))
+        first_reads = [issue.first_read for issue in result.package.issues if issue.id in {"I001", "I002"}]
+        self.assertTrue(all(note is not None and note.quote for note in first_reads))
 
     def test_ledger_and_novelty_use_matched_setting_gate(self) -> None:
         text = Path("examples/synthetic/manuscript.txt").read_text(encoding="utf-8")

@@ -14,6 +14,8 @@ _H2 = re.compile(r"(?m)^## (.+)$")
 _LANGUAGES_LINE = re.compile(r"(?m)^- Languages:\s*(.+)$")
 _SKIP_SECTIONS = (
     "evidence index",
+    "evidence catalog",
+    "appendix",
     "related-work queries",
     "retrieved sources",
     "integrity",

@@ -20,9 +20,9 @@ from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
-from ..figures import caption_inventory, sibling_pdf
-from ..hashing import hash_json, sha256_file
 from ..bilingual_coverage import package_bilingual_gaps, require_bilingual_markdown
+from ..figures import caption_inventory, sibling_pdf
+from ..hashing import digest_excerpt, hash_json, sha256_file
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
 from ..ledger import build_agenda, build_ledger_claims
@@ -54,6 +54,7 @@ from ..models import (
     VenueConclusion,
 )
 from ..novelty import assess_novelty
+from ..readability import resolve_first_read_contract
 from ..reporting import render_markdown, write_package_json
 from .base import StageContext, StageHandler, StageOutcome
 
@@ -403,7 +404,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "4"
+    version = "5"
     params_model = PromptPacketParams
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
@@ -424,7 +425,11 @@ class PromptPacketStage(StageHandler):
         literature = _package_with(context, "retrieved_snapshots") or _package_with(
             context, "related_work_queries"
         )
-        material: dict[str, Any] = {"prompt_hashes": prompt_hashes}
+        contract = resolve_first_read_contract(context.loaded_config.workspace)
+        material: dict[str, Any] = {
+            "prompt_hashes": prompt_hashes,
+            "first_read_contract_sha256": digest_excerpt(contract),
+        }
         pdf = sibling_pdf(context.source_path)
         if pdf is not None:
             material["manuscript_pdf_sha256"] = sha256_file(pdf)
@@ -457,6 +462,7 @@ class PromptPacketStage(StageHandler):
                 "include_literature requires a dependency that emits queries or snapshots"
             )
 
+        contract = resolve_first_read_contract(context.loaded_config.workspace)
         for route in routes:
             prompt_text = ""
             if route.prompt:
@@ -470,6 +476,12 @@ class PromptPacketStage(StageHandler):
                 f"- Prompt version: `{route.prompt_version or 'unversioned'}`",
                 f"- Manuscript access: `{str(route.manuscript_access).lower()}`",
                 f"- Route kind: `{route.kind.value}`",
+                "",
+                "## First-Read Writing Contract",
+                "",
+                contract.strip(),
+                "",
+                "## Route Instructions",
                 "",
                 prompt_text.strip(),
             ]
@@ -864,6 +876,9 @@ class ReportParams(ParamsModel):
     min_figure_citations: int = Field(default=0, ge=0)
     require_figures_if_visual_route: bool = False
     require_contribution_coverage: bool = False
+    require_first_read_on_major: bool = False
+    require_quote_on_major: bool = False
+    min_explanation_chars: int = Field(default=0, ge=0)
 
     @field_validator("languages")
     @classmethod
@@ -878,7 +893,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "8"
+    version = "9"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
