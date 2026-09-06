@@ -217,34 +217,41 @@ id = "M0"
 name = "Structured closed-book review"
 kind = "prompt"
 prompt = "prompts/closed_book_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 
 [[routes]]
 id = "M2"
 name = "Metric and protocol review"
 kind = "prompt"
 prompt = "prompts/metric_protocol_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 
 [[routes]]
 id = "M3"
 name = "SAR-shaped grounded review"
 kind = "literature"
 prompt = "prompts/sar_grounded_review_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 
 [[routes]]
 id = "M4"
 name = "Literature audit"
 kind = "literature"
 prompt = "prompts/literature_audit_v1.md"
-prompt_version = "1.0"
+prompt_version = "1.1"
 
 [[routes]]
 id = "M5"
 name = "Reproducibility audit"
 kind = "prompt"
 prompt = "prompts/reproducibility_v1.md"
+prompt_version = "1.1"
+
+[[routes]]
+id = "M6"
+name = "First-read clarity review"
+kind = "prompt"
+prompt = "prompts/first_read_v1.md"
 prompt_version = "1.0"
 
 [[stages]]
@@ -300,6 +307,8 @@ depends_on = ["consensus"]
 min_issues = 1
 require_ledger = true
 require_integrity = true
+require_first_read_on_major = true
+require_quote_on_major = true
 ''',
         encoding="utf-8",
     )

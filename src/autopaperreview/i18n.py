@@ -249,6 +249,47 @@ EXACT_PAIRS: tuple[tuple[str, str], ...] = (
         "Title-only ledger; no claim-like sentence was found.",
         "台账仅有标题；没有找到类似主张的句子。",
     ),
+    (
+        "This review is written for someone who is seeing the manuscript for the "
+        "first time — an area chair, an author, or a reviewer who has not yet "
+        "internalized the paper's terms. Each finding restates the relevant claim "
+        "in plain language, quotes the passage when one exists, explains why the "
+        "point matters, and says what would change the assessment. Internal "
+        "evidence IDs are audit handles; they are not a substitute for the argument.",
+        "本审稿面向第一次读这篇稿件的人：领域主席、作者，以及尚未熟悉文中术语的审稿人。"
+        "每条意见都会用平实语言复述相关主张，在有原文时引用对应段落，解释为何重要，"
+        "并说明怎样修改才会改变评价。内部证据编号只是核验把手，不能代替论述本身。",
+    ),
+    (
+        "The paper trains and tests on eight images taken over time from one specimen. "
+        "Six images are randomly assigned to training and two to testing. The authors then "
+        "treat high accuracy on those two images as evidence that the method will work on unseen structures.",
+        "论文用同一试件在不同时间拍摄的八张图像做训练和测试：随机把六张分到训练集、两张分到测试集，"
+        "再把这两张上的高准确率当作方法可用于未见结构的证据。",
+    ),
+    (
+        "A first-time reader can easily read 'image-level split' as a normal train/test split. "
+        "It is not. The eight images are temporally related and come from one specimen, so the "
+        "test images are near-duplicates of the training images. Accuracy can look high even if "
+        "the method cannot handle a new specimen. The generalization and deployment claims do "
+        "not follow from this experiment.",
+        "第一次读稿的人很容易把「图像级拆分」理解成普通的训练/测试划分，但这里不是。"
+        "八张图来自同一试件且时间相关，测试图几乎是训练图的近重复。即使方法不能处理新试件，"
+        "准确率也可能显得很高。因此泛化和部署结论并不能由这个实验推出。",
+    ),
+    (
+        "The paper reports a single accuracy number (95%) on the two held-out images "
+        "and concludes the method is ready for deployment.",
+        "论文只在两张留出图像上报告了一个准确率（95%），并据此认为方法已可部署。",
+    ),
+    (
+        "One number from one split does not show whether the result is stable. A first-time "
+        "reader cannot tell if 95% would appear again with a different seed, a different pair "
+        "of images, or a new specimen. Without repeated runs, an uncertainty interval, or an "
+        "external test, the deployment claim cannot be checked.",
+        "一次划分得到的一个数字不能说明结果是否稳定。第一次读稿的人无法判断换一个随机种子、"
+        "换两张图或换一个试件后是否仍是 95%。没有重复运行、不确定性区间或外部测试，部署结论无法核验。",
+    ),
 )
 
 EN_ZH_PHRASES: tuple[tuple[str, str], ...] = (
@@ -534,6 +575,18 @@ def ensure_package_languages(package: ReviewPackage, languages: Sequence[str]) -
                 "evidence": ensure_localized(issue.evidence, languages),
                 "impact": ensure_localized(issue.impact, languages),
                 "required_action": ensure_localized(issue.required_action, languages),
+                "first_read": (
+                    issue.first_read.model_copy(
+                        update={
+                            "paper_said": ensure_localized(issue.first_read.paper_said, languages),
+                            "explanation": ensure_localized(
+                                issue.first_read.explanation, languages
+                            ),
+                        }
+                    )
+                    if issue.first_read is not None
+                    else None
+                ),
             }
         )
         for issue in updated.issues

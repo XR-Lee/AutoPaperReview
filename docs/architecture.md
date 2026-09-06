@@ -58,7 +58,7 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `ReviewRoute` | A declared deterministic, executable, prompt, literature, visual, or human review route. |
 | `SourceRecord` | A manuscript or external source identity and optional immutable digest. |
 | `EvidenceRecord` | A claim and locator tied to a source and, when available, an artifact/excerpt hash. |
-| `ReviewIssue` | The current canonical issue record, including localized prose, severity, confidence, references, and consensus metadata. |
+| `ReviewIssue` | The current canonical issue record, including localized prose, severity, confidence, references, consensus metadata, and an optional `FirstReadNote` (restated claim, quote, explanation) for a reader seeing the paper for the first time. |
 | `ReviewPackage` | A validated collection of manuscript, route, source, evidence, issue, strength, acceptance-gate, optional SAR-shaped claim/score, query, and snapshot records. |
 | `DimensionScore` | One of the seven SAR dimensions, a 1–10 value, rationale, and required evidence IDs. |
 | `VenueConclusion` | Conference or journal decision (accept/reject/revision/not-a-fit) read from the seven scores. No overall number. |
@@ -109,7 +109,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 |---|---|
 | `ingest` | Records the source and optionally copies it into the run. |
 | `command` | Executes an argument array with `shell=False` and an explicit environment allowlist; records stdout/stderr, logical placeholder paths, declared outputs, environment-key names, and hashes of command input files, then imports declared outputs. |
-| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Literature routes can attach query and snapshot excerpts. |
+| `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Every packet prepends the first-read writing contract. Literature routes can attach query and snapshot excerpts. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
 | `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import and deterministic manuscript checks. |
 | `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. |
@@ -118,7 +118,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, optionally attaches a snapshot fixture or a declared retriever, and emits source/evidence artifacts. Live retrieval requires a network declaration. |
-| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Optional export-gate budgets refuse an unauditable package. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Reports open with a first-read how-to-read note and inline quotes. Optional export-gate budgets refuse an unauditable package, including optional first-read/quote budgets. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
@@ -158,5 +158,6 @@ Timestamps document execution history but are excluded from stage signatures. De
 ## Related documents
 
 - [Open-source reference stack](oss-reference-stack.md)
+- [First-read review writing](first-read-review.md)
 - [Maintenance policy](maintenance.md)
 - [Roadmap](roadmap.md)
