@@ -410,7 +410,9 @@ def _render_venue_block_bilingual(package: ReviewPackage, languages: Sequence[st
             languages,
             {
                 language: [
-                    no_overall.get(language, translate_text(NO_OVERALL_EN, source="en", target=language))
+                    no_overall[language]
+                    if language in no_overall
+                    else translate_text(NO_OVERALL_EN, source="en", target=language)
                 ]
                 for language in languages
             },

@@ -22,6 +22,7 @@ from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
 from ..figures import caption_inventory, sibling_pdf
 from ..hashing import hash_json, sha256_file
+from ..bilingual_coverage import package_bilingual_gaps, require_bilingual_markdown
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
 from ..ledger import build_agenda, build_ledger_claims
@@ -877,7 +878,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "7"
+    version = "8"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
@@ -910,6 +911,9 @@ class ReportStage(StageHandler):
             raise ValueError("export gate failed:\n- " + "\n- ".join(gate_errors))
         if len(languages) > 1:
             package = ensure_package_languages(package, languages)
+            package_gaps = package_bilingual_gaps(package, languages)
+            if package_gaps:
+                raise ValueError("bilingual package is incomplete:\n- " + "\n- ".join(package_gaps[:20]))
         package.metadata = {
             **package.metadata,
             "run_id": context.manifest.run_id,
@@ -920,6 +924,8 @@ class ReportStage(StageHandler):
         summary_path = context.stage_dir / "summary.json"
         write_package_json(package, package_path)
         markdown = render_markdown(package, languages=languages, fill_missing=False)
+        if len(languages) > 1:
+            require_bilingual_markdown(markdown)
         markdown_path.write_text(markdown, encoding="utf-8")
         project_dir = context.loaded_config.path.parent
         (project_dir / "review_report.md").write_text(markdown, encoding="utf-8")
