@@ -33,6 +33,7 @@ from .models import (
     Severity,
     SourceRecord,
 )
+from .rubrics import band_case_errors
 
 
 class ReviewRequest(BaseModel):
@@ -465,6 +466,22 @@ class AgentJudgmentAdapter:
         missing_dims = [item.value for item in SarDimension if item not in present]
         if missing_dims:
             raise ValueError(f"judgment drop is missing dimension scores: {missing_dims}")
+        band_errors: list[str] = []
+        for score in package.dimension_scores:
+            meta = score.metadata or {}
+            band_errors.extend(
+                band_case_errors(
+                    dimension=score.dimension.value,
+                    score=float(score.score),
+                    supporting=meta.get("supporting"),
+                    opposing=meta.get("opposing"),
+                    move_up=meta.get("move_up"),
+                    move_down=meta.get("move_down"),
+                    source_text=request.source_text,
+                )
+            )
+        if band_errors:
+            raise ValueError("dimension band case rejected: " + "; ".join(band_errors))
         metadata = dict(package.metadata)
         metadata["judgment"] = {
             "adapter": "agent",

@@ -3,10 +3,18 @@
     "recommendation_en": "The internal hue-order comparison is qualified; the unseen-lattice sentence is not supported."
   },
   "methods": [
-    {"id": "M0", "name_en": "Structured closed-book review"}
+    {
+      "id": "M0",
+      "name_en": "Structured closed-book review"
+    }
   ],
   "sources": [
-    {"id": "S1", "type": "manuscript", "title": "Synthetic manuscript", "path": "manuscript.txt"}
+    {
+      "id": "S1",
+      "type": "manuscript",
+      "title": "Synthetic manuscript",
+      "path": "manuscript.txt"
+    }
   ],
   "evidence": [
     {
@@ -27,20 +35,257 @@
       "evidence_en": "The abstract says the number shows generalization to a new lattice, but the protocol uses one lattice.",
       "impact_en": "A reader can treat a same-lattice accuracy gap as evidence about a new lattice.",
       "required_action_en": "Qualify the abstract so the claim matches the single lattice split.",
-      "detected_by": ["M0"],
-      "sources": ["S1"],
-      "evidence_ids": ["E1"],
+      "detected_by": [
+        "M0"
+      ],
+      "sources": [
+        "S1"
+      ],
+      "evidence_ids": [
+        "E1"
+      ],
       "confidence": 0.8,
       "decision_relevant": false
     }
   ],
   "dimension_scores": [
-    {"dimension": "originality", "score": 6, "clause_id": "or-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "Hue order plus token counts is a specific combination of existing pieces.", "language": "en"}},
-    {"dimension": "importance_of_research_question", "score": 6, "clause_id": "im-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "A community that sorts categorical tokens would use a confirmed version.", "language": "en"}},
-    {"dimension": "claims_supported", "score": 6, "clause_id": "cs-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The matched internal comparison supports a qualified claim; the unseen-lattice sentence is overstated.", "language": "en"}},
-    {"dimension": "experimental_soundness", "score": 6, "clause_id": "es-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "An ablation exists and uncertainty is missing.", "language": "en"}},
-    {"dimension": "writing_clarity", "score": 6, "clause_id": "wc-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The main argument is checkable; the unseen-lattice phrase is easy to misread.", "language": "en"}},
-    {"dimension": "community_value", "score": 6, "clause_id": "cv-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The toy split and hue order are stated with enough detail to repeat.", "language": "en"}},
-    {"dimension": "prior_work_contextualization", "score": 6, "clause_id": "pw-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The right neighbors are cited and one of them is under-compared.", "language": "en"}}
+    {
+      "dimension": "originality",
+      "score": 6,
+      "clause_id": "or-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "Hue order plus token counts is a specific combination of existing pieces.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "One ablation removes the hue order.",
+            "location": "Protocol",
+            "observable": "combination_ablation_hurts"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "The decision comparison is Prism Sort against an unsorted count baseline on a held-out slice of that same lattice.",
+            "location": "Task",
+            "observable": "new_task_or_control"
+          }
+        ],
+        "move_up": "Adapting the baselines to a new lattice task would move originality up to band 8.",
+        "move_down": "If the hue order were only a swap with no ablation effect, originality would fall to band 4."
+      }
+    },
+    {
+      "dimension": "importance_of_research_question",
+      "score": 6,
+      "clause_id": "im-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "A community that sorts categorical tokens would use a confirmed version.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The paper says a community that already sorts categorical tokens would use a confirmed version of this comparison.",
+            "location": "Task",
+            "observable": "reader_would_rerun"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "Lattice-7 is a toy set of 40 short color-token sequences drawn from one lattice.",
+            "location": "Task",
+            "observable": "benchmark_ranking_or_protocol"
+          }
+        ],
+        "move_up": "Showing that an existing public benchmark changes rank would move importance up to band 8.",
+        "move_down": "If the result stayed a toy gain the authors call too small, importance would fall to band 4."
+      }
+    },
+    {
+      "dimension": "claims_supported",
+      "score": 6,
+      "clause_id": "cs-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "The matched internal comparison supports a qualified claim; the unseen-lattice sentence is overstated.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The matched comparison supports the qualified claim that hue order helps on this split.",
+            "location": "Result",
+            "observable": "qualified_main_claim"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "The abstract's sentence about unseen lattices is broader than that table.",
+            "location": "Result",
+            "observable": "memorable_sentence_matches_comparison"
+          }
+        ],
+        "move_up": "Making the memorable sentence match the single-lattice table would move claims up to band 8.",
+        "move_down": "If the headline were only a proxy for a different question, claims would fall to band 4."
+      }
+    },
+    {
+      "dimension": "experimental_soundness",
+      "score": 6,
+      "clause_id": "es-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "An ablation exists and uncertainty is missing.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The internal table shows higher accuracy for Prism Sort than for the unsorted baseline on the ten test items.",
+            "location": "Result",
+            "observable": "ablation_moves_decision_metric"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "The paper reports a single run and does not report a confidence interval.",
+            "location": "Protocol",
+            "observable": "interval_or_multiseed"
+          }
+        ],
+        "move_up": "Reporting an interval or a second seed on that accuracy gap would move soundness up to band 8.",
+        "move_down": "If no ablation removed the hue order, soundness would fall to band 4 for the missing interval."
+      }
+    },
+    {
+      "dimension": "writing_clarity",
+      "score": 6,
+      "clause_id": "wc-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "The main argument is checkable; the unseen-lattice phrase is easy to misread.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The external-looking phrase \"unseen lattices\" in the abstract is easy to misread as a second-lattice result.",
+            "location": "Limitations",
+            "observable": "one_display_easy_to_misread"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "A secondary sentence says the same number shows generalization to a new lattice, which this experiment does not test.",
+            "location": "Abstract",
+            "observable": "decision_comparison_in_main_text"
+          }
+        ],
+        "move_up": "Removing the unseen-lattice wording so no display overstates the split would move writing up to band 8.",
+        "move_down": "A broken lead equation that uses a different quantity would move writing down to band 4."
+      }
+    },
+    {
+      "dimension": "community_value",
+      "score": 6,
+      "clause_id": "cv-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "The toy split and hue order are stated with enough detail to repeat.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The split sizes and the hue order are written in the text, so a reader can repeat the toy protocol.",
+            "location": "Release",
+            "observable": "repeat_recipe_in_text"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "No code archive is attached.",
+            "location": "Release",
+            "observable": "artifact_matches_experiment"
+          }
+        ],
+        "move_up": "Attaching a code archive that matches the hue-order experiment would move community value up to band 8.",
+        "move_down": "If the split sizes were only promised and not specified, community value would fall to band 4."
+      }
+    },
+    {
+      "dimension": "prior_work_contextualization",
+      "score": 6,
+      "clause_id": "pw-6",
+      "rubric_id": "sar_bands_v2",
+      "evidence_ids": [
+        "E1"
+      ],
+      "route_ids": [
+        "M0"
+      ],
+      "rationale": {
+        "primary": "The right neighbors are cited and one of them is under-compared.",
+        "language": "en"
+      },
+      "metadata": {
+        "supporting": [
+          {
+            "excerpt": "The other cited neighbor is described as stronger than the experiment shows.",
+            "location": "Related work",
+            "observable": "neighbor_wrong_setting"
+          }
+        ],
+        "opposing": [
+          {
+            "excerpt": "The note cites two public count baselines and compares against one of them.",
+            "location": "Related work",
+            "observable": "neighbors_are_the_rows"
+          }
+        ],
+        "move_up": "Putting both cited neighbors in the decision table would move prior-work context up to band 8.",
+        "move_down": "If the cited neighbors were not rows the claim uses, prior-work context would fall to band 4."
+      }
+    }
   ]
 }

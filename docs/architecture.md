@@ -138,7 +138,7 @@ The adapter reads the `prompt_packet` files already produced for the run. It cal
 |---|---|---|
 | `contributions` | At least one listed contribution, with an exact excerpt | The excerpt must occur in the manuscript or a retrieved snapshot. Otherwise the item is rejected. An empty list is a schema failure. |
 | `ledger` | At least one ledger claim, plus agenda questions | Same excerpt rule. An agenda item that cites a rejected claim is rejected. An empty ledger list is a schema failure. |
-| `dimensions` | All seven SAR dimensions, each with a `sar_bands_v1` clause id and an excerpt | The numeric score is the clause. If any excerpt does not resolve, the stage retries once with that unresolved-anchor error. If any of the seven is still missing, `execute_review` fails. |
+| `dimensions` | All seven SAR dimensions, each with a `sar_bands_v2` clause id, supporting and opposing excerpts, and what would move the band up or down | The numeric score is the clause. Excerpts must resolve. A band without both sides is rejected. Band 6 is rejected unless support cites a band-6 observable and opposition cites a missing band-8 observable. The stage retries once. |
 | `fatal` | `fatal_class` for issue ids the pipeline assigned (`I-<contribution id>`) | An unknown issue id is rejected. `rate` applies the cap. |
 | `zh-Hans` | Simplified Chinese for the accepted issue, ledger, and dimension fields | Optional. Set `bilingual = true`. The same schema retry and stored hashes apply. Strings must contain Chinese characters and match the accepted ids. |
 | visual page | `VisualFinding` records, with the page image attached for a multimodal model | The page-image hash and bbox must match the rendered PNG. A caption restatement fails validation. |

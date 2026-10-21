@@ -61,7 +61,7 @@ The manifest is a local JSON or TOML file:
 
 ## Judgment
 
-Agent mode is the default. `prepare` writes prompt packets for routes M0, M2, M5, and M8. `run` then waits until `project/judgment.json` exists. The drop is a legacy review JSON or a canonical review package, including all seven `sar_bands_v1` dimension scores. It must include `packet_sha256`, mapping each route id to the digest in `packet_index.json`. An overall score in the drop is discarded. `rate` assigns the venue bin.
+Agent mode is the default. `prepare` writes prompt packets for routes M0, M2, M5, and M8. `run` then waits until `project/judgment.json` exists. The drop is a legacy review JSON or a canonical review package, including all seven `sar_bands_v2` dimension scores. Each score carries supporting and opposing excerpts plus the change that would move the band up or down. It must include `packet_sha256`, mapping each route id to the digest in `packet_index.json`. An overall score in the drop is discarded. `rate` assigns the venue bin.
 
 The generated run places `related_work_search` before a consensus stage, and `rate` depends on that consensus. `--related-work` defaults to `off`, which builds the queries locally and does not apply a retrieval cap. `--related-work agent` reads `project/related_work_findings.json`. `--related-work live` calls the metadata providers and needs `--network-policy metadata_only` or `allow`. A file named `project/related_work_confirmation.json` is used when it is present. This command does not change the declared caps or snap rules.
 

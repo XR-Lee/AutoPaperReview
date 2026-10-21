@@ -24,7 +24,7 @@ Rules:
 
 ## Anchored bands and fatal classes
 
-Dimension scores are clause ids from `sar_bands_v1.md`, not free floats. Each `DimensionScore` sets `rubric_id` to `sar_bands_v1`, `clause_id` to one clause, and `score` to that clause's score (2, 4, 6, 8, or 10). Do not emit 5 or 7.
+Dimension scores are clause ids from `sar_bands_v2.md`, not free floats. Each `DimensionScore` sets `rubric_id` to `sar_bands_v2`, `clause_id` to one clause, and `score` to that clause's score (2, 4, 6, 8, or 10). Do not emit 5 or 7. Write supporting and opposing excerpts before the clause. Band 6 is not the score for a typical paper.
 
 On any blocking, decision-relevant issue set `decision_relevant` true and `fatal_class` to one of:
 

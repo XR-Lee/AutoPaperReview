@@ -47,7 +47,7 @@ class RateParams(ParamsModel):
 
 class RateStage(StageHandler):
     type_name = "rate"
-    version = "4"
+    version = "5"
     params_model = RateParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:

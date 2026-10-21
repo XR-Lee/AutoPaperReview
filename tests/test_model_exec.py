@@ -104,14 +104,47 @@ def _ledger() -> str:
 
 def _dimensions(excerpts: dict[str, str] | None = None) -> str:
     overrides = excerpts or {}
+    support_observable = {
+        "or-4": "module_swap",
+        "im-4": "toy_or_marginal",
+        "cs-4": "proxy_or_different_question",
+        "es-4": "single_seed_no_interval",
+        "wc-4": "lead_display_broken",
+        "cv-4": "release_only_promised",
+        "pw-4": "named_not_in_table",
+    }
+    oppose_observable = {
+        "or-4": "combination_ablation_hurts",
+        "im-4": "reader_would_rerun",
+        "cs-4": "qualified_main_claim",
+        "es-4": "ablation_moves_decision_metric",
+        "wc-4": "one_display_easy_to_misread",
+        "cv-4": "repeat_recipe_in_text",
+        "pw-4": "neighbor_wrong_setting",
+    }
     return json.dumps(
         {
             "dimensions": [
                 {
                     "dimension": name,
+                    "supporting": [
+                        {
+                            "excerpt": overrides.get(name, COHORT),
+                            "location": "Methods",
+                            "observable": support_observable[clause],
+                        }
+                    ],
+                    "opposing": [
+                        {
+                            "excerpt": ACCURACY,
+                            "location": "Results",
+                            "observable": oppose_observable[clause],
+                        }
+                    ],
+                    "move_up": f"A matched rerun with an interval would move {name} up one band.",
+                    "move_down": f"A missing protocol sentence would move {name} down one band.",
                     "clause_id": clause,
                     "rationale": f"The synthetic cohort sentence is the evidence for {name}.",
-                    "excerpt": overrides.get(name, COHORT),
                 }
                 for name, clause in DIMENSIONS
             ]
@@ -818,11 +851,12 @@ class DimensionAnchorTests(unittest.TestCase):
             message = str(caught.exception)
             self.assertIn("after one retry", message)
             self.assertIn("originality", message)
-            self.assertIn("does not occur", message)
+            self.assertIn("excerpt is not in the manuscript", message)
             self.assertEqual(len(server.bodies), 2)
             retry = json.loads(server.bodies[1].decode("utf-8"))["messages"][-1]["content"]
             self.assertIn("originality", retry)
-            self.assertIn("does not occur", retry)
+            self.assertIn("excerpt is not in the manuscript", retry)
+            self.assertIn("Dimension band rejected", retry)
             run_dir = next((workspace / ".runs").iterdir())
             manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
             review = next(stage for stage in manifest["stages"] if stage["id"] == "review")
@@ -862,7 +896,7 @@ class DimensionAnchorTests(unittest.TestCase):
                 run_pipeline(config)
             self.assertEqual(len(server.bodies), 2)
             self.assertIn("after one retry", str(caught.exception))
-            self.assertIn("does not occur", str(caught.exception))
+            self.assertIn("excerpt is not in the manuscript", str(caught.exception))
             self.assertIn("writing_clarity", str(caught.exception))
 
 
