@@ -18,6 +18,8 @@ from .models import Artifact, RunManifest, StageRecord, StageStatus
 from .registry import StageRegistry
 from .stages.base import StageContext
 from .stages.builtin import BUILTIN_STAGE_HANDLERS
+from .stages.rating_stage import CalibrateBatchStage, RateStage
+from .stages.visual_stage import FormatCheckStage, RenderPagesStage, VisualInspectStage
 
 
 class PipelineError(RuntimeError):
@@ -30,7 +32,14 @@ def utc_now() -> datetime:
 
 def default_registry() -> StageRegistry:
     registry = StageRegistry()
-    for handler_type in BUILTIN_STAGE_HANDLERS:
+    for handler_type in (
+        *BUILTIN_STAGE_HANDLERS,
+        RenderPagesStage,
+        FormatCheckStage,
+        VisualInspectStage,
+        RateStage,
+        CalibrateBatchStage,
+    ):
         registry.register(handler_type())
     registry.load_entry_points()
     return registry

@@ -20,3 +20,15 @@ Rules:
 - Figure-backed claims (qualitative examples, trade-off plots, robot photos, architecture cartoons) require PDF page inspection. A caption restated from manuscript.txt is not evidence that the figure was read.
 - Listed contributions are the audit units. Score claims_supported, originality, and prior_work_contextualization per contribution, not as a single paper-level paragraph.
 - Return schema-valid ReviewClaim, DimensionScore, RelatedWorkQuery, and ReviewIssue records. Do not return free-form prose as the only result.
+
+## Anchored bands and fatal classes
+
+Dimension scores are clause ids from `sar_bands_v1.md`, not free floats. Each `DimensionScore` sets `rubric_id` to `sar_bands_v1`, `clause_id` to one clause, and `score` to that clause's score (2, 4, 6, 8, or 10). Do not emit 5 or 7.
+
+On any blocking, decision-relevant issue set `decision_relevant` true and `fatal_class` to one of:
+
+- `invalid_protocol`, `leakage`, `wrong_metric` — the formula caps the ICLR bin at 3
+- `unfair_baseline`, `unsupported_claim` — the formula caps the ICLR bin at 5
+- `format_desk_reject` — anonymity or page-limit break; the formula caps the ICLR bin at 1
+
+You propose the class. You do not choose the ICLR 1/3/5/6/8/10 bin. The `rate` stage computes it from the bands and the caps. Do not put that bin in `recommendation` as if it were a separate score.

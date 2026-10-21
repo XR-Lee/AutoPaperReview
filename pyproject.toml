@@ -1,6 +1,6 @@
 [project]
 name = "autopaperreview"
-version = "0.1.6"
+version = "0.1.7"
 description = "A local-first, evidence-traceable harness for reproducible scholarly manuscript review."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ Issues = "https://github.com/XR-Lee/AutoPaperReview/issues"
 
 [project.optional-dependencies]
 pdf = ["reportlab>=4"]
+visual = ["pypdfium2>=4.30,<6", "pillow>=10"]
 
 [project.scripts]
 autopaperreview = "autopaperreview.cli:main"
@@ -45,4 +46,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-autopaperreview = ["prompts/*.md", "schemas/*.json"]
+autopaperreview = ["prompts/*.md", "schemas/*.json", "profiles/*.json"]

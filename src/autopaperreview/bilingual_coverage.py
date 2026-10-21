@@ -22,10 +22,11 @@ _SKIP_SECTIONS = (
     "novelty",
     "investigation agenda",
     "claim ledger",
+    "format and visual",
 )
 _META_PREFIX = re.compile(
     r"^(?:[ \t]*- )?\*\*(?:Location|Confidence|Routes|Sources|Evidence IDs|Outcome|"
-    r"Old ID|Status):\*\*"
+    r"Old ID|Status|Fatal class|Decision relevant):\*\*"
 )
 _ID_QUOTE = re.compile(r"^- `[A-Za-z0-9._-]+`\b")
 _HEADING = re.compile(r"^#{1,6} ")
@@ -170,6 +171,8 @@ def package_bilingual_gaps(package: ReviewPackage, languages: Sequence[str]) -> 
     for item in package.venue_conclusions:
         _check_localized(item.label, f"{item.id}.label", languages, errors)
         _check_localized(item.rationale, f"{item.id}.rationale", languages, errors)
+    for item in package.format_checks:
+        _check_localized(item.detail, f"{item.id}.detail", languages, errors)
     for item in package.ledger_claims:
         if item.metadata.get("kind") == "listed_contribution":
             _check_localized(item.risk, f"{item.id}.risk", languages, errors)

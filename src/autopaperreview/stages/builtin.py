@@ -635,6 +635,9 @@ class ConsensusStage(StageHandler):
         snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
         venues_by_id: dict[str, VenueConclusion] = {}
         ledger_by_id: dict[str, LedgerClaim] = {}
+        exemption_by_id = {}
+        visual_by_id = {}
+        format_by_id = {}
         agenda_by_id: dict[str, AgendaQuestion] = {}
         integrity_by_id: dict[str, IntegrityRecord] = {}
         novelty_by_id: dict[str, NoveltyAssessment] = {}
@@ -651,6 +654,9 @@ class ConsensusStage(StageHandler):
                 ("agenda question", package.agenda, agenda_by_id),
                 ("integrity record", package.integrity_records, integrity_by_id),
                 ("novelty assessment", package.novelty_assessments, novelty_by_id),
+                ("cap exemption", package.cap_exemptions, exemption_by_id),
+                ("visual finding", package.visual_findings, visual_by_id),
+                ("format check", package.format_checks, format_by_id),
             ):
                 for value in values:
                     existing = catalog.get(value.id)
@@ -724,6 +730,9 @@ class ConsensusStage(StageHandler):
             agenda=list(agenda_by_id.values()),
             integrity_records=list(integrity_by_id.values()),
             novelty_assessments=list(novelty_by_id.values()),
+            cap_exemptions=list(exemption_by_id.values()),
+            visual_findings=list(visual_by_id.values()),
+            format_checks=list(format_by_id.values()),
             metadata={
                 **first.metadata,
                 "consensus_rule": "exact-normalized-v1",
@@ -879,6 +888,11 @@ class ReportParams(ParamsModel):
     require_first_read_on_major: bool = False
     require_quote_on_major: bool = False
     min_explanation_chars: int = Field(default=0, ge=0)
+    require_rubric_bands: bool = False
+    require_rating: bool = False
+    require_fatal_class_on_critical: bool = False
+    require_decision_relevant_on_major: bool = False
+    require_page_image_on_visual: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -949,10 +963,21 @@ class ReportStage(StageHandler):
 
         pdf_path = context.stage_dir / "review_report.pdf"
         if reportlab_available():
+            formula = (
+                package.overall_score is not None
+                and package.overall_score.method.value == "declared_formula"
+                and package.overall_score.coefficient_set
+            )
+            footer = (
+                f"AutoPaperReview  ·  {package.overall_score.coefficient_set}  ·  evidence-linked"
+                if formula and package.overall_score is not None
+                else None
+            )
             write_report_pdf(
                 markdown,
                 pdf_path,
                 title=f"Review Report: {package.project_id}",
+                footer_note=footer,
             )
             (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
             pdf_written = True

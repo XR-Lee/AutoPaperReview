@@ -1,0 +1,253 @@
+"""Render manuscript pages and run the deterministic venue format checklist."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..artifacts import artifact_from_path
+from ..figures import sibling_pdf
+from ..hashing import sha256_file
+from ..models import ReviewPackage, RouteKind, VisualFinding
+from ..reporting import write_package_json
+from ..visual import (
+    finding_matches_caption,
+    format_check_pdf,
+    load_profile,
+    load_visual_inspector,
+    profile_path,
+    render_pdf_pages,
+)
+from .base import StageContext, StageHandler, StageOutcome
+
+
+class ParamsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+def _artifact(path: Path, context: StageContext, role: str):
+    return artifact_from_path(
+        path,
+        role=role,
+        generated_by=context.stage.id,
+        base=context.run_dir,
+        base_name="run",
+    )
+
+
+def _visual_route_enabled(context: StageContext) -> bool:
+    return any(route.kind == RouteKind.visual for route in context.loaded_config.config.routes)
+
+
+def _manuscript_pdf(context: StageContext) -> Path | None:
+    return sibling_pdf(context.source_path)
+
+
+class RenderPagesParams(ParamsModel):
+    dpi: int | None = Field(default=None, ge=72, le=300)
+    profile: str = "iclr2027"
+    require_pdf: bool = True
+
+
+class RenderPagesStage(StageHandler):
+    type_name = "render_pages"
+    version = "1"
+    params_model = RenderPagesParams
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = RenderPagesParams.model_validate(context.stage.params)
+        pdf = _manuscript_pdf(context)
+        return {
+            "profile_sha256": sha256_file(profile_path(params.profile)),
+            "pdf_sha256": None if pdf is None else sha256_file(pdf),
+            "dpi": params.dpi,
+        }
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = RenderPagesParams.model_validate(context.stage.params)
+        profile = load_profile(params.profile)
+        pdf = _manuscript_pdf(context)
+        if pdf is None:
+            if params.require_pdf and _visual_route_enabled(context):
+                raise FileNotFoundError(
+                    "render_pages requires a sibling manuscript PDF when a visual route is enabled"
+                )
+            if params.require_pdf:
+                raise FileNotFoundError("render_pages requires a manuscript PDF")
+            manifest_path = context.stage_dir / "manifest.json"
+            manifest_path.write_text('{"pages": [], "skipped": true}\n', encoding="utf-8")
+            return StageOutcome(
+                artifacts=[_artifact(manifest_path, context, "review.page_manifest")],
+                metadata={"skipped": True, "page_count": 0},
+            )
+        dpi = int(params.dpi or profile.get("render_dpi") or 150)
+        page_dir = context.stage_dir / "pages"
+        manifest = render_pdf_pages(pdf, page_dir, dpi=dpi)
+        manifest_path = context.stage_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        artifacts = [_artifact(manifest_path, context, "review.page_manifest")]
+        for item in manifest["pages"]:
+            artifacts.append(_artifact(page_dir / item["filename"], context, "review.page_image"))
+        return StageOutcome(
+            artifacts=artifacts,
+            metadata={"page_count": manifest["page_count"], "dpi": dpi, "pdf_sha256": manifest["pdf_sha256"]},
+        )
+
+
+class FormatCheckParams(ParamsModel):
+    profile: str = "iclr2027"
+
+
+def _manifest_from(context: StageContext) -> tuple[dict[str, Any], Path]:
+    for stage_id in context.stage.depends_on:
+        stage_dir = context.dependency_dir(stage_id)
+        candidate = stage_dir / "manifest.json"
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8")), stage_dir / "pages"
+    raise FileNotFoundError("format_check requires a render_pages manifest")
+
+
+class FormatCheckStage(StageHandler):
+    type_name = "format_check"
+    version = "1"
+    params_model = FormatCheckParams
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = FormatCheckParams.model_validate(context.stage.params)
+        return {"profile_sha256": sha256_file(profile_path(params.profile))}
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = FormatCheckParams.model_validate(context.stage.params)
+        profile = load_profile(params.profile)
+        pdf = _manuscript_pdf(context)
+        if pdf is None:
+            raise FileNotFoundError("format_check requires a manuscript PDF")
+        manifest, page_dir = _manifest_from(context)
+        checks = format_check_pdf(pdf, manifest, profile, page_dir=page_dir)
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            format_checks=checks,
+            metadata={"format_profile": profile["id"], "visual_status": "format_only"},
+        )
+        output = context.stage_dir / "package.json"
+        write_package_json(package, output)
+        failed = [item.id for item in checks if not item.passed]
+        return StageOutcome(
+            artifacts=[_artifact(output, context, "review.package.format")],
+            metadata={"failed": failed, "check_count": len(checks), "profile": profile["id"]},
+        )
+
+
+class VisualInspectParams(ParamsModel):
+    adapter: str | None = None
+    findings_path: str | None = None
+    endpoint: str | None = None
+    api_key_env: str = "APR_VISION_API_KEY"
+    require_pages_seen: bool = True
+
+
+class VisualInspectStage(StageHandler):
+    """Optional multimodal adapter. Core records the contract; it does not call a provider."""
+
+    type_name = "visual_inspect"
+    version = "2"
+    params_model = VisualInspectParams
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = VisualInspectParams.model_validate(context.stage.params)
+        material: dict[str, Any] = {
+            "adapter": params.adapter,
+            "endpoint": params.endpoint,
+            "api_key_env": params.api_key_env,
+        }
+        if params.findings_path:
+            path = _resolve_workspace_file(context, params.findings_path)
+            material["findings_sha256"] = sha256_file(path) if path.is_file() else None
+        return material
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = VisualInspectParams.model_validate(context.stage.params)
+        manifest, page_dir = _manifest_from(context)
+        findings: list[VisualFinding] = []
+        status = "unchecked"
+        if params.adapter:
+            inspector = load_visual_inspector(params.adapter)
+            findings_path = (
+                _resolve_workspace_file(context, params.findings_path) if params.findings_path else None
+            )
+            network_allowed = context.loaded_config.config.project.network_policy.value == "allow"
+            if getattr(inspector, "requires_network", False) and params.endpoint and not network_allowed:
+                policy = context.loaded_config.config.project.network_policy.value
+                raise PermissionError(
+                    f"stage {context.stage.id} sends page images and requires network_policy = allow "
+                    f"(current policy: {policy})"
+                )
+            if hasattr(inspector, "bind"):
+                inspector.bind(
+                    findings_path=findings_path,
+                    endpoint=params.endpoint,
+                    api_key_env=params.api_key_env,
+                    network_allowed=network_allowed,
+                )
+            if (
+                params.require_pages_seen
+                and hasattr(inspector, "assert_pages_seen")
+                and findings_path is not None
+            ):
+                inspector.assert_pages_seen([int(item["page"]) for item in manifest.get("pages", [])])
+            by_sha = {item["sha256"]: item for item in manifest.get("pages", [])}
+            for item in manifest.get("pages", []):
+                request_findings = inspector.inspect(
+                    _request(item, page_dir),
+                    context.stage_dir,
+                )
+                for finding in request_findings:
+                    if finding.page_image_sha256 not in by_sha:
+                        raise ValueError(
+                            f"visual finding {finding.id} page hash is not in the render manifest"
+                        )
+                    if by_sha[finding.page_image_sha256]["page"] != finding.page:
+                        raise ValueError(f"visual finding {finding.id} page does not match the image hash")
+                    if finding_matches_caption(finding):
+                        raise ValueError(f"visual finding {finding.id} repeats the caption")
+                    findings.append(finding)
+            status = getattr(inspector, "status", None) or ("checked" if findings or params.adapter else "unchecked")
+        package = ReviewPackage(
+            project_id=context.loaded_config.config.project.id,
+            manuscript=context.manifest.source,
+            visual_findings=findings,
+            metadata={"visual_status": status},
+        )
+        output = context.stage_dir / "package.json"
+        write_package_json(package, output)
+        return StageOutcome(
+            artifacts=[_artifact(output, context, "review.package.visual")],
+            metadata={"finding_count": len(findings), "visual_status": package.metadata["visual_status"]},
+        )
+
+
+def _resolve_workspace_file(context: StageContext, relative: str) -> Path:
+    from ..integrity import assert_inside_workspace
+
+    candidate = Path(relative)
+    root = candidate if candidate.is_absolute() else context.workspace / candidate
+    return assert_inside_workspace(root, context.workspace)
+
+
+def _request(item: dict[str, Any], page_dir: Path):
+    from ..visual import VisualPageRequest
+
+    return VisualPageRequest(
+        page=int(item["page"]),
+        page_image_sha256=item["sha256"],
+        image_path=str(page_dir / item["filename"]),
+        width_px=int(item["width_px"]),
+        height_px=int(item["height_px"]),
+    )

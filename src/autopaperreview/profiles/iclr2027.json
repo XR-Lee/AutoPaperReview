@@ -1,0 +1,17 @@
+{
+  "id": "iclr-2027-submission",
+  "source": "https://iclr.cc/Conferences/2027/AuthorGuidelines",
+  "style_reference": "ICLR 2027 author instructions and the conference style file (US Letter, 5.5in text width).",
+  "pinned": "2026-10-19",
+  "max_content_pages": 9,
+  "page_width_pt": 612,
+  "page_height_pt": 792,
+  "page_size_tolerance_pt": 3,
+  "min_margin_pt": 36,
+  "header_band_pt": 48,
+  "footer_band_pt": 48,
+  "anonymous": true,
+  "min_page_image_px": 400,
+  "render_dpi": 150,
+  "notes": "Main text is 9 pages at submission. Pages from the first References heading onward, including appendices, do not count. The margin floor is 0.5in. The top and bottom 48pt are the running header and page number and are not body ink. Anonymity fails closed on a non-empty Author field or an email address on page 1. This profile is not a fitted review score."
+}

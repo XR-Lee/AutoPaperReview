@@ -77,6 +77,8 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         "explanation_en",
         "explanation_zh",
         "quote",
+        "fatal_class",
+        "decision_relevant",
     }
     unknown = {key: value for key, value in record.items() if key not in known}
     return ReviewIssue(
@@ -94,6 +96,8 @@ def migrate_legacy_issue(record: dict[str, Any]) -> ReviewIssue:
         evidence_ids=_string_list(record.get("evidence_ids")),
         anchor=Anchor.model_validate(record["anchor"]) if record.get("anchor") else None,
         first_read=_migrate_first_read(record),
+        fatal_class=record.get("fatal_class"),
+        decision_relevant=bool(record.get("decision_relevant", False)),
         metadata={"legacy_v0": unknown} if unknown else {},
     )
 

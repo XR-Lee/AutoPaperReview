@@ -7,8 +7,10 @@ from collections.abc import Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from .figures import caption_inventory
-from .models import ReviewIssue, ReviewPackage, RouteKind
+from .models import OverallScoreMethod, ReviewIssue, ReviewPackage, RouteKind, Severity
 from .readability import first_read_gate_errors, is_major
+from .rubrics import COEFFICIENT_SET, DIMENSION_BANDS
+from .visual import finding_matches_caption
 
 
 class ExportGateParams(BaseModel):
@@ -30,6 +32,11 @@ class ExportGateParams(BaseModel):
     require_first_read_on_major: bool = False
     require_quote_on_major: bool = False
     min_explanation_chars: int = Field(default=0, ge=0)
+    require_rubric_bands: bool = False
+    require_rating: bool = False
+    require_fatal_class_on_critical: bool = False
+    require_decision_relevant_on_major: bool = False
+    require_page_image_on_visual: bool = False
 
 
 def _is_major(issue: ReviewIssue) -> bool:
@@ -129,6 +136,47 @@ def export_gate_errors(
                 "export gate requires an issue covering each listed contribution; "
                 f"missing: {missing_contrib}"
             )
+    if params.require_rubric_bands:
+        for score in package.dimension_scores:
+            if not score.clause_id:
+                errors.append(f"export gate requires a rubric clause on {score.dimension.value}")
+            elif float(score.score) not in DIMENSION_BANDS:
+                errors.append(f"export gate requires an anchored band on {score.dimension.value}")
+    if params.require_rating:
+        score = package.overall_score
+        if (
+            score is None
+            or score.method != OverallScoreMethod.declared_formula
+            or score.coefficient_set != COEFFICIENT_SET
+        ):
+            errors.append(f"export gate requires declared formula {COEFFICIENT_SET}")
+    if params.require_fatal_class_on_critical:
+        missing = [
+            issue.id
+            for issue in package.issues
+            if issue.severity == Severity.critical and issue.fatal_class is None
+        ]
+        if missing:
+            errors.append(f"export gate requires fatal_class on critical issues; missing: {missing}")
+    if params.require_decision_relevant_on_major:
+        majors = [issue for issue in package.issues if issue.severity in {Severity.critical, Severity.major}]
+        if majors and not any(issue.decision_relevant for issue in package.issues):
+            errors.append("export gate requires a decision-relevant issue when a major or critical issue exists")
+    if params.require_page_image_on_visual and RouteKind.visual in route_kinds:
+        cited = _cited_figures(package)
+        covered = {item.figure_id for item in package.visual_findings if item.figure_id}
+        missing = sorted(cited - covered)
+        if missing:
+            errors.append(
+                "export gate requires a page-image visual finding for each cited figure; "
+                f"missing: {missing}"
+            )
+        paraphrases = [item.id for item in package.visual_findings if finding_matches_caption(item)]
+        if paraphrases:
+            errors.append(f"export gate rejects caption paraphrases: {paraphrases}")
+        unhashed = [item.id for item in package.visual_findings if not item.page_image_sha256]
+        if unhashed:
+            errors.append(f"export gate requires page image hashes; missing: {unhashed}")
     errors.extend(
         first_read_gate_errors(
             package,
