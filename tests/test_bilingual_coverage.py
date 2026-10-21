@@ -7,7 +7,13 @@ from pathlib import Path
 from autopaperreview.bilingual_coverage import markdown_bilingual_gaps, require_bilingual_markdown
 from autopaperreview.i18n import MissingTranslationError, translate_text
 from autopaperreview.migration import load_review_input
-from autopaperreview.pdf_report import _tokens, reportlab_available, write_report_pdf
+from autopaperreview.pdf_report import (
+    _tokens,
+    pdf_base_fonts,
+    pdf_has_cjk_font,
+    reportlab_available,
+    write_report_pdf,
+)
 from autopaperreview.reporting import render_markdown
 
 from tests.support import make_artifact
@@ -126,3 +132,31 @@ without a matching Chinese paragraph.
             path = Path(temporary) / "report.pdf"
             with self.assertRaises(MissingTranslationError):
                 write_report_pdf(markdown, path, title="Incomplete")
+
+    @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
+    def test_bilingual_pdf_uses_a_cjk_font(self) -> None:
+        markdown = """# Review Report: font-check
+
+- Languages: en, zh-Hans
+
+## Summary / 摘要
+
+### en
+
+English stays on a Latin font, including a middle dot and an arrow →.
+
+### zh-Hans
+
+摘要与中文段落应当显示为汉字，而不是方框。
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.pdf"
+            write_report_pdf(markdown, path, title="Font check")
+            fonts = pdf_base_fonts(path)
+            folded = [name.lower() for name in fonts]
+            self.assertTrue(any("helvetica" in name for name in folded), fonts)
+            self.assertTrue(pdf_has_cjk_font(path), fonts)
+            self.assertFalse(
+                all("helvetica" in name or "zapfdingbats" in name for name in folded),
+                fonts,
+            )

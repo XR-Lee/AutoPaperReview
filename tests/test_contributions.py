@@ -91,6 +91,42 @@ Related Work
         self.assertEqual([item["index"] for item in items], [1, 2, 3])
         self.assertIn("depth-centric", str(items[0]["text"]))
 
+    def test_capitalized_non_we_item_stays_in_the_list(self) -> None:
+        text = """
+Our contributions are threefold: (1) We propose a fixture planner that models a toy signal.
+(2) Additional synthetic supervision is designed to characterize a fixture relevance score.
+(3) A placeholder forecaster is introduced to predict how that fixture score changes.
+
+Related Work
+"""
+        items = extract_listed_contributions(text)
+        self.assertEqual([item["index"] for item in items], [1, 2, 3])
+        self.assertIn("Additional synthetic supervision", str(items[1]["text"]))
+
+    def test_long_listed_contribution_quotes_do_not_block_bilingual_export(self) -> None:
+        from autopaperreview.i18n import ensure_package_languages
+        from autopaperreview.bilingual_coverage import markdown_bilingual_gaps
+
+        text = """
+Contributions
+(1) We model a fixture allocation score in a toy query task before a geometric check under two named conditions.
+(2) We introduce a synthetic distribution over placeholder evidence and a residual gate driven by a total count.
+(3) We introduce a holdout split that removes two labeled groups and report accuracy on that split.
+
+Related Work
+"""
+        claims = build_ledger_claims(text, manuscript_sha256="c" * 64)
+        package = ReviewPackage(
+            project_id="long-contrib",
+            manuscript=make_artifact(),
+            ledger_claims=claims,
+        )
+        filled = ensure_package_languages(package, ["en", "zh-Hans"])
+        self.assertTrue(all(claim.claim.get("zh-Hans") is None for claim in filled.ledger_claims))
+        self.assertTrue(all(claim.risk is not None and claim.risk.get("zh-Hans") for claim in filled.ledger_claims))
+        markdown = render_markdown(filled, bilingual=True)
+        self.assertEqual(markdown_bilingual_gaps(markdown), [])
+
     def test_synthetic_manuscript_has_no_listed_contributions(self) -> None:
         from pathlib import Path
 

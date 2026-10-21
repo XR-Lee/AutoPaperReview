@@ -577,6 +577,24 @@ def ensure_string_map(mapping: dict[str, list[str]], languages: Sequence[str]) -
     return result
 
 
+def _ensure_ledger_claim(item, languages: Sequence[str]) -> LocalizedText:
+    """Translate ledger prose, but not a listed-contribution quotation.
+
+    The ledger stores each author-numbered contribution as the manuscript
+    sentence itself. Bilingual reports print that sentence once. The short
+    phrase filler cannot translate it, and copying the English sentence into
+    ``zh-Hans`` fails the script check and aborts export.
+    """
+    if item.metadata.get("kind") == "listed_contribution":
+        translations = {
+            language: text
+            for language, text in item.claim.translations.items()
+            if language != item.claim.language and script_matches(text, language)
+        }
+        return item.claim.model_copy(update={"translations": translations})
+    return ensure_localized(item.claim, languages)
+
+
 def ensure_package_languages(package: ReviewPackage, languages: Sequence[str]) -> ReviewPackage:
     updated = package.model_copy(deep=True)
     updated.summary = ensure_localized(updated.summary, languages)
@@ -630,7 +648,7 @@ def ensure_package_languages(package: ReviewPackage, languages: Sequence[str]) -
     updated.ledger_claims = [
         item.model_copy(
             update={
-                "claim": ensure_localized(item.claim, languages),
+                "claim": _ensure_ledger_claim(item, languages),
                 "risk": ensure_localized(item.risk, languages) if item.risk else None,
             }
         )
