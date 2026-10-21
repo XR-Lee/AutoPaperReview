@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added a public-repo confidentiality policy ([CONFIDENTIALITY.md](CONFIDENTIALITY.md), [AGENTS.md](AGENTS.md)) and a tracked-file check that rejects review work directories, document and image files outside an allowlist, submission-id patterns, and SHA-256 digests of blocked strings.
+- Replaced contribution-list fixtures with synthetic sentences.
+
 ## 0.1.8 - 2026-10-20
 
 - Added a pinned AAAI-27 main-track format profile (`profiles/aaai2027.json`): 7 content pages, 9 pages total, US Letter, and the anonymous-submission template marker. `format_check` reads `template_markers`, `max_total_pages`, `page_limit_fatal`, and `anonymity_metadata_fatal` from the profile. The ICLR 2027 profile is unchanged.
