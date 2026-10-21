@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import random
 import shutil
+import sys
 import tempfile
 import textwrap
 import unittest
 from datetime import date
 from pathlib import Path
-
-import os
-import random
 
 from tests.confirmation_fakes import FakeConfirmationAdapter, RecordingModelSession
 
@@ -40,6 +40,8 @@ from autopaperreview.related_work import (
     allow_tokens,
     assert_outbound_safe,
     MAX_MUST_COMPARE,
+    RETRIEVAL_CACHE_TTL_SECONDS,
+    S2_UNAUTH_BUDGET_SECONDS,
     build_cap_signals,
     classify_date,
     clear_retrieval_cache,
@@ -873,6 +875,57 @@ class StageTests(unittest.TestCase):
                 run_pipeline(workspace / "review.toml")
 
 
+    def test_execute_review_adapter_is_not_used_for_confirmation(self) -> None:
+        raw = json.loads((EXAMPLE / "findings.json").read_text(encoding="utf-8"))
+        raw.pop("confirmations", None)
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "manuscript.txt").write_text(MANUSCRIPT, encoding="utf-8")
+            (workspace / "findings.json").write_text(json.dumps(raw), encoding="utf-8")
+            (workspace / "review.toml").write_text(
+                textwrap.dedent(
+                    """
+                    schema_version = 1
+
+                    [project]
+                    id = "related-no-autobind"
+                    title = "Confirmation stays on an explicit adapter"
+                    source = "manuscript.txt"
+                    run_root = ".runs"
+                    network_policy = "deny"
+
+                    [[stages]]
+                    id = "ingest"
+                    type = "ingest"
+
+                    [[stages]]
+                    id = "related_work"
+                    type = "related_work_search"
+                    depends_on = ["ingest"]
+                    [stages.params]
+                    mode = "agent"
+                    findings_path = "findings.json"
+
+                    [[stages]]
+                    id = "bands"
+                    type = "execute_review"
+                    enabled = false
+                    depends_on = ["ingest"]
+                    [stages.params]
+                    adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            self.assertNotIn("autopaperreview.model_exec", sys.modules)
+            manifest = run_pipeline(workspace / "review.toml")
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "related_work"
+            judgment = json.loads((stage_dir / "judgment.json").read_text(encoding="utf-8"))
+        self.assertEqual(judgment["confirmation"], "awaiting_confirmation")
+        self.assertNotIn("autopaperreview.model_exec", sys.modules)
+        self.assertTrue(judgment["confirmation_packet"]["candidates"])
+
+
 class TieringAndRetrievalTests(unittest.TestCase):
     def setUp(self) -> None:
         clear_retrieval_cache()
@@ -1424,6 +1477,279 @@ class TieringAndRetrievalTests(unittest.TestCase):
         blob = "\n".join(calls)
         self.assertNotIn("synthetic-key", blob)
         self.assertNotIn("synthetic-key", "\n".join(entry.detail for entry in judgment.logs))
+
+    def test_compact_method_names_survive_extraction(self) -> None:
+        text = textwrap.dedent(
+            """\
+            Title: Synthetic Compact Tracker
+
+            Problem
+            Task: monocular specimen pose estimation
+            Inputs: monocular RGB frames
+            Outputs: a pose trajectory
+            Assumptions: rigid specimen
+            Setting: offline evaluation with a sequence-level holdout
+            Technique: temporal fusion
+
+            Related Work
+            Foo-BAR, Abc3D, and XYZ-Net estimate pose.
+            """
+        )
+        names = named_methods_from_manuscript(text)
+        self.assertIn("Foo-BAR", names)
+        self.assertIn("Abc3D", names)
+        self.assertIn("XYZ-Net", names)
+        queries = generate_search_queries(derive_formulation(text), names)
+        issued = [query.query for query in queries if query.metadata["family"] == "named_method"]
+        self.assertIn("Foo-BAR", issued)
+        self.assertIn("Abc3D", issued)
+        self.assertIn("XYZ-Net", issued)
+
+    def test_cited_bibliography_entry_30_is_resolved_by_title_and_identifier(self) -> None:
+        entries = []
+        for index in range(1, 41):
+            if index == 30:
+                entries.append(
+                    '[30] Z. Author, "Foo-BAR," Synthetic Journal, 2021. '
+                    "arXiv:0000.00030. doi:10.0000/synthetic.foobar.2021"
+                )
+            elif index == 40:
+                entries.append(
+                    '[40] Q. Author, "Uncited Tail Note," Synthetic Journal, 2019. arXiv:0000.00040.'
+                )
+            else:
+                entries.append(f'[{index}] A. Author, "Filler Note {index:02d}," Synthetic Journal, 2019.')
+        text = (
+            "Title: Synthetic Specimen Tracker\n\n"
+            "Problem\n"
+            "Task: monocular specimen pose estimation\n"
+            "Inputs: monocular RGB frames\n"
+            "Outputs: a 6-DoF pose trajectory\n"
+            "Assumptions: rigid specimen\n"
+            "Setting: offline evaluation with a sequence-level holdout and pose error in millimeters\n"
+            "Technique: temporal fusion\n\n"
+            "Related Work\n"
+            "QUILLTOKEN The closest method appears only as \\cite{30}.\n\n"
+            "Experiments\n"
+            "Decision metric: pose error in millimeters\n"
+            "Compared baselines: Flat Image Classifier\n\n"
+            "References\n" + "\n".join(entries) + "\n"
+        )
+        related = _section(text, "Related Work")
+        self.assertIn("\\cite{30}", related)
+        self.assertNotIn("Foo-BAR", related)
+        overlap = (
+            "Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation. "
+            "Pose error in millimeters is measured on a sequence-level holdout."
+        )
+        atom = (
+            '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry>'
+            "<id>http://arxiv.org/abs/0000.00030v1</id><published>2021-04-01T00:00:00Z</published>"
+            f"<title>Foo-BAR</title><summary>{overlap}</summary>"
+            '<link href="https://arxiv.org/abs/0000.00030"/>'
+            "</entry></feed>"
+        ).encode("utf-8")
+        openalex = json.dumps(
+            {
+                "results": [
+                    {
+                        "id": "https://openalex.org/Wfoobar",
+                        "title": "Foo-BAR",
+                        "doi": "https://doi.org/10.0000/synthetic.foobar.2021",
+                        "ids": {"arxiv": "0000.00030"},
+                        "publication_year": 2021,
+                        "publication_date": "2021-04-01",
+                        "abstract": overlap,
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        seen: list[str] = []
+
+        def transport(url: str) -> HttpResult:
+            seen.append(url)
+            if "Foo-BAR" in url or "0000.00030" in url or "synthetic.foobar.2021" in url:
+                if "export.arxiv.org" in url:
+                    return HttpResult(200, atom)
+                return HttpResult(200, openalex)
+            if "export.arxiv.org" in url:
+                return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+            return HttpResult(200, b'{"results":[]}')
+
+        judgment = run_related_work_search(
+            text,
+            mode="live",
+            allow_network=True,
+            transport=transport,
+            providers=["arxiv", "openalex"],
+            confirm_must_compare=_confirm_must_compare,
+            sleeper=lambda _seconds: None,
+        )
+        cited = [query for query in judgment.queries if query.metadata.get("family") == "cited_reference"]
+        self.assertEqual(cited[0].metadata["marker"], "30")
+        self.assertTrue(cited[0].metadata["cited_in_body"])
+        lookups = {
+            (query.metadata["lookup"], query.metadata["providers"][0], query.query)
+            for query in cited
+            if query.metadata["marker"] == "30"
+        }
+        self.assertIn(("arxiv_id", "arxiv", "0000.00030"), lookups)
+        self.assertIn(("title", "arxiv", "Foo-BAR"), lookups)
+        self.assertIn(("title", "openalex", "Foo-BAR"), lookups)
+        self.assertIn(("doi", "openalex", "10.0000/synthetic.foobar.2021"), lookups)
+        blob = "\n".join(seen)
+        self.assertIn("search_query=ti:", blob)
+        self.assertIn("Foo-BAR", blob)
+        self.assertIn("search_query=id:", blob)
+        self.assertIn("0000.00030", blob)
+        self.assertIn("title.search:", blob)
+        self.assertIn("filter=doi:", blob)
+        self.assertIn("synthetic.foobar.2021", blob)
+        self.assertNotIn("Uncited Tail Note", blob)
+        self.assertNotIn("0000.00040", blob)
+        self.assertNotIn("QUILLTOKEN", blob)
+        self.assertNotIn("api.semanticscholar.org", blob)
+        found = next(item for item in judgment.candidates if item.title == "Foo-BAR")
+        self.assertTrue(found.cited)
+        self.assertEqual(found.tier, "must-compare")
+        self.assertTrue(found.required)
+        self.assertTrue(found.confirmed)
+        self.assertIn("missing_closest_neighbor", [signal.fatal_class for signal in judgment.cap_signals])
+        self.assertNotIn("Foo-BAR", " ".join(judgment.confirmation_packet["baselines"]["compared"]))
+
+    def test_judge_reasons_stay_verbatim_in_the_judgment_and_the_report(self) -> None:
+        confirm = "Confirmed because the synthetic holdout uses the same temporal fusion."
+        reject = "Rejected because this synthetic record uses a privileged depth channel."
+
+        def judge(candidate: RelatedCandidate) -> tuple[bool, str]:
+            if candidate.title == "A Public Baseline for Synthetic Pose Estimation":
+                return True, confirm
+            if candidate.title == "Depth Aware Pose Estimator":
+                return False, reject
+            return False, ""
+
+        raw = json.loads((EXAMPLE / "findings.json").read_text(encoding="utf-8"))
+        raw.pop("confirmations", None)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "findings.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            judged = run_related_work_search(
+                MANUSCRIPT,
+                mode="agent",
+                findings_path=path,
+                confirm_must_compare=judge,
+            )
+        by_title = {item.title: item for item in judged.candidates}
+        kept = by_title["A Public Baseline for Synthetic Pose Estimation"]
+        dropped = by_title["Depth Aware Pose Estimator"]
+        self.assertEqual(kept.confirmation_reason, confirm)
+        self.assertIn(confirm, kept.reason_en)
+        self.assertEqual(dropped.confirmation_reason, reject)
+        self.assertIn(reject, dropped.reason_en)
+        self.assertNotIn("did not confirm", dropped.reason_en)
+        report = "\n".join(render_related_work_section(judged, ["en", "zh-Hans"]))
+        self.assertIn(confirm, report)
+        self.assertIn(reject, report)
+
+        raw["confirmations"] = [
+            {
+                "external_id": "doi:10.0000/synthetic.pose.2022",
+                "confirmed": True,
+                "reason": confirm,
+            },
+            {
+                "external_id": "arxiv:0000.00002",
+                "confirmed": False,
+                "reason": reject,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "findings.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            filed = run_related_work_search(MANUSCRIPT, mode="agent", findings_path=path)
+        filed_by_title = {item.title: item for item in filed.candidates}
+        self.assertEqual(filed_by_title["A Public Baseline for Synthetic Pose Estimation"].confirmation_reason, confirm)
+        self.assertEqual(filed_by_title["Depth Aware Pose Estimator"].confirmation_reason, reject)
+        filed_report = "\n".join(render_related_work_section(filed, ["en"]))
+        self.assertIn(confirm, filed_report)
+        self.assertIn(reject, filed_report)
+        self.assertNotIn("did not confirm", filed_by_title["Depth Aware Pose Estimator"].reason_en)
+
+    def test_disk_cache_skips_the_transport_until_the_ttl_expires(self) -> None:
+        clock = _Clock()
+        clock.now = 1_000_000.0
+        calls: list[str] = []
+
+        def transport(url: str) -> HttpResult:
+            calls.append(url)
+            return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_dir = Path(temporary) / "related_work_cache"
+            kwargs = {
+                "mode": "live",
+                "allow_network": True,
+                "providers": ["arxiv"],
+                "sleeper": lambda _seconds: None,
+                "cache_dir": cache_dir,
+                "cache_clock": clock,
+            }
+            run_related_work_search(MANUSCRIPT, transport=transport, **kwargs)
+            self.assertTrue(calls)
+            stored = list(cache_dir.glob("*.json"))
+            self.assertTrue(stored)
+            self.assertTrue(all(len(path.stem) == 64 for path in stored))
+            self.assertNotIn("S2_API_KEY", stored[0].read_text(encoding="utf-8"))
+            clear_retrieval_cache()
+            after_first = len(calls)
+            run_related_work_search(
+                MANUSCRIPT,
+                transport=lambda url: (_ for _ in ()).throw(AssertionError(url)),
+                **kwargs,
+            )
+            self.assertEqual(len(calls), after_first)
+            clock.now += RETRIEVAL_CACHE_TTL_SECONDS + 1
+            clear_retrieval_cache()
+            run_related_work_search(MANUSCRIPT, transport=transport, **kwargs)
+            self.assertGreater(len(calls), after_first)
+
+    def test_unauthenticated_semantic_scholar_is_skipped_inside_the_time_budget(self) -> None:
+        clock = _Clock()
+        previous = os.environ.pop("S2_API_KEY", None)
+
+        def transport(url: str) -> HttpResult:
+            if "semanticscholar" in url:
+                return HttpResult(429, b"slow", headers={"Retry-After": "60"})
+            return HttpResult(200, _pose_atom(published="2022-06-01T00:00:00Z"))
+
+        try:
+            judgment = run_related_work_search(
+                MANUSCRIPT,
+                mode="live",
+                allow_network=True,
+                transport=transport,
+                providers=["arxiv", "semantic_scholar"],
+                confirm_must_compare=_confirm_must_compare,
+                sleeper=clock.sleep,
+                clock=clock,
+                rng=random.Random(0),
+            )
+        finally:
+            if previous is not None:
+                os.environ["S2_API_KEY"] = previous
+            clear_retrieval_cache()
+        self.assertGreater(sum(clock.delays), 0)
+        self.assertLessEqual(sum(clock.delays), S2_UNAUTH_BUDGET_SECONDS)
+        self.assertLess(max(clock.delays), 60)
+        self.assertEqual(judgment.status, "partial")
+        self.assertIn("semantic_scholar", judgment.failed_providers)
+        self.assertTrue(
+            any(
+                entry.provider == "semantic_scholar" and entry.status == "skipped" and "S2_API_KEY" in entry.detail
+                for entry in judgment.logs
+            )
+        )
+        self.assertTrue(any(item.title.startswith("A Public Baseline") for item in judgment.candidates))
 
 
 class _Clock:

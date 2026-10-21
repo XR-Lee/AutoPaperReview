@@ -171,7 +171,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "5"
+    version = "6"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
@@ -217,19 +217,6 @@ class RelatedWorkSearchStage(StageHandler):
         confirmation_file = (
             context.loaded_config.resolve(params.confirmation_path) if params.confirmation_path else None
         )
-        adapter_spec = params.confirmation_adapter
-        adapter_params: dict[str, Any] = {}
-        for stage in context.loaded_config.config.stages:
-            if stage.type != "execute_review":
-                continue
-            configured = str(stage.params.get("adapter") or "")
-            if "model_exec" not in configured and not configured.endswith("OpenAICompatibleAdapter"):
-                continue
-            if adapter_spec is None:
-                adapter_spec = configured
-            if adapter_spec == configured:
-                adapter_params = dict(stage.params)
-            break
         judgment = run_related_work_search(
             manuscript,
             venue_key=params.venue,
@@ -240,10 +227,10 @@ class RelatedWorkSearchStage(StageHandler):
             providers=params.providers,
             named_method_limit=params.named_method_limit,
             confirmation_path=confirmation_file if confirmation_file is not None and confirmation_file.is_file() else None,
-            confirmation_adapter=adapter_spec,
-            confirmation_adapter_params=adapter_params,
+            confirmation_adapter=params.confirmation_adapter,
             confirmation_scratch=context.stage_dir,
             network_policy=context.loaded_config.config.project.network_policy.value,
+            cache_dir=context.workspace / ".autopaperreview" / "related_work_cache",
         )
         retrieved_at = datetime.now(timezone.utc)
         snapshots, sources, evidence = _snapshots(judgment, retrieved_at=retrieved_at)

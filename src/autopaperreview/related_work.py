@@ -1,8 +1,10 @@
 """Related-work search that runs before novelty and prior-work scores.
 
-The search is not the manuscript bibliography and not one ad-hoc query.
-Outbound calls receive generic topic keywords only. A candidate is kept only
-when a provider payload contains its id and title. Papers are never invented.
+The search is not a copy of the manuscript bibliography and not one ad-hoc query.
+Keyword calls receive generic topic tokens. Bibliography lookups send a
+reference title, arXiv id, or DOI, and no manuscript prose. A candidate is
+kept only when a provider payload contains its id and title. Papers are never
+invented.
 
 Cap numbers follow ``apr-iclr-cap-v1``. ``unfair_baseline`` is venue cap 5
 with an experimental-soundness ceiling of 4. ``missing_closest_neighbor`` is
@@ -17,6 +19,7 @@ emits ``unfair_baseline`` when the manuscript baseline anchor resolves. See
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import json
@@ -87,6 +90,11 @@ _MAX_RETRY_AFTER_SECONDS = 2.0
 _S2_429_RETRIES = 5
 _S2_MAX_RETRY_AFTER_SECONDS = 60.0
 _S2_MIN_INTERVAL = 1.0
+# Without S2_API_KEY a 429 must not spend a minute on every query.
+S2_UNAUTH_RETRIES = 2
+S2_UNAUTH_BUDGET_SECONDS = 8.0
+RETRIEVAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+UNCITED_BIBLIOGRAPHY_LOOKUPS = 8
 _RETRIEVAL_CACHE: dict[str, "HttpResult"] = {}
 
 INTEGRATION_NOTE = (
@@ -138,7 +146,15 @@ _ARXIV = re.compile(
     re.I,
 )
 _YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
-_QUOTED = re.compile(r"\"([^\"]{8,})\"")
+_QUOTED = re.compile(r"\"([^\"]{2,})\"")
+_CITE = re.compile(r"\\cite[a-zA-Z*]*\s*(?:\[[^\]]*\]\s*)*\{([^}]+)\}")
+_COMPACT_METHOD = re.compile(
+    r"\b(?:"
+    r"[A-Z][A-Za-z0-9]*-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
+    r"|[A-Z][a-z0-9]*[a-z][A-Z][A-Za-z0-9]*"
+    r"|[A-Z][A-Za-z]*\d+[A-Za-z0-9]*"
+    r")\b"
+)
 _KNOWN_HEADINGS = frozenset(
     {
         "abstract",
@@ -568,6 +584,21 @@ def _sentence_spans(text: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+def _is_compact_method_name(name: str) -> bool:
+    """Hyphenated, camel-case, or digit-containing method tokens such as Foo-BAR or Abc3D."""
+    token = " ".join(name.split())
+    if not token or not re.search(r"[A-Za-z]", token):
+        return False
+    for piece in token.split():
+        if "-" in piece and re.search(r"[A-Za-z]", piece):
+            return True
+        if re.search(r"[A-Za-z]", piece) and re.search(r"\d", piece):
+            return True
+        if re.search(r"[a-z]", piece) and re.search(r"[A-Z].*[A-Z]", piece):
+            return True
+    return False
+
+
 def _remember_name(
     records: dict[str, dict[str, Any]],
     name: str,
@@ -575,10 +606,14 @@ def _remember_name(
     title: str,
     explicit: bool = False,
     in_experiments: bool = False,
+    cited_body: bool = False,
     distance: int | None = None,
 ) -> None:
     normalized = _normalize_title(name)
-    if len(normalized.split()) < 2 or (title and normalized == title):
+    compact = _is_compact_method_name(name)
+    if not normalized or (len(normalized.split()) < 2 and not compact):
+        return
+    if title and normalized == title:
         return
     row = records.get(normalized)
     if row is None:
@@ -586,6 +621,7 @@ def _remember_name(
             "name": " ".join(name.split()),
             "explicit": False,
             "in_experiments": False,
+            "cited_body": False,
             "distance": None,
         }
         records[normalized] = row
@@ -593,6 +629,8 @@ def _remember_name(
         row["explicit"] = True
     if in_experiments:
         row["in_experiments"] = True
+    if cited_body:
+        row["cited_body"] = True
     if distance is not None and (row["distance"] is None or distance < row["distance"]):
         row["distance"] = distance
 
@@ -604,10 +642,12 @@ def named_methods_from_manuscript(
 ) -> list[str]:
     """Method names the manuscript itself uses, highest priority first.
 
-    Explicit closest or most-related methods are always included. Baselines and
-    experiment-table names come next, then related-work sentences nearest the
-    paper's own method, then names mentioned more often. The submission title
-    is omitted. ``limit`` caps the rest; it does not drop an explicit closest method.
+    Explicit closest or most-related methods are always included, as are
+    references cited in the body. Baselines and experiment-table names come
+    next, then related-work sentences nearest the paper's own method, then
+    names mentioned more often. Hyphenated, camel-case, and digit-containing
+    names are kept. The submission title is omitted. ``limit`` caps the rest;
+    it does not drop an explicit closest method or a cited reference.
     """
     if limit < 1:
         raise ValueError("named method limit must be at least 1")
@@ -628,7 +668,12 @@ def named_methods_from_manuscript(
             _remember_name(records, piece, title=title, explicit=label in _CLOSEST_LABELS)
     for entry in parse_bibliography(manuscript):
         if entry.title:
-            _remember_name(records, entry.title, title=title)
+            _remember_name(
+                records,
+                entry.title,
+                title=title,
+                cited_body=_bibliography_rank(manuscript, entry) < 3,
+            )
     technique = _normalize_title(_labeled_fields(_section(manuscript, "Problem")).get("technique", ""))
     sentences = _sentence_spans(related)
     own_indexes = [
@@ -647,6 +692,17 @@ def named_methods_from_manuscript(
         introduced = introduced_pattern.search(sentence)
         if introduced:
             _remember_name(records, introduced.group(1), title=title, explicit=True, distance=distance)
+        for match in _COMPACT_METHOD.finditer(sentence):
+            token = match.group(0)
+            if len(token) < 4 and "-" not in token:
+                continue
+            _remember_name(
+                records,
+                token,
+                title=title,
+                explicit=explicit_sentence,
+                distance=distance,
+            )
         normalized_sentence = _normalize_title(sentence)
         for normalized, row in list(records.items()):
             if normalized in normalized_sentence:
@@ -665,14 +721,15 @@ def named_methods_from_manuscript(
     ranked.sort(
         key=lambda item: (
             0 if item[0]["explicit"] else 1,
+            0 if item[0]["cited_body"] else 1,
             0 if item[0]["in_experiments"] else 1,
             item[0]["distance"] if item[0]["distance"] is not None else 10**9,
             -item[1],
             _normalize_title(item[0]["name"]),
         )
     )
-    forced = [row["name"] for row, _frequency in ranked if row["explicit"]]
-    rest = [row["name"] for row, _frequency in ranked if not row["explicit"]]
+    forced = [row["name"] for row, _frequency in ranked if row["explicit"] or row["cited_body"]]
+    rest = [row["name"] for row, _frequency in ranked if not row["explicit"] and not row["cited_body"]]
     return (forced + rest)[: max(limit, len(forced))]
 
 
@@ -726,7 +783,9 @@ def generate_search_queries(
     name_index = 0
     for name in named_methods:
         normalized = _normalize_title(name)
-        if not normalized or normalized in seen_names or len(normalized.split()) < 2:
+        if not normalized or normalized in seen_names:
+            continue
+        if len(normalized.split()) < 2 and not _is_compact_method_name(name):
             continue
         seen_names.add(normalized)
         name_index += 1
@@ -789,6 +848,98 @@ def parse_bibliography(manuscript: str) -> list[BibliographyEntry]:
             )
         )
     return entries
+
+
+def _citation_keys(text: str) -> set[str]:
+    keys: set[str] = set()
+    for match in _CITE.finditer(text or ""):
+        for piece in match.group(1).split(","):
+            key = piece.strip()
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _bibliography_sections(manuscript: str) -> list[tuple[int, str]]:
+    """Related work, then experiments, then the method description."""
+    related = _section(manuscript, "Related Work") or _section(manuscript, "Prior Work") or ""
+    experiments = _section(manuscript, "Experiments") or _section(manuscript, "Evaluation") or ""
+    method = "\n".join(
+        part
+        for part in (
+            _section(manuscript, "Method") or "",
+            _section(manuscript, "Methods") or "",
+            _section(manuscript, "Approach") or "",
+            _section(manuscript, "Problem") or "",
+        )
+        if part
+    )
+    return [(0, related), (1, experiments), (2, method)]
+
+
+def _bibliography_rank(manuscript: str, entry: BibliographyEntry) -> int:
+    """0 related work, 1 experiments, 2 method, 3 otherwise."""
+    keys = {entry.marker}
+    best = 3
+    for rank, body in _bibliography_sections(manuscript):
+        if keys & _citation_keys(body):
+            best = min(best, rank)
+    return best
+
+
+def cited_reference_queries(
+    manuscript: str,
+    entries: Sequence[BibliographyEntry],
+) -> list[RelatedWorkQuery]:
+    """Resolve bibliography entries by title, arXiv id, and DOI. Metadata only.
+
+    Entries cited in related work, the experiments, or the method section are
+    always included. Other entries follow, up to ``UNCITED_BIBLIOGRAPHY_LOOKUPS``.
+    Semantic Scholar is not queried: arXiv takes ``ti:`` and ``id:``, and
+    OpenAlex takes a title search plus a DOI filter.
+    """
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            _bibliography_rank(manuscript, entry),
+            int(entry.marker) if entry.marker.isdigit() else 10**9,
+            entry.marker,
+        ),
+    )
+    cited = [entry for entry in ranked if _bibliography_rank(manuscript, entry) < 3]
+    uncited = [entry for entry in ranked if _bibliography_rank(manuscript, entry) >= 3]
+    selected = [*cited, *uncited[:UNCITED_BIBLIOGRAPHY_LOOKUPS]]
+    queries: list[RelatedWorkQuery] = []
+    index = 0
+    for entry in selected:
+        lookups: list[tuple[str, str, str]] = []
+        if entry.arxiv_id:
+            lookups.append(("arxiv", "arxiv_id", entry.arxiv_id))
+        if entry.title:
+            lookups.append(("arxiv", "title", entry.title))
+            lookups.append(("openalex", "title", entry.title))
+        if entry.doi:
+            lookups.append(("openalex", "doi", entry.doi))
+        for provider, lookup, text in lookups:
+            index += 1
+            queries.append(
+                RelatedWorkQuery(
+                    id=f"Q-cited-{index}",
+                    perspective=QueryPerspective.baselines,
+                    query=text,
+                    generated_from="manuscript_bibliography",
+                    metadata={
+                        "family": "cited_reference",
+                        "specificity": lookup,
+                        "outbound": "bibliography-metadata",
+                        "providers": [provider],
+                        "lookup": lookup,
+                        "marker": entry.marker,
+                        "cited_in_body": _bibliography_rank(manuscript, entry) < 3,
+                    },
+                )
+            )
+    return queries
 
 
 def _baseline_name(item: str) -> str:
@@ -1041,28 +1192,39 @@ def _apply_confirmations(
         confirmed = False
         reason = ""
         record = by_external.get(item.external_id) or by_title.get(_normalize_title(item.title))
-        if record is not None and record.confirmed and record.reason.strip():
-            confirmed = True
-            reason = record.reason.strip().splitlines()[0]
+        if record is not None and record.reason.strip():
+            reason = record.reason.strip()
+            confirmed = bool(record.confirmed)
         if hook is not None:
             accepted, why = hook(item)
-            if accepted and why.strip():
+            why_text = why.strip()
+            if accepted:
                 confirmed = True
-                reason = why.strip().splitlines()[0]
+                if why_text:
+                    reason = why_text
             else:
                 confirmed = False
-                reason = ""
+                reason = why_text
         if confirmed and reason:
             item.confirmed = True
-            item.confirmation_reason = reason[:240]
-            item.reason_en += f" Confirmed: {item.confirmation_reason}"
-            item.reason_zh += f"已确认：{item.confirmation_reason}"
+            item.confirmation_reason = reason
+            if reason not in item.reason_en:
+                item.reason_en += f" Confirmed: {reason}"
+            if reason not in item.reason_zh:
+                item.reason_zh += f"已确认：{reason}"
             continue
         item.required = False
         item.tier = "should-discuss"
         item.confirmed = False
-        item.reason_en += " The judging agent did not confirm it, so it is discussion-only."
-        item.reason_zh += "判断模型没有确认它，因此只作为讨论。"
+        if reason:
+            item.confirmation_reason = reason
+            if reason not in item.reason_en:
+                item.reason_en += f" {reason}"
+            if reason not in item.reason_zh:
+                item.reason_zh += f" {reason}"
+        else:
+            item.reason_en += " The judging agent did not confirm it, so it is discussion-only."
+            item.reason_zh += "判断模型没有确认它，因此只作为讨论。"
     return candidates
 
 
@@ -1239,6 +1401,9 @@ def _provider_sets(logs: Sequence[RetrievalLogEntry]) -> tuple[list[str], list[s
         if entry.status == "ok":
             if entry.provider not in successful:
                 successful.append(entry.provider)
+        elif entry.status == "skipped" and "already unavailable" not in entry.detail:
+            if entry.provider not in failed:
+                failed.append(entry.provider)
         elif entry.status in _DEGRADED_LOGS and entry.provider not in failed:
             failed.append(entry.provider)
     return successful, failed
@@ -2106,16 +2271,40 @@ def urllib_transport(url: str, timeout: float = 20.0) -> HttpResult:
         raise RetrievalFailure("offline", str(reason)) from exc
 
 
-def _search_url(provider: str, query: str, limit: int) -> str:
-    quoted = urllib.parse.quote(query)
+def _s2_authenticated() -> bool:
+    return bool(os.environ.get("S2_API_KEY", "").strip())
+
+
+def _search_url(provider: str, query: str, limit: int, *, lookup: str = "") -> str:
     if provider == "arxiv":
+        if lookup == "arxiv_id":
+            ident = urllib.parse.quote(query, safe="")
+            return (
+                "https://export.arxiv.org/api/query"
+                f"?search_query=id:{ident}&start=0&max_results={limit}"
+            )
+        if lookup == "title":
+            encoded = urllib.parse.quote(f'"{query}"', safe="")
+            return (
+                "https://export.arxiv.org/api/query"
+                f"?search_query=ti:{encoded}&start=0&max_results={limit}"
+            )
+        quoted = urllib.parse.quote(query)
         return (
             "https://export.arxiv.org/api/query"
             f"?search_query=all:{quoted}&start=0&max_results={limit}"
         )
     if provider == "openalex":
+        if lookup == "doi":
+            quoted = urllib.parse.quote(query, safe="")
+            return f"https://api.openalex.org/works?filter=doi:{quoted}&per-page={limit}"
+        if lookup == "title":
+            quoted = urllib.parse.quote(query, safe="")
+            return f"https://api.openalex.org/works?filter=title.search:{quoted}&per-page={limit}"
+        quoted = urllib.parse.quote(query)
         return f"https://api.openalex.org/works?search={quoted}&per-page={limit}"
     if provider == "semantic_scholar":
+        quoted = urllib.parse.quote(query)
         fields = "title,year,venue,externalIds,abstract,url,publicationDate"
         return (
             "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -2127,10 +2316,17 @@ def _search_url(provider: str, query: str, limit: int) -> str:
 def _query_text_from_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     values = urllib.parse.parse_qs(parsed.query)
+    if "filter" in values and values["filter"]:
+        text = urllib.parse.unquote(values["filter"][0])
+        text = re.sub(r"^(?:title\.search|doi):", "", text)
+        return text.strip().strip('"')
     for key in ("search_query", "search", "query"):
         if key in values and values[key]:
             text = urllib.parse.unquote(values[key][0])
-            return re.sub(r"^all:", "", text)
+            text = re.sub(r"^(?:all|ti|id):", "", text)
+            return text.strip().strip('"')
+    if "id_list" in values and values["id_list"]:
+        return urllib.parse.unquote(values["id_list"][0]).strip()
     return ""
 
 
@@ -2139,10 +2335,57 @@ def clear_retrieval_cache() -> None:
     _RETRIEVAL_CACHE.clear()
 
 
-def _query_cache_key(provider: str, query: str) -> str:
+def _query_cache_key(provider: str, query: str, *, lookup: str = "") -> str:
     # Record that a key was present without storing the key itself.
-    auth = "\nauth" if provider == "semantic_scholar" and os.environ.get("S2_API_KEY", "").strip() else ""
-    return hashlib.sha256(f"{provider}\n{query}{auth}".encode("utf-8")).hexdigest()
+    # ``lookup`` keeps a name search distinct from a title, id, or DOI search.
+    auth = "\nauth" if provider == "semantic_scholar" and _s2_authenticated() else ""
+    return hashlib.sha256(f"{provider}\n{lookup}\n{query}{auth}".encode("utf-8")).hexdigest()
+
+
+def _cache_file(cache_dir: Path, key: str) -> Path:
+    return cache_dir / f"{key}.json"
+
+
+def _load_disk_cache(cache_dir: Path | None, key: str, now: float) -> HttpResult | None:
+    """Read one cached HTTP 200. Expired and unreadable files are misses."""
+    if cache_dir is None:
+        return None
+    path = _cache_file(cache_dir, key)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        stored_at = float(payload["stored_at"])
+        status = int(payload["status"])
+        body = base64.b64decode(payload["body"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if status != 200 or now - stored_at > RETRIEVAL_CACHE_TTL_SECONDS:
+        return None
+    headers = payload.get("headers") or {}
+    if not isinstance(headers, dict):
+        headers = {}
+    return HttpResult(status, body, {str(name): str(value) for name, value in headers.items()})
+
+
+def _store_disk_cache(cache_dir: Path | None, key: str, result: HttpResult, now: float) -> None:
+    """Persist one HTTP 200. The file name is the provider+query hash. The API key is not written."""
+    if cache_dir is None or result.status != 200:
+        return
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = _cache_file(cache_dir, key)
+    payload = {
+        "stored_at": now,
+        "status": result.status,
+        "body": base64.b64encode(result.body).decode("ascii"),
+        "headers": result.headers,
+    }
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _retry_after_seconds(result: HttpResult, *, cap: float) -> float:
@@ -2204,15 +2447,29 @@ def _fetch_provider(
     rng: random.Random,
     clock: Callable[[], float],
     s2_last: list[float | None],
+    cache_dir: Path | None = None,
+    cache_clock: Callable[[], float] | None = None,
+    budget_sleeper: Callable[[float], bool] | None = None,
 ) -> tuple[HttpResult | None, bool, RetrievalLogEntry | None]:
     """Fetch one query. HTTP 429 retries and does not abort the provider."""
-    key = _query_cache_key(provider, query.query)
+    lookup = str(query.metadata.get("lookup") or "")
+    key = _query_cache_key(provider, query.query, lookup=lookup)
     cached = _RETRIEVAL_CACHE.get(key)
     if cached is not None:
         return cached, True, None
-    url = _search_url(provider, query.query, limit)
+    stamp = cache_clock or time.time
+    disk = _load_disk_cache(cache_dir, key, stamp())
+    if disk is not None:
+        _RETRIEVAL_CACHE[key] = disk
+        return disk, True, None
+    url = _search_url(provider, query.query, limit, lookup=lookup)
     result: HttpResult | None = None
-    retries = _S2_429_RETRIES if provider == "semantic_scholar" else _MAX_429_RETRIES
+    if provider == "semantic_scholar" and _s2_authenticated():
+        retries = _S2_429_RETRIES
+    elif provider == "semantic_scholar":
+        retries = S2_UNAUTH_RETRIES
+    else:
+        retries = _MAX_429_RETRIES
     for attempt in range(retries + 1):
         if provider == "semantic_scholar":
             _pace_semantic_scholar(s2_last, sleeper, clock)
@@ -2229,10 +2486,15 @@ def _fetch_provider(
         if attempt == retries:
             break
         delay = _rate_limit_delay(provider, attempt, result, rng)
-        if delay > 0:
+        if delay <= 0:
+            continue
+        if budget_sleeper is None:
             sleeper(delay)
+        elif not budget_sleeper(delay):
+            break
     if result is not None and result.status == 200:
         _RETRIEVAL_CACHE[key] = result
+        _store_disk_cache(cache_dir, key, result, stamp())
     return result, False, None
 
 
@@ -2248,6 +2510,8 @@ def live_search(
     sleeper: Callable[[float], None] | None = None,
     rng: random.Random | None = None,
     clock: Callable[[], float] | None = None,
+    cache_dir: Path | None = None,
+    cache_clock: Callable[[], float] | None = None,
 ) -> tuple[list[RawHit], list[RetrievalLogEntry]]:
     hits: list[RawHit] = []
     logs: list[RetrievalLogEntry] = []
@@ -2258,7 +2522,23 @@ def live_search(
     now = clock or time.monotonic
     s2_last: list[float | None] = [None]
     for provider in providers:
+        spent = [0.0]
+
+        def budget_sleeper(seconds: float, _spent: list[float] = spent) -> bool:
+            room = S2_UNAUTH_BUDGET_SECONDS - _spent[0]
+            if room <= 0:
+                return False
+            take = min(seconds, room)
+            if take > 0:
+                pause(take)
+            _spent[0] += take
+            return take == seconds
+
+        unauth_s2 = provider == "semantic_scholar" and not _s2_authenticated()
         for query in queries:
+            targets = query.metadata.get("providers")
+            if isinstance(targets, list) and targets and provider not in targets:
+                continue
             if provider in blocked:
                 logs.append(_log(provider, "skipped", "provider already unavailable", query.id))
                 continue
@@ -2274,6 +2554,9 @@ def live_search(
                 rng=entropy,
                 clock=now,
                 s2_last=s2_last,
+                cache_dir=cache_dir,
+                cache_clock=cache_clock,
+                budget_sleeper=budget_sleeper if unauth_s2 else None,
             )
             if failure is not None:
                 logs.append(failure)
@@ -2282,14 +2565,26 @@ def live_search(
                 continue
             assert result is not None
             if result.status == 429:
-                logs.append(
-                    _log(
-                        provider,
-                        "rate_limited",
-                        f"HTTP 429 after {_S2_429_RETRIES if provider == 'semantic_scholar' else _MAX_429_RETRIES} retries; continuing with later queries",
-                        query.id,
+                if unauth_s2:
+                    logs.append(
+                        _log(
+                            provider,
+                            "skipped",
+                            f"HTTP 429 without S2_API_KEY after {S2_UNAUTH_RETRIES} retries; skipping this provider",
+                            query.id,
+                        )
                     )
-                )
+                    blocked.add(provider)
+                else:
+                    retries = _S2_429_RETRIES if provider == "semantic_scholar" else _MAX_429_RETRIES
+                    logs.append(
+                        _log(
+                            provider,
+                            "rate_limited",
+                            f"HTTP 429 after {retries} retries; continuing with later queries",
+                            query.id,
+                        )
+                    )
                 continue
             if result.status == 503:
                 logs.append(_log(provider, "rate_limited", "HTTP 503; stopping this provider", query.id))
@@ -2587,24 +2882,28 @@ def run_related_work_search(
     confirmation_adapter_params: dict[str, Any] | None = None,
     confirmation_scratch: Path | None = None,
     network_policy: str = "deny",
+    cache_dir: Path | None = None,
+    cache_clock: Callable[[], float] | None = None,
 ) -> RelatedWorkJudgment:
     if mode not in {"agent", "live", "off"}:
         raise ValueError("mode must be agent, live, or off")
     profile = deadlines or load_venue_deadlines(venue_key)
     formulation = derive_formulation(manuscript)
+    entries = parse_bibliography(manuscript)
     method_names = (
         named_methods_from_manuscript(manuscript, limit=named_method_limit) if formulation.complete else []
     )
     queries = generate_search_queries(formulation, method_names)
+    if formulation.complete:
+        queries.extend(cited_reference_queries(manuscript, entries))
     allow = allow_tokens(formulation)
     named = {
         _normalize_title(query.query)
         for query in queries
-        if query.metadata.get("family") == "named_method"
+        if query.metadata.get("family") in {"named_method", "cited_reference"}
     }
     for query in queries:
         assert_outbound_safe(query.query, manuscript, allow, named=named)
-    entries = parse_bibliography(manuscript)
     experiments = parse_experiments(manuscript)
     logs: list[RetrievalLogEntry] = []
     hits: list[RawHit] = []
@@ -2660,6 +2959,8 @@ def run_related_work_search(
                 sleeper=sleeper,
                 rng=rng,
                 clock=clock,
+                cache_dir=cache_dir,
+                cache_clock=cache_clock,
             )
             hits.extend(found)
             logs.extend(live_logs)
@@ -2807,11 +3108,12 @@ def render_related_work_section(judgment: RelatedWorkJudgment | dict[str, Any], 
         f"假设：{assumptions_zh}。设定：{form.setting}。"
     )
     search_en = (
-        "Queries use generic topic keywords only. Manuscript text was not sent to an external service. "
+        "Keyword queries use generic topic tokens. Bibliography lookups send a reference title, "
+        "arXiv id, or DOI only. Manuscript prose was not sent to an external service. "
         f"Submission deadline: {record.submission_deadline} ({record.venue_profile}). Status: {record.status}."
     )
     search_zh = (
-        f"检索式只用通用主题词。稿件正文没有发给外部服务。"
+        "关键词检索只用通用主题词。参考文献检索只发送题名、arXiv 编号或 DOI。稿件正文没有发给外部服务。"
         f"投稿截止日：{record.submission_deadline}（{record.venue_profile}）。状态：{record.status}。"
     )
     if record.status == "partial":
