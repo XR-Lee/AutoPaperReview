@@ -1271,6 +1271,7 @@ class ExecuteReviewParams(ParamsModel):
     timeout_seconds: float = Field(default=60, gt=0)
     temperature: float = 0
     json_object: bool = True
+    bilingual: bool = False
 
 
 class ExecuteReviewStage(StageHandler):
@@ -1296,6 +1297,7 @@ class ExecuteReviewStage(StageHandler):
                 "packet_routes": dict(sorted(params.packet_routes.items())),
                 "temperature": params.temperature,
                 "json_object": params.json_object,
+                "bilingual": params.bilingual,
             }
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
@@ -1352,6 +1354,7 @@ class ExecuteReviewStage(StageHandler):
                 "timeout_seconds": params.timeout_seconds,
                 "temperature": params.temperature,
                 "json_object": params.json_object,
+                "bilingual": params.bilingual,
                 "stage_signature": (
                     context.manifest.stage(context.stage.id).signature
                     if context.manifest.stage(context.stage.id) is not None

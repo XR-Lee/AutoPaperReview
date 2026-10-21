@@ -48,7 +48,7 @@ v0.1.5 ships the first executable slice of items 1–4 and 6–8: snapshot excer
 
 ### 1. The harness cannot produce a review
 
-`prompt_packet` still only writes Markdown. `execute_review` can now call the bundled OpenAI-compatible adapter, which snapshots the prompt and the raw response and validates them into canonical records. A schema failure retries once and then fails the stage. The synthetic example still imports a finished `review_input.json`. `doctor` lists `pydantic_ai` as an optional module; it is not an adapter.
+`prompt_packet` still only writes Markdown. `execute_review` can now call the bundled OpenAI-compatible adapter, which snapshots the prompt and the raw response and validates them into canonical records. A schema failure, including an empty contribution or ledger list, retries once and then fails the stage. A missing rating dimension after anchor resolution fails the same way. Transport errors retry separately. `bilingual = true` adds a `zh-Hans` pass. The synthetic example still imports a finished `review_input.json`. `doctor` lists `pydantic_ai` as an optional module; it is not an adapter.
 
 PydanticAI stays optional. The remaining hole in this item is a provider-neutral SDK and a seed field, not the absence of any model call.
 

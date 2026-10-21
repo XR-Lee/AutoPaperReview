@@ -71,9 +71,9 @@ autopaperreview run reviews/my-paper/review.toml
 
 ## Closed-loop model review
 
-`OpenAICompatibleAdapter` reads the prompt packets already written for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. `OpenAICompatibleVisionInspector` reads the visual packet and sends each rendered page image. The pipeline validates the JSON, retries a schema failure once, and rejects an item whose excerpt or page hash does not resolve. It does not fall back to the deterministic adapter.
+`OpenAICompatibleAdapter` reads the prompt packets already written for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. `OpenAICompatibleVisionInspector` reads the visual packet and sends each rendered page image. The pipeline validates the JSON and retries a schema failure once, including an empty contribution list or an empty ledger list. A dimension excerpt that does not resolve is retried once with that unresolved-anchor error; if any of the seven dimensions is still missing, the stage fails. It does not fall back to the deterministic adapter.
 
-Loopback is the default. A remote host also needs `allow_remote = true`, `network_policy = "allow"`, and a key in the environment. The key is not written to the run. A remote call sets `manuscript_left_machine` on the run manifest.
+Loopback is the default, including a hostname that resolves only to loopback addresses. A remote host also needs `allow_remote = true`, `network_policy = "allow"`, and a key in the environment. The key is not written to the run and is not part of the stage signature, so replacing it does not rerun a cached stage. A remote call sets `manuscript_left_machine` on the run manifest. Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times. Any other HTTP 4xx fails immediately.
 
 ```toml
 [project]
@@ -89,6 +89,7 @@ base_url = "http://127.0.0.1:8000/v1"
 model = "local-reviewer"
 api_key_env = "APR_MODEL_API_KEY"
 allow_remote = false
+bilingual = false
 judgments = ["contributions", "ledger", "dimensions", "fatal"]
 
 [stages.params.packet_routes]
@@ -115,7 +116,7 @@ packet_route = "M6"
 allow_remote = false
 ```
 
-To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. `rate` still applies `apr-iclr-cap-v1`. The chat adapter does not emit the overall score.
+Set `bilingual = true` on `execute_review` for one `zh-Hans` judgment over the accepted English fields. A bilingual `report` stage can then export. To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. `rate` still applies `apr-iclr-cap-v1`. The chat adapter does not emit the overall score.
 
 Raw requests and responses are stored under `stages/<id>/model/` with their SHA-256 on the stage record. A second `run` reuses that stage while the signature matches and does not call the endpoint again.
 

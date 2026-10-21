@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
+import socket
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
 
 from autopaperreview.adapters import FixtureReviewAdapter, ReviewRequest
+from autopaperreview.bilingual_coverage import package_bilingual_gaps
 from autopaperreview.hashing import sha256_file
 from autopaperreview.model_exec import (
+    ModelExecutionError,
+    ModelSession,
     OpenAICompatibleAdapter,
     OpenAICompatibleVisionInspector,
+    endpoint_kind,
 )
 from autopaperreview.models import ReviewRoute, RouteKind
 from autopaperreview.pipeline import PipelineError, run_pipeline
@@ -95,7 +102,8 @@ def _ledger() -> str:
     )
 
 
-def _dimensions() -> str:
+def _dimensions(excerpts: dict[str, str] | None = None) -> str:
+    overrides = excerpts or {}
     return json.dumps(
         {
             "dimensions": [
@@ -103,11 +111,49 @@ def _dimensions() -> str:
                     "dimension": name,
                     "clause_id": clause,
                     "rationale": f"The synthetic cohort sentence is the evidence for {name}.",
-                    "excerpt": COHORT,
+                    "excerpt": overrides.get(name, COHORT),
                 }
                 for name, clause in DIMENSIONS
             ]
         }
+    )
+
+
+def _zh_hans() -> str:
+    return json.dumps(
+        {
+            "issues": [
+                {
+                    "id": "I-C1",
+                    "title": "计数规则是列出的第一项贡献。",
+                    "evidence": "留出配对是该计数规则唯一被点名的测试。",
+                    "impact": "计数规则缺少标本级留出。",
+                    "required_action": "计数规则没有匹配设定的对照。",
+                    "paper_said": "稿件把计数规则列为第一项贡献。",
+                    "explanation": "计数规则缺少标本级留出，因此该贡献尚不完整。",
+                }
+            ],
+            "ledger": [
+                {
+                    "id": "C1",
+                    "claim": "计数规则是列出的第一项贡献。",
+                    "risk": "计数规则缺少标本级留出。",
+                },
+                {
+                    "id": "L1",
+                    "claim": "稿件报告了百分之九十五的准确率。",
+                    "risk": "单个准确率数字没有区间。",
+                },
+            ],
+            "dimensions": [
+                {
+                    "dimension": name,
+                    "rationale": f"合成队列这句话是{name}维度的证据。",
+                }
+                for name, _clause in DIMENSIONS
+            ],
+        },
+        ensure_ascii=False,
     )
 
 
@@ -207,6 +253,8 @@ def _write_project(
     allow_remote: bool = False,
     requires_network: bool = False,
     packet_routes: dict[str, str] | None = None,
+    bilingual: bool = False,
+    with_report: bool = False,
 ) -> Path:
     (workspace / "manuscript.txt").write_text(MANUSCRIPT, encoding="utf-8")
     prompts = workspace / "prompts"
@@ -218,6 +266,17 @@ def _write_project(
     routes = packet_routes or {name: "M7" for name in judgments}
     route_table = "\n".join(f'{name} = "{route}"' for name, route in routes.items())
     judgment_list = ", ".join(f'"{item}"' for item in judgments)
+    bilingual_line = "bilingual = true\n" if bilingual else ""
+    report = ""
+    if with_report:
+        report = """
+[[stages]]
+id = "report"
+type = "report"
+depends_on = ["review"]
+[stages.params]
+bilingual = true
+"""
     config = workspace / "review.toml"
     config.write_text(
         f"""
@@ -263,9 +322,10 @@ requires_network = {"true" if requires_network else "false"}
 network_scope = "fulltext"
 judgments = [{judgment_list}]
 timeout_seconds = 10
-
+{bilingual_line}
 [stages.params.packet_routes]
 {route_table}
+{report}
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -743,6 +803,378 @@ timeout_seconds = 10
             second = run_pipeline(config)
             self.assertTrue(second.stage("visual").metadata["cache_hit"])
             self.assertEqual(len(server.bodies), calls)
+
+
+class DimensionAnchorTests(unittest.TestCase):
+    def test_missing_dimension_retries_once_then_fails(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat(_dimensions({"originality": "this sentence was not written in the manuscript"}))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["dimensions"])
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            message = str(caught.exception)
+            self.assertIn("after one retry", message)
+            self.assertIn("originality", message)
+            self.assertIn("does not occur", message)
+            self.assertEqual(len(server.bodies), 2)
+            retry = json.loads(server.bodies[1].decode("utf-8"))["messages"][-1]["content"]
+            self.assertIn("originality", retry)
+            self.assertIn("does not occur", retry)
+            run_dir = next((workspace / ".runs").iterdir())
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            review = next(stage for stage in manifest["stages"] if stage["id"] == "review")
+            self.assertEqual(review["status"], "failed")
+            self.assertEqual(len(review["metadata"]["model_exchanges"]), 2)
+            self.assertFalse((run_dir / "stages" / "review" / "package.json").exists())
+
+    def test_dimension_retry_accepts_resolved_excerpts(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload
+            if attempt == 1:
+                return _chat(_dimensions({"originality": "this sentence was not written in the manuscript"}))
+            return _chat(_dimensions())
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["dimensions"])
+            manifest = run_pipeline(config)
+            self.assertEqual(len(server.bodies), 2)
+            package = json.loads(
+                (workspace / ".runs" / manifest.run_id / "stages" / "review" / "package.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(len(package["dimension_scores"]), 7)
+            self.assertEqual(manifest.stage("review").metadata["rejected_count"], 0)
+
+    def test_anchor_retry_does_not_start_another_schema_retry(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload
+            if attempt == 1:
+                return _chat(_dimensions({"writing_clarity": "this sentence was not written in the manuscript"}))
+            return _chat('{"wrong": true}')
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["dimensions"])
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertEqual(len(server.bodies), 2)
+            self.assertIn("after one retry", str(caught.exception))
+            self.assertIn("does not occur", str(caught.exception))
+            self.assertIn("writing_clarity", str(caught.exception))
+
+
+class EmptyListTests(unittest.TestCase):
+    def test_empty_contribution_list_is_a_schema_failure(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat('{"items":[]}')
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["contributions"])
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("after one retry", str(caught.exception))
+            self.assertEqual(len(server.bodies), 2)
+            self.assertIn("at least 1", server.bodies[1].decode("utf-8"))
+            self.assertIn("Validation failed", server.bodies[1].decode("utf-8"))
+
+    def test_empty_ledger_list_is_a_schema_failure(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat('{"ledger":[],"agenda":[]}')
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["ledger"])
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("after one retry", str(caught.exception))
+            self.assertEqual(len(server.bodies), 2)
+            self.assertIn("at least 1", server.bodies[1].decode("utf-8"))
+
+
+def _http_error(status: int, secret: str = "") -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "http://127.0.0.1:9/v1/chat/completions",
+        status,
+        f"status {status} {secret}".strip(),
+        hdrs=None,
+        fp=io.BytesIO(b'{"error":"status"}'),
+    )
+
+
+def _text_request(**metadata: Any) -> ReviewRequest:
+    values: dict[str, Any] = {
+        "base_url": "http://127.0.0.1:9/v1",
+        "model": "synthetic-reviewer",
+        "judgments": ["contributions"],
+        "packet_routes": {"contributions": "M7"},
+        "network_policy": "deny",
+        "allow_remote": False,
+        "api_key_env": "APR_MODEL_API_KEY",
+    }
+    values.update(metadata)
+    return ReviewRequest(
+        project_id="synthetic-transport",
+        manuscript=make_artifact(),
+        source_text=MANUSCRIPT,
+        packets={"M7": "contribution audit\n" + MANUSCRIPT},
+        routes=[
+            ReviewRoute(
+                id="M7",
+                name="Per-contribution evidence and retrieval audit",
+                kind=RouteKind.prompt,
+            )
+        ],
+        metadata=values,
+    )
+
+
+class TransportRetryTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        import time
+
+        ModelSession.sleeper = time.sleep
+
+    def test_retryable_transport_errors_back_off_then_succeed(self) -> None:
+        calls: list[int] = []
+        delays: list[float] = []
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del request, timeout
+            calls.append(1)
+            if len(calls) == 1:
+                raise TimeoutError("timed out")
+            if len(calls) == 2:
+                raise _http_error(429)
+            return _chat(_contribution())
+
+        ModelSession.sleeper = delays.append
+        adapter = OpenAICompatibleAdapter(transport)
+        with tempfile_dir() as scratch:
+            result = adapter.execute(_text_request(), scratch)
+            self.assertEqual(result.package.issues[0].id, "I-C1")
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(delays, [0.5, 1.0])
+            self.assertEqual([item["transport_try"] for item in result.metadata["model_exchanges"]], [1, 2, 3])
+            self.assertEqual({item["attempt"] for item in result.metadata["model_exchanges"]}, {1})
+            _exchange_hashes_match(scratch, result.metadata["model_exchanges"])
+
+    def test_other_4xx_fails_immediately(self) -> None:
+        calls: list[int] = []
+        delays: list[float] = []
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del request, timeout
+            calls.append(1)
+            raise _http_error(400, SECRET)
+
+        ModelSession.sleeper = delays.append
+        adapter = OpenAICompatibleAdapter(transport)
+        with tempfile_dir() as scratch:
+            with mock.patch.dict(os.environ, {"APR_MODEL_API_KEY": SECRET}):
+                with self.assertRaises(ModelExecutionError) as caught:
+                    adapter.execute(_text_request(), scratch)
+            self.assertEqual(calls, [1])
+            self.assertEqual(delays, [])
+            self.assertIn("HTTP 400", str(caught.exception))
+            self.assertNotIn("transport retries", str(caught.exception))
+            self.assertNotIn(SECRET, str(caught.exception))
+            _assert_secret_absent(scratch)
+
+    def test_transport_retries_do_not_consume_the_schema_retry(self) -> None:
+        calls: list[int] = []
+        delays: list[float] = []
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del timeout
+            calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.URLError("connection refused")
+            content = json.loads(request.data.decode("utf-8"))["messages"][-1]["content"]
+            if "Validation failed" in content:
+                return _chat(_contribution())
+            return _chat("not-json")
+
+        ModelSession.sleeper = delays.append
+        adapter = OpenAICompatibleAdapter(transport)
+        with tempfile_dir() as scratch:
+            result = adapter.execute(_text_request(), scratch)
+            self.assertEqual(result.package.issues[0].id, "I-C1")
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(delays, [0.5])
+            self.assertEqual([item["attempt"] for item in result.metadata["model_exchanges"]], [1, 1, 2])
+
+    def test_transport_failure_stops_after_two_retries(self) -> None:
+        calls: list[int] = []
+        delays: list[float] = []
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del request, timeout
+            calls.append(1)
+            raise _http_error(503)
+
+        ModelSession.sleeper = delays.append
+        adapter = OpenAICompatibleAdapter(transport)
+        with tempfile_dir() as scratch:
+            with self.assertRaises(ModelExecutionError) as caught:
+                adapter.execute(_text_request(), scratch)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(delays, [0.5, 1.0])
+            self.assertIn("after 2 transport retries", str(caught.exception))
+            self.assertIn("HTTP 503", str(caught.exception))
+            self.assertEqual(len(json.loads((scratch / "model" / "exchanges.json").read_text())["model_exchanges"]), 3)
+
+
+class BilingualJudgmentTests(unittest.TestCase):
+    def test_zh_hans_pass_lets_bilingual_export_succeed(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            if _judgment_name(payload) == "zh-Hans":
+                return _chat(_zh_hans())
+            return _closed_loop_reply(payload, 1)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal"],
+                bilingual=True,
+                with_report=True,
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts["zh-Hans"], 1)
+            review = manifest.stage("review")
+            assert review is not None
+            names = [item["judgment"] for item in review.metadata["model_exchanges"]]
+            self.assertEqual(names, ["contributions", "ledger", "dimensions", "fatal", "zh-Hans"])
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            _exchange_hashes_match(stage_dir, review.metadata["model_exchanges"])
+            package_path = stage_dir / "package.json"
+            from autopaperreview.models import ReviewPackage
+
+            package = ReviewPackage.model_validate_json(package_path.read_text(encoding="utf-8"))
+            self.assertEqual(package_bilingual_gaps(package, ["en", "zh-Hans"]), [])
+            self.assertIn("计数规则", package.issues[0].title.get("zh-Hans") or "")
+            report = (workspace / ".runs" / manifest.run_id / "stages" / "report" / "review_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("zh-Hans", report)
+            self.assertIn("计数规则", report)
+            calls = len(server.bodies)
+            second = run_pipeline(config)
+            self.assertTrue(second.stage("review").metadata["cache_hit"])
+            self.assertEqual(second.stage("review").signature, review.signature)
+            self.assertEqual(len(server.bodies), calls)
+
+    def test_zh_hans_schema_failure_retries_once(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            if _judgment_name(payload) == "zh-Hans":
+                return _chat('{"issues":[],"ledger":[],"dimensions":[]}')
+            return _chat(_contribution())
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions"],
+                bilingual=True,
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("after one retry", str(caught.exception))
+            self.assertEqual(server.counts["contributions"], 1)
+            self.assertEqual(server.counts["zh-Hans"], 2)
+            self.assertIn("Validation failed", server.bodies[-1].decode("utf-8"))
+            self.assertIn("I-C1", server.bodies[-1].decode("utf-8"))
+
+    def test_replacing_the_api_key_does_not_rerun_the_stage(self) -> None:
+        with ChatServer(_closed_loop_reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["contributions"])
+            with mock.patch.dict(os.environ, {"APR_MODEL_API_KEY": SECRET}):
+                first = run_pipeline(config)
+            calls = len(server.bodies)
+            with mock.patch.dict(os.environ, {"APR_MODEL_API_KEY": "apr-other-key-111"}):
+                second = run_pipeline(config)
+            self.assertEqual(second.stage("review").signature, first.stage("review").signature)
+            self.assertTrue(second.stage("review").metadata["cache_hit"])
+            self.assertEqual(len(server.bodies), calls)
+
+
+class DnsClassificationTests(unittest.TestCase):
+    def test_hostname_that_resolves_only_to_loopback_is_loopback(self) -> None:
+        def fake(host: str, port: object, *args: object, **kwargs: object) -> list[Any]:
+            del port, args, kwargs
+            table = {
+                "loopback.test": [("127.0.0.1", 0)],
+                "mixed.test": [("127.0.0.1", 0), ("203.0.113.5", 0)],
+            }
+            if host not in table:
+                raise socket.gaierror("failed")
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", item) for item in table[host]]
+
+        with mock.patch("autopaperreview.model_exec.socket.getaddrinfo", side_effect=fake) as looked:
+            self.assertEqual(endpoint_kind("http://loopback.test/v1"), "loopback")
+            self.assertEqual(endpoint_kind("http://mixed.test/v1"), "remote")
+            self.assertEqual(endpoint_kind("http://missing.test/v1"), "remote")
+            looked.reset_mock()
+            self.assertEqual(endpoint_kind("http://127.0.0.1:9/v1"), "loopback")
+            self.assertEqual(endpoint_kind("http://localhost:9/v1"), "loopback")
+            looked.assert_not_called()
+
+    def test_dns_loopback_does_not_require_allow_remote(self) -> None:
+        calls: list[str] = []
+
+        def fake(host: str, port: object, *args: object, **kwargs: object) -> list[Any]:
+            del host, port, args, kwargs
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del timeout
+            calls.append(request.full_url)
+            return _chat(_contribution())
+
+        adapter = OpenAICompatibleAdapter(transport)
+        with mock.patch("autopaperreview.model_exec.socket.getaddrinfo", side_effect=fake):
+            with tempfile_dir() as scratch:
+                result = adapter.execute(
+                    _text_request(base_url="http://loopback.test/v1"),
+                    scratch,
+                )
+        self.assertEqual(result.metadata["egress"], "loopback")
+        self.assertFalse(result.metadata["manuscript_left_machine"])
+        self.assertEqual(calls, ["http://loopback.test/v1/chat/completions"])
+
+    def test_mixed_or_failed_resolution_stays_remote(self) -> None:
+        calls: list[str] = []
+
+        def fake(host: str, port: object, *args: object, **kwargs: object) -> list[Any]:
+            del port, args, kwargs
+            if host == "missing.test":
+                raise socket.gaierror("failed")
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.5", 0)),
+            ]
+
+        def transport(request: Any, timeout: float) -> bytes:
+            del request, timeout
+            calls.append("sent")
+            return _chat(_contribution())
+
+        adapter = OpenAICompatibleAdapter(transport)
+        with mock.patch("autopaperreview.model_exec.socket.getaddrinfo", side_effect=fake):
+            with tempfile_dir() as scratch:
+                with self.assertRaises(PermissionError) as mixed:
+                    adapter.execute(_text_request(base_url="http://mixed.test/v1"), scratch)
+                with self.assertRaises(PermissionError) as missing:
+                    adapter.execute(_text_request(base_url="http://missing.test/v1"), scratch)
+        self.assertIn("allow_remote", str(mixed.exception))
+        self.assertIn("allow_remote", str(missing.exception))
+        self.assertEqual(calls, [])
 
 
 class tempfile_dir:

@@ -133,22 +133,25 @@ The adapter reads the `prompt_packet` files already produced for the run. It cal
 
 | Judgment | What the model returns | What the pipeline enforces |
 |---|---|---|
-| `contributions` | One item per listed contribution, with an exact excerpt | The excerpt must occur in the manuscript or a retrieved snapshot. Otherwise the item is rejected. |
-| `ledger` | Ledger claims and agenda questions | Same excerpt rule. An agenda item that cites a rejected claim is rejected. |
-| `dimensions` | All seven SAR dimensions, each with a `sar_bands_v1` clause id and an excerpt | The numeric score is the clause. An excerpt that does not resolve drops that dimension. `rate` still requires all seven. |
+| `contributions` | At least one listed contribution, with an exact excerpt | The excerpt must occur in the manuscript or a retrieved snapshot. Otherwise the item is rejected. An empty list is a schema failure. |
+| `ledger` | At least one ledger claim, plus agenda questions | Same excerpt rule. An agenda item that cites a rejected claim is rejected. An empty ledger list is a schema failure. |
+| `dimensions` | All seven SAR dimensions, each with a `sar_bands_v1` clause id and an excerpt | The numeric score is the clause. If any excerpt does not resolve, the stage retries once with that unresolved-anchor error. If any of the seven is still missing, `execute_review` fails. |
 | `fatal` | `fatal_class` for issue ids the pipeline assigned (`I-<contribution id>`) | An unknown issue id is rejected. `rate` applies the cap. |
+| `zh-Hans` | Simplified Chinese for the accepted issue, ledger, and dimension fields | Optional. Set `bilingual = true`. The same schema retry and stored hashes apply. Strings must contain Chinese characters and match the accepted ids. |
 | visual page | `VisualFinding` records, with the page image attached for a multimodal model | The page-image hash and bbox must match the rendered PNG. A caption restatement fails validation. |
 
 `OpenAICompatibleVisionInspector` is the visual path. It uses the same client from `visual_inspect`, after `render_pages`, and reads the visual route's prompt packet.
 
-Invalid JSON or a schema mismatch is retried once. The retry appends the validation error. A second failure fails the stage. The adapter does not substitute deterministic output.
+Invalid JSON or a schema mismatch is retried once. The retry appends the validation error. A second failure fails the stage. An empty contribution list or an empty ledger list is that kind of schema failure. The adapter does not substitute deterministic output.
 
-Every request and response is stored under `stages/<id>/model/` as the bytes that were sent and received. Each file's SHA-256 is listed on the stage record in `model_exchanges`. The API key is not part of those bytes. A successful stage is reused when its signature matches, so the endpoint is not called again. The signature includes the packet hashes, model name, and endpoint. It does not include the key.
+Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times (three attempts) with a 0.5s then 1s backoff. Any other HTTP 4xx fails on the first response. Transport retries do not consume the schema retry. Each transport try is stored with its own SHA-256.
+
+Every request and response is stored under `stages/<id>/model/` as the bytes that were sent and received. Each file's SHA-256 is listed on the stage record in `model_exchanges`. The API key is not part of those bytes. A successful stage is reused when its signature matches, so the endpoint is not called again. The signature includes the packet hashes, model name, endpoint, and `bilingual`. It does not include the API key value. Replacing the key in the environment does not change the signature and does not rerun a cached stage.
 
 Egress is separate from the project network policy:
 
-- `127.0.0.0/8`, `::1`, and `localhost` are loopback. They are allowed while `network_policy` is `deny`. A key is optional.
-- Any other host is remote. The stage must set `allow_remote = true`, the project must set `network_policy = "allow"`, and `api_key_env` must be set in the environment. The run manifest then sets `manuscript_left_machine` to true.
+- `127.0.0.0/8`, `::1`, and `localhost` (including `*.localhost`) are loopback. A hostname that is not an address is resolved, and it is loopback only when every resolved address is loopback. Loopback is allowed while `network_policy` is `deny`. A key is optional.
+- Resolution failure, or any non-loopback address, is remote. The stage must set `allow_remote = true`, the project must set `network_policy = "allow"`, and `api_key_env` must be set in the environment. The run manifest then sets `manuscript_left_machine` to true.
 - A `base_url` must not carry a userinfo, query, or fragment. Put the key only in the environment variable.
 
 Fixture JSON (`FixtureReviewAdapter`, `AgentFindingsInspector`) stays an equal path: packets are written, and a person or agent writes schema JSON from outside the process. Select that adapter when the model should not be called from `run`.
@@ -169,6 +172,7 @@ base_url = "http://127.0.0.1:8000/v1"
 model = "local-reviewer"
 api_key_env = "APR_MODEL_API_KEY"
 allow_remote = false
+bilingual = false
 judgments = ["contributions", "ledger", "dimensions", "fatal"]
 
 [stages.params.packet_routes]
@@ -188,7 +192,7 @@ model = "local-vision"
 packet_route = "M6"
 ```
 
-A remote endpoint adds `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. `rate` still computes the venue bin. The model does not emit the overall score.
+A remote endpoint adds `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. Set `bilingual = true` to add the `zh-Hans` pass so a bilingual report can export. `rate` still computes the venue bin. The model does not emit the overall score.
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
@@ -212,7 +216,7 @@ The default network policy is `deny`; projects may opt into `metadata_only` or `
 
 Manuscript text, author identities, prompts, model responses, credentials, and reviewer identities are sensitive. They must not be placed in telemetry attributes, source control, or release manifests. Optional adapters should use least-privilege filesystem and network access and should snapshot any external response used as evidence.
 
-The bundled chat adapter snapshots each raw request and response inside the run directory. It sends manuscript text off the machine only for a non-loopback URL when `allow_remote` is set and the project network policy is `allow`. That fact is stored on the run manifest as `manuscript_left_machine`. API keys stay in the environment and are redacted from stored exchanges and error strings.
+The bundled chat adapter snapshots each raw request and response inside the run directory. It sends manuscript text off the machine only for a non-loopback URL when `allow_remote` is set and the project network policy is `allow`. A hostname that resolves only to loopback stays on the machine. That remote fact is stored on the run manifest as `manuscript_left_machine`. API keys stay in the environment and are redacted from stored exchanges and error strings. The key value is not part of the stage signature.
 
 ## Portability and reproducibility
 

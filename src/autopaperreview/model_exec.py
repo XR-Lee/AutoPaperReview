@@ -9,11 +9,16 @@ are contributions, ledger and agenda items, the seven rating dimensions, and
 fatal classification. `OpenAICompatibleVisionInspector` is the `visual_inspect`
 entry point and sends rendered page images to the same chat API.
 
-Loopback endpoints are allowed by default. Any other host is remote: the stage
-must set `allow_remote`, the project network policy must be `allow`, and the
-configured environment variable must hold an API key. The key is sent as a
-bearer token and is never written to the request body, the stage metadata, or
-an error string.
+Loopback endpoints are allowed by default. A hostname that resolves only to
+loopback addresses is loopback. Any other host is remote: the stage must set
+`allow_remote`, the project network policy must be `allow`, and the configured
+environment variable must hold an API key. The key is sent as a bearer token
+and is never written to the request body, the stage metadata, or an error
+string. The key value is not part of the stage signature.
+
+Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two
+times, with a 0.5s then 1s backoff. Any other HTTP 4xx fails immediately.
+Those transport retries are separate from the one schema retry.
 """
 
 from __future__ import annotations
@@ -22,12 +27,17 @@ import base64
 import ipaddress
 import json
 import os
+import socket
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, model_validator
+
+from .i18n import script_matches
 
 from .adapters import ReviewRequest, ReviewResult, _merge_literature
 from .hashing import sha256_bytes
@@ -58,6 +68,9 @@ from .visual import VisualPageRequest
 Transport = Callable[[urllib.request.Request, float], bytes]
 
 TEXT_JUDGMENTS = ("contributions", "ledger", "dimensions", "fatal")
+TRANSPORT_RETRIES = 2
+TRANSPORT_BACKOFF_SECONDS = (0.5, 1.0)
+_UNRESOLVED_ANCHOR = "excerpt does not occur in the manuscript or a retrieved snapshot"
 _HINTS: dict[str, tuple[str, ...]] = {
     "contributions": ("contribution",),
     "ledger": ("ledger", "agenda", "closed-book", "closed_book"),
@@ -91,7 +104,7 @@ class ContributionItem(StrictPayload):
 
 
 class ContributionJudgment(StrictPayload):
-    items: list[ContributionItem] = Field(default_factory=list)
+    items: list[ContributionItem] = Field(default_factory=list, min_length=1)
 
     @model_validator(mode="after")
     def unique_ids(self) -> "ContributionJudgment":
@@ -116,7 +129,7 @@ class AgendaItem(StrictPayload):
 
 
 class LedgerJudgment(StrictPayload):
-    ledger: list[LedgerItem] = Field(default_factory=list)
+    ledger: list[LedgerItem] = Field(default_factory=list, min_length=1)
     agenda: list[AgendaItem] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -176,22 +189,99 @@ class VisualJudgment(StrictPayload):
     findings: list[VisualFinding] = Field(default_factory=list)
 
 
+def _require_zh(value: str, label: str) -> None:
+    if not script_matches(value, "zh-Hans"):
+        raise ValueError(f"{label} must contain Simplified Chinese text")
+
+
+class ZhIssueText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    title: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    impact: str = Field(min_length=1)
+    required_action: str = Field(min_length=1)
+    paper_said: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def chinese_fields(self) -> "ZhIssueText":
+        for name in ("title", "evidence", "impact", "required_action", "paper_said", "explanation"):
+            _require_zh(getattr(self, name), f"{self.id}.{name}")
+        return self
+
+
+class ZhLedgerText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    claim: str = Field(min_length=1)
+    risk: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def chinese_fields(self) -> "ZhLedgerText":
+        _require_zh(self.claim, f"{self.id}.claim")
+        _require_zh(self.risk, f"{self.id}.risk")
+        return self
+
+
+class ZhDimensionText(StrictPayload):
+    dimension: SarDimension
+    rationale: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def chinese_rationale(self) -> "ZhDimensionText":
+        _require_zh(self.rationale, f"{self.dimension.value}.rationale")
+        return self
+
+
+class ZhHansJudgment(StrictPayload):
+    issues: list[ZhIssueText] = Field(default_factory=list)
+    ledger: list[ZhLedgerText] = Field(default_factory=list)
+    dimensions: list[ZhDimensionText] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def matches_accepted(self, info: ValidationInfo) -> "ZhHansJudgment":
+        expected = None if info.context is None else info.context.get("zh_hans")
+        if not isinstance(expected, dict):
+            return self
+        _same_ids([item.id for item in self.issues], list(expected.get("issue_ids") or []), "issue")
+        _same_ids([item.id for item in self.ledger], list(expected.get("ledger_ids") or []), "ledger")
+        _same_ids(
+            [item.dimension.value for item in self.dimensions],
+            list(expected.get("dimensions") or []),
+            "dimension",
+        )
+        return self
+
+
+def _same_ids(found: list[str], expected: list[str], label: str) -> None:
+    if len(found) != len(set(found)):
+        raise ValueError(f"zh-Hans {label} ids must be unique")
+    if set(found) != set(expected):
+        missing = [item for item in expected if item not in set(found)]
+        extra = [item for item in found if item not in set(expected)]
+        raise ValueError(
+            f"zh-Hans {label} ids must match accepted records; missing {missing}; extra {extra}"
+        )
+
+
 _SCHEMAS: dict[str, type[BaseModel]] = {
     "contributions": ContributionJudgment,
     "ledger": LedgerJudgment,
     "dimensions": DimensionJudgment,
     "fatal": FatalJudgment,
     "visual": VisualJudgment,
+    "zh-Hans": ZhHansJudgment,
 }
 
 _SCHEMA_HINTS = {
     "contributions": (
         '{"items":[{"id":"C1","claim":"...","excerpt":"exact substring",'
-        '"tests":"...","comparator":"...","missing":"...","severity":"major","confidence":0.5}]}'
+        '"tests":"...","comparator":"...","missing":"...","severity":"major","confidence":0.5}]} '
+        "items must contain at least one contribution."
     ),
     "ledger": (
         '{"ledger":[{"id":"L1","claim":"...","excerpt":"exact substring","risk":"..."}],'
-        '"agenda":[{"id":"Q1","question":"...","claim_ids":["C1","L1"]}]}'
+        '"agenda":[{"id":"Q1","question":"...","claim_ids":["C1","L1"]}]} '
+        "ledger must contain at least one claim."
     ),
     "dimensions": (
         '{"dimensions":[{"dimension":"experimental_soundness","clause_id":"es-4",'
@@ -209,11 +299,46 @@ _SCHEMA_HINTS = {
         '"page_image_sha256":"<sha256 of this page image>","kind":"legibility",'
         '"visible_mark":"a mark that is not the caption"}]}'
     ),
+    "zh-Hans": (
+        '{"issues":[{"id":"I-C1","title":"...","evidence":"...","impact":"...",'
+        '"required_action":"...","paper_said":"...","explanation":"..."}],'
+        '"ledger":[{"id":"C1","claim":"...","risk":"..."}],'
+        '"dimensions":[{"dimension":"experimental_soundness","rationale":"..."}]} '
+        "Write Simplified Chinese. Every string must contain Chinese characters. "
+        "Ids and dimension names must match the accepted English records."
+    ),
 }
 
 
+def _resolves_only_to_loopback(host: str) -> bool:
+    """True when every DNS answer is a loopback address. Failure is not loopback."""
+    previous = socket.getdefaulttimeout()
+    try:
+        socket.setdefaulttimeout(2.0)
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    finally:
+        socket.setdefaulttimeout(previous)
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            return False
+        ip = str(sockaddr[0]).split("%", 1)[0]
+        try:
+            addresses.append(ipaddress.ip_address(ip))
+        except ValueError:
+            return False
+    return bool(addresses) and all(address.is_loopback for address in addresses)
+
+
 def endpoint_kind(base_url: str) -> str:
-    """Return `loopback` or `remote`. Remote is every host that is not loopback."""
+    """Return `loopback` or `remote`. Remote is every host that is not loopback.
+
+    A hostname is resolved. It is loopback only when every address is loopback.
+    A resolution failure, or any non-loopback address, is remote.
+    """
     parts = urlsplit(base_url.strip())
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise ValueError("model base_url must be an http or https URL with a host")
@@ -226,7 +351,8 @@ def endpoint_kind(base_url: str) -> str:
         if ipaddress.ip_address(host).is_loopback:
             return "loopback"
     except ValueError:
-        pass
+        if _resolves_only_to_loopback(host):
+            return "loopback"
     return "remote"
 
 
@@ -387,10 +513,45 @@ def select_packet(
     return best_key, packets[best_key]
 
 
+def _schema_key(judgment: str) -> str:
+    if judgment in _SCHEMA_HINTS:
+        return judgment
+    return judgment.split("-", 1)[0]
+
+
+def _http_status(exc: BaseException) -> int | None:
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _transport_disposition(exc: BaseException) -> str:
+    """Return `retry` or `fail`. Schema retries are a separate path."""
+    status = _http_status(exc)
+    if status is not None:
+        if status == 429 or 500 <= status <= 599:
+            return "retry"
+        return "fail"
+    if isinstance(exc, (TimeoutError, socket.timeout, ConnectionError, urllib.error.URLError, OSError)):
+        return "retry"
+    return "fail"
+
+
+def _error_body(exc: BaseException) -> bytes:
+    read = getattr(exc, "read", None)
+    if not callable(read):
+        return b""
+    try:
+        payload = read()
+    except Exception:
+        return b""
+    return payload if isinstance(payload, bytes) else b""
+
+
 class ModelSession:
     """One stage's chat calls, raw files, and egress note."""
 
     transport: Transport | None = None
+    sleeper: Callable[[float], None] = time.sleep
 
     def __init__(
         self,
@@ -423,6 +584,10 @@ class ModelSession:
         self.exchanges: list[dict[str, Any]] = []
         self.rejected: list[dict[str, str]] = []
         self._checked = False
+        self._attempt_counts: dict[str, int] = {}
+        self._last_messages: list[dict[str, Any]] = []
+        self._last_text = ""
+        self._last_judgment = ""
 
     def authorize(self) -> None:
         if self._checked:
@@ -482,20 +647,27 @@ class ModelSession:
         secret = _env_secret(self.api_key_env)
         raise ModelExecutionError(_redact(message, secret), stage_metadata=self.metadata())
 
+    def _next_attempt(self, judgment: str) -> int:
+        attempt = self._attempt_counts.get(judgment, 0) + 1
+        self._attempt_counts[judgment] = attempt
+        return attempt
+
     def complete(
         self,
         judgment: str,
         user_content: str | list[dict[str, Any]],
         schema: type[BaseModel],
+        *,
+        context: dict[str, Any] | None = None,
     ) -> BaseModel:
         self.authorize()
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_prompt(judgment.split("-", 1)[0])},
+            {"role": "system", "content": _system_prompt(_schema_key(judgment))},
             {"role": "user", "content": user_content},
         ]
-        text = self._exchange(judgment, messages, attempt=1)
+        text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
         try:
-            return schema.model_validate(_parse_object(text))
+            model = schema.model_validate(_parse_object(text), context=context)
         except (ValueError, ValidationError) as first_error:
             messages = [
                 *messages,
@@ -508,14 +680,48 @@ class ModelSession:
                     ),
                 },
             ]
-            retry = self._exchange(judgment, messages, attempt=2)
+            text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
             try:
-                return schema.model_validate(_parse_object(retry))
+                model = schema.model_validate(_parse_object(text), context=context)
             except (ValueError, ValidationError) as second_error:
                 self.fail(
                     f"judgment {judgment} failed schema validation after one retry: {_brief(second_error)}"
                 )
-        raise AssertionError("unreachable")
+        self._last_messages = messages
+        self._last_text = text
+        self._last_judgment = judgment
+        return model
+
+    def continue_with_error(
+        self,
+        judgment: str,
+        error: str,
+        schema: type[BaseModel],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> BaseModel:
+        """One follow-up after a schema-valid payload still failed a pipeline check.
+
+        This is the single retry for that check. It does not start another schema retry.
+        """
+        self.authorize()
+        if self._last_judgment != judgment or not self._last_messages:
+            self.fail(f"judgment {judgment} has no completed exchange to retry")
+        messages = [
+            *self._last_messages,
+            {"role": "assistant", "content": self._last_text[:8000]},
+            {"role": "user", "content": error},
+        ]
+        text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
+        try:
+            model = schema.model_validate(_parse_object(text), context=context)
+        except (ValueError, ValidationError) as exc:
+            self.fail(
+                f"judgment {judgment} failed schema validation after one retry: {_brief(exc)}\n{error}"
+            )
+        self._last_messages = messages
+        self._last_text = text
+        return model
 
     def _exchange(self, judgment: str, messages: list[dict[str, Any]], *, attempt: int) -> str:
         secret = _env_secret(self.api_key_env)
@@ -539,40 +745,75 @@ class ModelSession:
         )
         directory = self.scratch / "model"
         directory.mkdir(parents=True, exist_ok=True)
-        request_name = f"{_safe_name(judgment)}.attempt-{attempt}.request.json"
-        response_name = f"{_safe_name(judgment)}.attempt-{attempt}.response.json"
-        request_path = directory / request_name
-        response_path = directory / response_name
-        request_path.write_bytes(wire)
-        try:
-            raw = self._transport(request, self.timeout_seconds)
-        except ModelExecutionError:
-            raise
-        except Exception as exc:
-            detail = _redact(f"{type(exc).__name__}: {exc}", secret)[:500]
-            response_path.write_bytes(_redact_bytes(detail.encode("utf-8"), secret))
-            self._record_exchange(judgment, attempt, request_name, response_name, request_path, response_path)
-            self.fail(f"judgment {judgment} request failed: {detail}")
-        if not isinstance(raw, bytes):
-            self.fail(f"judgment {judgment} transport did not return bytes")
-        stored = _redact_bytes(raw, secret)
-        response_path.write_bytes(stored)
-        self._record_exchange(judgment, attempt, request_name, response_name, request_path, response_path)
-        try:
-            payload = json.loads(stored.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            return f"invalid chat envelope: {exc}"
-        if not isinstance(payload, dict):
-            return "invalid chat envelope: response is not an object"
-        try:
-            return _message_text(payload)
-        except ValueError as exc:
-            return str(exc)
+        tries = TRANSPORT_RETRIES + 1
+        last_detail = "request failed"
+        for index in range(tries):
+            transport_try = index + 1
+            request_name, response_name = _exchange_names(judgment, attempt, transport_try)
+            request_path = directory / request_name
+            response_path = directory / response_name
+            request_path.write_bytes(wire)
+            try:
+                raw = self._transport(request, self.timeout_seconds)
+            except ModelExecutionError:
+                raise
+            except Exception as exc:
+                detail = _redact(f"{type(exc).__name__}: {exc}", secret)[:500]
+                status = _http_status(exc)
+                if status is not None:
+                    detail = f"HTTP {status}: {detail}"
+                body = _redact_bytes(_error_body(exc), secret) or detail.encode("utf-8")
+                response_path.write_bytes(_redact_bytes(body, secret))
+                self._record_exchange(
+                    judgment,
+                    attempt,
+                    transport_try,
+                    request_name,
+                    response_name,
+                    request_path,
+                    response_path,
+                )
+                last_detail = detail
+                retryable = _transport_disposition(exc) == "retry"
+                if not retryable or index == tries - 1:
+                    if retryable and index > 0:
+                        self.fail(
+                            f"judgment {judgment} request failed after {TRANSPORT_RETRIES} "
+                            f"transport retries: {last_detail}"
+                        )
+                    self.fail(f"judgment {judgment} request failed: {last_detail}")
+                type(self).sleeper(TRANSPORT_BACKOFF_SECONDS[index])
+                continue
+            if not isinstance(raw, bytes):
+                self.fail(f"judgment {judgment} transport did not return bytes")
+            stored = _redact_bytes(raw, secret)
+            response_path.write_bytes(stored)
+            self._record_exchange(
+                judgment,
+                attempt,
+                transport_try,
+                request_name,
+                response_name,
+                request_path,
+                response_path,
+            )
+            try:
+                payload = json.loads(stored.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return f"invalid chat envelope: {exc}"
+            if not isinstance(payload, dict):
+                return "invalid chat envelope: response is not an object"
+            try:
+                return _message_text(payload)
+            except ValueError as exc:
+                return str(exc)
+        self.fail(f"judgment {judgment} request failed after {TRANSPORT_RETRIES} transport retries: {last_detail}")
 
     def _record_exchange(
         self,
         judgment: str,
         attempt: int,
+        transport_try: int,
         request_name: str,
         response_name: str,
         request_path: Path,
@@ -582,6 +823,7 @@ class ModelSession:
             {
                 "judgment": judgment,
                 "attempt": attempt,
+                "transport_try": transport_try,
                 "request_sha256": sha256_bytes(request_path.read_bytes()),
                 "response_sha256": sha256_bytes(response_path.read_bytes()),
                 "request_path": f"model/{request_name}",
@@ -593,6 +835,13 @@ class ModelSession:
 def _safe_name(judgment: str) -> str:
     cleaned = "".join(character if character.isalnum() or character in "-._" else "-" for character in judgment)
     return cleaned or "judgment"
+
+
+def _exchange_names(judgment: str, attempt: int, transport_try: int) -> tuple[str, str]:
+    stem = _safe_name(judgment)
+    suffix = "" if transport_try == 1 else f".transport-{transport_try}"
+    base = f"{stem}.attempt-{attempt}{suffix}"
+    return f"{base}.request.json", f"{base}.response.json"
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -632,6 +881,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
         "judgments": judgments,
         "packet_routes": {str(key): str(value) for key, value in packet_routes.items()},
         "stage_signature": str(metadata.get("stage_signature") or ""),
+        "bilingual": bool(metadata.get("bilingual")),
     }
 
 
@@ -686,7 +936,11 @@ class OpenAICompatibleAdapter:
         session = ModelSession(
             scratch=scratch,
             transport=self._transport,
-            **{key: value for key, value in settings.items() if key not in {"judgments", "packet_routes"}},
+            **{
+                key: value
+                for key, value in settings.items()
+                if key not in {"judgments", "packet_routes", "bilingual"}
+            },
         )
         snapshots = list(request.literature.retrieved_snapshots) if request.literature else []
         try:
@@ -708,6 +962,168 @@ class OpenAICompatibleAdapter:
                 "issue_count": len(package.issues),
             },
         )
+
+
+def _anchor_retry_message(missing: list[tuple[str, str]]) -> str:
+    lines = [
+        "Unresolved evidence anchors. Return one JSON object with all seven dimensions.",
+        "Each excerpt must be an exact substring of the manuscript or a retrieved snapshot.",
+    ]
+    lines.extend(f"- {name}: {reason}" for name, reason in missing)
+    return "\n".join(lines)
+
+
+def _dimension_rows(
+    payload: DimensionJudgment,
+    *,
+    request: ReviewRequest,
+    snapshots: list[Any],
+    route_id: str | None,
+) -> tuple[list[DimensionScore], list[EvidenceRecord], list[tuple[str, str]]]:
+    scores: list[DimensionScore] = []
+    evidence: list[EvidenceRecord] = []
+    missing: list[tuple[str, str]] = []
+    for item in payload.dimensions:
+        anchor = locate_excerpt(
+            item.excerpt,
+            manuscript=request.source_text,
+            manuscript_sha=request.manuscript.sha256,
+            snapshots=snapshots,
+        )
+        if anchor is None:
+            missing.append((item.dimension.value, _UNRESOLVED_ANCHOR))
+            continue
+        evidence_id = f"E-{item.dimension.value}"
+        evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
+        scores.append(
+            DimensionScore(
+                dimension=item.dimension,
+                score=clause_score(item.clause_id),
+                rationale=_localized(item.rationale),
+                evidence_ids=[evidence_id],
+                route_ids=_route_ids(route_id, request.routes),
+                rubric_id=RUBRIC_ID,
+                clause_id=item.clause_id,
+                metadata={"judgment": "dimensions"},
+            )
+        )
+    return scores, evidence, missing
+
+
+def _translated(text: LocalizedText, zh: str) -> LocalizedText:
+    updated = dict(text.translations)
+    updated["zh-Hans"] = zh.strip()
+    return text.model_copy(update={"translations": updated})
+
+
+def _zh_user_content(
+    issues: list[ReviewIssue],
+    claims: list[LedgerClaim],
+    scores: list[DimensionScore],
+) -> str:
+    payload = {
+        "issues": [
+            {
+                "id": issue.id,
+                "title": issue.title.primary,
+                "evidence": issue.evidence.primary,
+                "impact": issue.impact.primary,
+                "required_action": issue.required_action.primary,
+                "paper_said": issue.first_read.paper_said.primary if issue.first_read else issue.title.primary,
+                "explanation": issue.first_read.explanation.primary if issue.first_read else issue.impact.primary,
+            }
+            for issue in issues
+        ],
+        "ledger": [
+            {
+                "id": claim.id,
+                "claim": claim.claim.primary,
+                "risk": claim.risk.primary if claim.risk else claim.claim.primary,
+            }
+            for claim in claims
+        ],
+        "dimensions": [
+            {
+                "dimension": score.dimension.value,
+                "rationale": score.rationale.primary if score.rationale else score.dimension.value,
+            }
+            for score in scores
+        ],
+    }
+    return (
+        "Translate each English field into Simplified Chinese (zh-Hans). "
+        "Keep every id and dimension name. Return one JSON object.\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+
+
+def _apply_zh_hans(
+    session: ModelSession,
+    issues: list[ReviewIssue],
+    claims: list[LedgerClaim],
+    scores: list[DimensionScore],
+) -> tuple[list[ReviewIssue], list[LedgerClaim], list[DimensionScore]]:
+    context = {
+        "zh_hans": {
+            "issue_ids": [issue.id for issue in issues],
+            "ledger_ids": [claim.id for claim in claims],
+            "dimensions": [score.dimension.value for score in scores],
+        }
+    }
+    payload = session.complete(
+        "zh-Hans",
+        _zh_user_content(issues, claims, scores),
+        ZhHansJudgment,
+        context=context,
+    )
+    assert isinstance(payload, ZhHansJudgment)
+    issue_text = {item.id: item for item in payload.issues}
+    claim_text = {item.id: item for item in payload.ledger}
+    score_text = {item.dimension: item for item in payload.dimensions}
+    translated_issues: list[ReviewIssue] = []
+    for issue in issues:
+        item = issue_text[issue.id]
+        first = issue.first_read
+        if first is not None:
+            first = first.model_copy(
+                update={
+                    "paper_said": _translated(first.paper_said, item.paper_said),
+                    "explanation": _translated(first.explanation, item.explanation),
+                }
+            )
+        translated_issues.append(
+            issue.model_copy(
+                update={
+                    "title": _translated(issue.title, item.title),
+                    "evidence": _translated(issue.evidence, item.evidence),
+                    "impact": _translated(issue.impact, item.impact),
+                    "required_action": _translated(issue.required_action, item.required_action),
+                    "first_read": first,
+                }
+            )
+        )
+    translated_claims: list[LedgerClaim] = []
+    for claim in claims:
+        item = claim_text[claim.id]
+        translated_claims.append(
+            claim.model_copy(
+                update={
+                    "claim": _translated(claim.claim, item.claim),
+                    "risk": _translated(claim.risk, item.risk) if claim.risk is not None else None,
+                }
+            )
+        )
+    translated_scores: list[DimensionScore] = []
+    for score in scores:
+        item = score_text[score.dimension]
+        translated_scores.append(
+            score.model_copy(
+                update={
+                    "rationale": _translated(score.rationale, item.rationale) if score.rationale else None,
+                }
+            )
+        )
+    return translated_issues, translated_claims, translated_scores
 
 
 def _run_judgments(
@@ -848,34 +1264,34 @@ def _run_judgments(
         route_id, packet = packet_for("dimensions")
         payload = session.complete("dimensions", packet, DimensionJudgment)
         assert isinstance(payload, DimensionJudgment)
-        for item in payload.dimensions:
-            anchor = locate_excerpt(
-                item.excerpt,
-                manuscript=request.source_text,
-                manuscript_sha=request.manuscript.sha256,
+        score_rows, evidence_rows, missing = _dimension_rows(
+            payload,
+            request=request,
+            snapshots=snapshots,
+            route_id=route_id,
+        )
+        if missing:
+            payload = session.continue_with_error(
+                "dimensions",
+                _anchor_retry_message(missing),
+                DimensionJudgment,
+            )
+            assert isinstance(payload, DimensionJudgment)
+            score_rows, evidence_rows, missing = _dimension_rows(
+                payload,
+                request=request,
                 snapshots=snapshots,
+                route_id=route_id,
             )
-            if anchor is None:
-                session.reject(
-                    "dimensions",
-                    item.dimension.value,
-                    "excerpt does not occur in the manuscript or a retrieved snapshot",
+            if missing:
+                for name, reason in missing:
+                    session.reject("dimensions", name, reason)
+                detail = "; ".join(f"{name}: {reason}" for name, reason in missing)
+                session.fail(
+                    "judgment dimensions failed after one retry: unresolved anchors: " + detail
                 )
-                continue
-            evidence_id = f"E-{item.dimension.value}"
-            evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
-            scores.append(
-                DimensionScore(
-                    dimension=item.dimension,
-                    score=clause_score(item.clause_id),
-                    rationale=_localized(item.rationale),
-                    evidence_ids=[evidence_id],
-                    route_ids=_route_ids(route_id, request.routes),
-                    rubric_id=RUBRIC_ID,
-                    clause_id=item.clause_id,
-                    metadata={"judgment": "dimensions"},
-                )
-            )
+        scores.extend(score_rows)
+        evidence.extend(evidence_rows)
 
     if "fatal" in judgments:
         _route_id, packet = packet_for("fatal")
@@ -909,6 +1325,9 @@ def _run_judgments(
                 )
             )
         issues = revised
+
+    if settings["bilingual"]:
+        issues, claims, scores = _apply_zh_hans(session, issues, claims, scores)
 
     source = SourceRecord(
         id="S1",
