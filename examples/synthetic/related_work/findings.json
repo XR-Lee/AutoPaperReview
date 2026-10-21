@@ -1,0 +1,54 @@
+{
+  "queries_run": [
+    "monocular specimen pose estimation rgb frames trajectory"
+  ],
+  "candidates": [
+    {
+      "title": "A Public Baseline for Synthetic Pose Estimation",
+      "doi": "10.0000/synthetic.pose.2022",
+      "query_ids": ["Q-standard_baselines-1"],
+      "provider_payload": "{\"status\":\"ok\",\"message\":{\"DOI\":\"10.0000/synthetic.pose.2022\",\"title\":[\"A Public Baseline for Synthetic Pose Estimation\"],\"container-title\":[\"Synthetic Vision Workshop\"],\"issued\":{\"date-parts\":[[2022,6,1]]},\"abstract\":\"Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation. Pose error in millimeters is measured on a sequence-level holdout.\"}}"
+    },
+    {
+      "title": "Depth Aware Pose Estimator",
+      "arxiv_id": "0000.00002",
+      "query_ids": ["Q-alternative_formulation-1"],
+      "provider_payload": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><entry><id>http://arxiv.org/abs/0000.00002v1</id><published>2023-04-02T00:00:00Z</published><title>Depth Aware Pose Estimator</title><summary>Temporal fusion for monocular specimen pose estimation on a sequence-level holdout. Pose error in millimeters from monocular RGB frames.</summary></entry></feed>"
+    },
+    {
+      "title": "Adjacent Camera Localization Survey",
+      "arxiv_id": "0000.00003",
+      "query_ids": ["Q-adjacent_tasks-1"],
+      "provider_payload": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><entry><id>http://arxiv.org/abs/0000.00003v1</id><published>2021-02-02T00:00:00Z</published><title>Adjacent Camera Localization Survey</title><summary>A survey of camera localization systems for mobile robots. This adjacent task delimits scope.</summary></entry></feed>"
+    },
+    {
+      "title": "Concurrent Pose Note",
+      "arxiv_id": "0000.00004",
+      "query_ids": ["Q-same_problem-1"],
+      "provider_payload": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><entry><id>http://arxiv.org/abs/0000.00004v1</id><published>2026-10-02T00:00:00Z</published><title>Concurrent Pose Note</title><summary>Temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation. Pose error in millimeters on a sequence-level holdout.</summary></entry></feed>"
+    },
+    {
+      "title": "Ghost Paper That Does Not Exist",
+      "arxiv_id": "0000.00999",
+      "query_ids": ["Q-same_problem-1"]
+    },
+    {
+      "title": "Not The Resolved Title",
+      "arxiv_id": "0000.00005",
+      "query_ids": ["Q-same_problem-1"],
+      "provider_payload": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><entry><id>http://arxiv.org/abs/0000.00005v1</id><published>2020-01-01T00:00:00Z</published><title>Resolved Synthetic Note</title><summary>A metadata record whose title does not match the drop.</summary></entry></feed>"
+    }
+  ],
+  "confirmations": [
+    {
+      "external_id": "doi:10.0000/synthetic.pose.2022",
+      "confirmed": true,
+      "reason": "Same pose task with temporal fusion on a sequence-level holdout."
+    },
+    {
+      "external_id": "arxiv:0000.00002",
+      "confirmed": true,
+      "reason": "Same pose task with temporal fusion and millimeter pose error."
+    }
+  ]
+}

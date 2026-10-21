@@ -1,0 +1,69 @@
+schema_version = 1
+
+[project]
+id = "synthetic-related-work"
+title = "Synthetic related-work search"
+source = "manuscript.txt"
+run_root = ".runs"
+default_language = "en"
+network_policy = "deny"
+copy_source = false
+
+[[stages]]
+id = "ingest"
+type = "ingest"
+
+[[stages]]
+id = "related_work"
+type = "related_work_search"
+depends_on = ["ingest"]
+[stages.params]
+venue = "iclr2027"
+mode = "agent"
+findings_path = "findings.json"
+requires_network = false
+network_scope = "metadata"
+
+[[stages]]
+id = "ledger"
+type = "ledger"
+depends_on = ["ingest"]
+
+[[stages]]
+id = "novelty"
+type = "novelty"
+depends_on = ["related_work", "ledger"]
+[stages.params]
+require_related_work = true
+
+[[stages]]
+id = "bands"
+type = "execute_review"
+depends_on = ["ingest"]
+[stages.params]
+adapter = "autopaperreview.adapters:FixtureReviewAdapter"
+fixture_path = "bands.json"
+
+[[stages]]
+id = "consensus"
+type = "consensus"
+depends_on = ["bands", "related_work", "novelty"]
+[stages.params]
+min_independent_routes = 1
+
+[[stages]]
+id = "rate"
+type = "rate"
+depends_on = ["consensus"]
+[stages.params]
+confidence = 3
+
+[[stages]]
+id = "report"
+type = "report"
+depends_on = ["rate"]
+[stages.params]
+bilingual = true
+require_first_read_on_major = true
+require_quote_on_major = true
+require_related_work_confirmation = true

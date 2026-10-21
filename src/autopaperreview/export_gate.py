@@ -37,6 +37,7 @@ class ExportGateParams(BaseModel):
     require_fatal_class_on_critical: bool = False
     require_decision_relevant_on_major: bool = False
     require_page_image_on_visual: bool = False
+    require_related_work_confirmation: bool = False
 
 
 def _is_major(issue: ReviewIssue) -> bool:
@@ -177,6 +178,12 @@ def export_gate_errors(
         unhashed = [item.id for item in package.visual_findings if not item.page_image_sha256]
         if unhashed:
             errors.append(f"export gate requires page image hashes; missing: {unhashed}")
+    if params.require_related_work_confirmation:
+        related = package.metadata.get("related_work")
+        if isinstance(related, dict) and related.get("confirmation") == "awaiting_confirmation":
+            errors.append(
+                "export gate requires related-work confirmation; status is awaiting_confirmation"
+            )
     errors.extend(
         first_read_gate_errors(
             package,

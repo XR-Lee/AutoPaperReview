@@ -34,6 +34,7 @@ CLASS_CAP: dict[FatalClass, int] = {
     FatalClass.leakage: 3,
     FatalClass.wrong_metric: 3,
     FatalClass.unfair_baseline: 5,
+    FatalClass.missing_closest_neighbor: 6,
     FatalClass.unsupported_claim: 5,
     FatalClass.format_desk_reject: 1,
 }
@@ -46,6 +47,10 @@ CLASS_CEILING: dict[FatalClass, dict[SarDimension, float]] = {
     FatalClass.leakage: {SarDimension.experimental_soundness: 2.0},
     FatalClass.wrong_metric: {SarDimension.experimental_soundness: 4.0},
     FatalClass.unfair_baseline: {SarDimension.experimental_soundness: 4.0},
+    FatalClass.missing_closest_neighbor: {
+        SarDimension.prior_work_contextualization: 2.0,
+        SarDimension.originality: 4.0,
+    },
     FatalClass.unsupported_claim: {SarDimension.claims_supported: 4.0},
     FatalClass.format_desk_reject: {},
 }
@@ -133,7 +138,38 @@ def active_caps(package: ReviewPackage) -> list[ActiveCap]:
         if check.passed or check.fatal_class is None:
             continue
         add(check.id, check.fatal_class, require_blocking=False, blocking=None)
-    return caps
+    return _drop_incomplete_related_work_caps(package, caps)
+
+
+def _drop_incomplete_related_work_caps(package: ReviewPackage, caps: list[ActiveCap]) -> list[ActiveCap]:
+    """A failed provider must not create or strengthen a related-work cap.
+
+    ``complete`` keeps caps the search emitted. ``partial`` keeps only
+    ``missing_closest_neighbor`` verified by a provider that succeeded.
+    ``degraded`` and ``not_run`` drop every related-work cap.
+    """
+    if "related_work" not in package.metadata:
+        return caps
+    from pydantic import ValidationError
+
+    from .related_work import RelatedWorkJudgment, related_work_cap_applies
+
+    raw = package.metadata.get("related_work")
+    try:
+        judgment = RelatedWorkJudgment.model_validate(raw)
+    except ValidationError:
+        blocked = {
+            issue.id
+            for issue in package.issues
+            if issue.metadata.get("source") == "related_work_search"
+        }
+        return [cap for cap in caps if cap.record_id not in blocked]
+    blocked = {
+        issue.id
+        for issue in package.issues
+        if issue.metadata.get("source") == "related_work_search" and not related_work_cap_applies(judgment, issue)
+    }
+    return [cap for cap in caps if cap.record_id not in blocked]
 
 
 def _apply_ceilings(bands: dict[SarDimension, float], package: ReviewPackage, caps: list[ActiveCap]) -> None:
@@ -160,10 +196,30 @@ def effective_venue_cap(caps: list[ActiveCap]) -> int | None:
     return min(item.cap for item in caps)
 
 
+def _read_related_work_comparison(package: ReviewPackage) -> dict[str, Any] | None:
+    """Read baselines against closest neighbours before originality is scored."""
+    raw = package.metadata.get("related_work")
+    if not raw:
+        return None
+    from .related_work import related_work_comparison
+
+    comparison = related_work_comparison(raw)
+    if comparison is None:
+        return None
+    baselines = comparison.get("baselines")
+    neighbours = comparison.get("closest_neighbours")
+    if not isinstance(baselines, dict) or not isinstance(neighbours, list):
+        raise ValueError(
+            "originality scoring requires the related-work comparison of baselines and closest neighbours"
+        )
+    return comparison
+
+
 def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
+    comparison = _read_related_work_comparison(package)
     bands = _bands(package)
     caps = active_caps(package)
     _apply_ceilings(bands, package, caps)
@@ -204,6 +260,20 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
         "exemption_ids": exemption_ids,
         "bands_after_ceiling": {dimension.value: bands[dimension] for dimension in bands},
         "visual_status": visual_status,
+        "related_work_comparison": (
+            None
+            if comparison is None
+            else {
+                "status": comparison["status"],
+                "failed_providers": list(comparison.get("failed_providers") or []),
+                "baseline_counts": {
+                    name: len(values) for name, values in comparison["baselines"].items()
+                },
+                "closest_neighbour_ids": [
+                    item["id"] for item in comparison["closest_neighbours"] if item.get("id")
+                ],
+            }
+        ),
         "formula": (
             "raw = min(dot(weights, bands), min(claims, soundness) + 1); "
             "capped = min(raw, active caps); venue = snap_down onto 1/3/5/6/8/10"

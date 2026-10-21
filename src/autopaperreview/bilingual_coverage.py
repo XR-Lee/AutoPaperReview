@@ -73,7 +73,7 @@ def _is_structural(text: str) -> bool:
         return True
     if _HEADING.match(first) or _META_PREFIX.match(first) or _ID_QUOTE.match(first):
         return True
-    if first.startswith("|") or first.startswith("<a id="):
+    if first.startswith("|") or first.startswith(">") or first.startswith("<a id="):
         return True
     return False
 

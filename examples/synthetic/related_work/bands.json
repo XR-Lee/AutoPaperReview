@@ -1,0 +1,50 @@
+{
+  "manuscript": {
+    "recommendation_en": "Synthetic bands for a cap check. They are not a review of a manuscript.",
+    "recommendation_zh": "这些合成分数只用于上限检查，并不是对稿件的审稿意见。"
+  },
+  "sources": [
+    {
+      "id": "S-bands",
+      "type": "note",
+      "title": "Synthetic bands",
+      "path": "bands.json"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-bands",
+      "source_id": "S-bands",
+      "locator": "bands.json",
+      "claim": "Seven anchored bands at 8 for a synthetic cap check."
+    }
+  ],
+  "dimension_scores": [
+    {"dimension": "originality", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "importance_of_research_question", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "claims_supported", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "experimental_soundness", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "writing_clarity", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "community_value", "score": 8, "evidence_ids": ["E-bands"]},
+    {"dimension": "prior_work_contextualization", "score": 8, "evidence_ids": ["E-bands"]}
+  ],
+  "issues": [
+    {
+      "id": "I-bands",
+      "severity": "minor",
+      "category": "note",
+      "title_en": "Synthetic bands carry no fatal class.",
+      "title_zh": "合成分数不带致命类别。",
+      "location": "bands.json",
+      "evidence_en": "The bands are a fixture so rate can run. They are not a review of a manuscript.",
+      "evidence_zh": "这些分数只是夹具，用来让评分阶段运行，并不是对稿件的审稿意见。",
+      "impact_en": "No decision follows from this note.",
+      "impact_zh": "这条说明本身不构成决定。",
+      "required_action_en": "None.",
+      "required_action_zh": "无。",
+      "confidence": 0.2,
+      "evidence_ids": ["E-bands"],
+      "sources": ["S-bands"]
+    }
+  ]
+}
