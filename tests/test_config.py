@@ -69,6 +69,34 @@ class DagValidationTests(unittest.TestCase):
         )
         self.assertEqual([stage.id for stage in config.ordered_stages()], ["ingest", "consensus", "report"])
 
+    def test_novelty_and_rate_must_follow_related_work_search(self) -> None:
+        raw = config_with_stages(
+            [
+                {"id": "search", "type": "related_work_search"},
+                {"id": "novelty", "type": "novelty", "depends_on": ["ingest"]},
+                {"id": "ingest", "type": "ingest"},
+            ]
+        )
+        with self.assertRaisesRegex(ValidationError, "must depend on related_work_search"):
+            HarnessConfig.model_validate(raw)
+
+    def test_rate_may_depend_on_related_work_through_an_earlier_stage(self) -> None:
+        config = HarnessConfig.model_validate(
+            config_with_stages(
+                [
+                    {"id": "search", "type": "related_work_search", "depends_on": ["ingest"]},
+                    {"id": "ingest", "type": "ingest"},
+                    {"id": "consensus", "type": "consensus", "depends_on": ["search"]},
+                    {"id": "rate", "type": "rate", "depends_on": ["consensus"]},
+                    {"id": "novelty", "type": "novelty", "depends_on": ["search"]},
+                ]
+            )
+        )
+        self.assertEqual(
+            [stage.id for stage in config.ordered_stages()],
+            ["ingest", "search", "consensus", "novelty", "rate"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

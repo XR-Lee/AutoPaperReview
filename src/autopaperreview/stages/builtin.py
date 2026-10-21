@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
+from ..model_exec import TEXT_JUDGMENTS, public_base_url
 from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
@@ -163,13 +164,42 @@ def _enforce_network_declaration(context: StageContext, *, requires_network: boo
         )
 
 
+def _route_fingerprint(context: StageContext) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": route.id,
+            "name": route.name,
+            "kind": route.kind.value,
+            "prompt_version": route.prompt_version,
+            "manuscript_access": route.manuscript_access,
+            "network_access": route.network_access,
+            "model": route.model,
+        }
+        for route in context.loaded_config.config.routes
+    ]
+
+
 class IngestParams(ParamsModel):
     copy_source: bool | None = Field(default=None, alias="copy")
+    supplement: str | None = None
 
 
 class IngestStage(StageHandler):
     type_name = "ingest"
     params_model = IngestParams
+    reads_source = True
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = IngestParams.model_validate(context.stage.params)
+        copy = (
+            context.loaded_config.config.project.copy_source
+            if params.copy_source is None
+            else params.copy_source
+        )
+        material: dict[str, Any] = {"copy_source": copy}
+        if params.supplement:
+            material["supplement_sha256"] = sha256_file(context.loaded_config.resolve(params.supplement))
+        return material
 
     def run(self, context: StageContext) -> StageOutcome:
         params = IngestParams.model_validate(context.stage.params)
@@ -195,7 +225,27 @@ class IngestStage(StageHandler):
             }
         _write_json(descriptor, descriptor_artifact.model_dump(mode="json"))
         artifacts.append(_artifact(descriptor, context, "manuscript.descriptor"))
-        return StageOutcome(artifacts=artifacts, metadata={"copied": should_copy})
+        if params.supplement:
+            supplement_path = context.loaded_config.resolve(params.supplement)
+            if not supplement_path.is_file():
+                raise FileNotFoundError(f"supplement file does not exist: {supplement_path}")
+            copied_supplement = context.stage_dir / supplement_path.name
+            shutil.copy2(supplement_path, copied_supplement)
+            meta_path = context.stage_dir / "supplement.json"
+            _write_json(
+                meta_path,
+                {
+                    "filename": supplement_path.name,
+                    "sha256": sha256_file(copied_supplement),
+                    "source": params.supplement,
+                },
+            )
+            artifacts.append(_artifact(copied_supplement, context, "manuscript.supplement"))
+            artifacts.append(_artifact(meta_path, context, "manuscript.supplement.descriptor"))
+        return StageOutcome(
+            artifacts=artifacts,
+            metadata={"copied": should_copy, "supplement": bool(params.supplement)},
+        )
 
 
 class CommandParams(ParamsModel):
@@ -366,6 +416,7 @@ class ImportIssuesParams(ParamsModel):
 class ImportIssuesStage(StageHandler):
     type_name = "import_issues"
     params_model = ImportIssuesParams
+    reads_source = True
 
     def _input_path(self, context: StageContext) -> Path:
         params = ImportIssuesParams.model_validate(context.stage.params)
@@ -406,6 +457,7 @@ class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
     version = "5"
     params_model = PromptPacketParams
+    reads_source = True
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
         wanted = set(params.route_ids)
@@ -429,6 +481,11 @@ class PromptPacketStage(StageHandler):
         material: dict[str, Any] = {
             "prompt_hashes": prompt_hashes,
             "first_read_contract_sha256": digest_excerpt(contract),
+            "routes": [
+                item
+                for item in _route_fingerprint(context)
+                if not params.route_ids or item["id"] in set(params.route_ids)
+            ],
         }
         pdf = sibling_pdf(context.source_path)
         if pdf is not None:
@@ -708,6 +765,20 @@ class ConsensusStage(StageHandler):
                 seen_risks.add(key)
                 residual_risks.append(risk)
 
+        metadata = {
+            **first.metadata,
+            "consensus_rule": "exact-normalized-v1",
+            "input_package_count": len(packages),
+        }
+        related_payloads = [
+            package.metadata["related_work"]
+            for package in packages
+            if package.metadata.get("related_work")
+        ]
+        if len({hash_json(item) for item in related_payloads}) > 1:
+            raise ValueError("conflicting related_work judgments")
+        if related_payloads:
+            metadata["related_work"] = related_payloads[0]
         output = ReviewPackage(
             project_id=first.project_id,
             manuscript=context.manifest.source,
@@ -733,11 +804,7 @@ class ConsensusStage(StageHandler):
             cap_exemptions=list(exemption_by_id.values()),
             visual_findings=list(visual_by_id.values()),
             format_checks=list(format_by_id.values()),
-            metadata={
-                **first.metadata,
-                "consensus_rule": "exact-normalized-v1",
-                "input_package_count": len(packages),
-            },
+            metadata=metadata,
         )
         output = apply_contribution_audits(output)
         output_path = context.stage_dir / "consensus.json"
@@ -766,6 +833,7 @@ class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
     version = "4"
     params_model = LiteratureGroundingParams
+    reads_source = True
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:
         return LiteratureGroundingParams.model_validate(context.stage.params)
@@ -893,6 +961,7 @@ class ReportParams(ParamsModel):
     require_fatal_class_on_critical: bool = False
     require_decision_relevant_on_major: bool = False
     require_page_image_on_visual: bool = False
+    require_related_work_confirmation: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -907,8 +976,14 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "9"
+    version = "11"
     params_model = ReportParams
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        return {
+            "default_language": context.loaded_config.config.project.default_language,
+            "routes": _route_fingerprint(context),
+        }
 
     def _package(self, context: StageContext) -> ReviewPackage:
         for stage_id in reversed(context.stage.depends_on):
@@ -1018,6 +1093,7 @@ class LedgerStage(StageHandler):
     type_name = "ledger"
     version = "3"
     params_model = LedgerParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
         try:
@@ -1150,6 +1226,7 @@ class IntegrityStage(StageHandler):
     type_name = "integrity"
     version = "2"
     params_model = IntegrityParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
         try:
@@ -1208,15 +1285,17 @@ class IntegrityStage(StageHandler):
 
 
 class NoveltyParams(ParamsModel):
-    pass
+    require_related_work: bool = False
 
 
 class NoveltyStage(StageHandler):
     type_name = "novelty"
-    version = "1"
+    version = "2"
     params_model = NoveltyParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
+        params = NoveltyParams.model_validate(context.stage.params)
         try:
             text = context.source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
@@ -1225,12 +1304,42 @@ class NoveltyStage(StageHandler):
         ledger = _package_with(context, "ledger_claims")
         if literature is None or ledger is None:
             raise FileNotFoundError("novelty stage requires ledger_claims and retrieved_snapshots")
+        from ..related_work import related_work_comparison
+
+        judgment = None
+        for package in _load_dependency_packages(context):
+            raw = package.metadata.get("related_work")
+            if raw:
+                judgment = raw
+                break
+        if params.require_related_work and judgment is None:
+            raise FileNotFoundError(
+                "novelty scoring requires the related-work comparison of baselines and closest neighbours"
+            )
+        comparison = related_work_comparison(judgment) if judgment is not None else None
         assessments = assess_novelty(
             claims=ledger.ledger_claims,
             snapshots=literature.retrieved_snapshots,
             evidence=literature.evidence,
             manuscript_text=text,
+            comparison=comparison,
         )
+        comparison_record = None
+        if assessments and assessments[0].metadata.get("related_work_comparison"):
+            comparison_record = assessments[0].metadata["related_work_comparison"]
+        elif comparison is not None:
+            comparison_record = {
+                "status": comparison.get("status"),
+                "baseline_counts": {
+                    key: len(comparison["baselines"][key])
+                    for key in ("missing", "privileged", "different_task")
+                },
+                "closest_neighbour_ids": [
+                    item.get("id")
+                    for item in comparison["closest_neighbours"]
+                    if isinstance(item, dict) and item.get("id")
+                ],
+            }
         package = ReviewPackage(
             project_id=context.loaded_config.config.project.id,
             manuscript=context.manifest.source,
@@ -1241,7 +1350,12 @@ class NoveltyStage(StageHandler):
             ledger_claims=ledger.ledger_claims,
             agenda=ledger.agenda,
             novelty_assessments=assessments,
-            metadata={"novelty": {"assessment_count": len(assessments)}},
+            metadata={
+                "novelty": {
+                    "assessment_count": len(assessments),
+                    "related_work_comparison": comparison_record,
+                }
+            },
         )
         novelty_path = context.stage_dir / "novelty.json"
         package_path = context.stage_dir / "package.json"
@@ -1261,21 +1375,47 @@ class ExecuteReviewParams(ParamsModel):
     fixture_path: str | None = None
     requires_network: bool = False
     network_scope: str = "fulltext"
+    base_url: str | None = None
+    model: str | None = None
+    api_key_env: str = "APR_MODEL_API_KEY"
+    allow_remote: bool = False
+    judgments: list[str] = Field(default_factory=list)
+    packet_routes: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=60, gt=0)
+    temperature: float = 0
+    json_object: bool = True
+    bilingual: bool = False
 
 
 class ExecuteReviewStage(StageHandler):
     type_name = "execute_review"
     version = "1"
     params_model = ExecuteReviewParams
+    reads_source = True
 
     def _params(self, context: StageContext) -> ExecuteReviewParams:
         return ExecuteReviewParams.model_validate(context.stage.params)
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
         params = self._params(context)
-        material: dict[str, Any] = {"adapter": params.adapter}
+        material: dict[str, Any] = {
+            "adapter": params.adapter,
+            "routes": _route_fingerprint(context),
+        }
         if params.fixture_path:
             material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
+        if params.base_url or params.model or params.allow_remote or params.judgments or params.packet_routes:
+            material["model_execution"] = {
+                "base_url": None if params.base_url is None else public_base_url(params.base_url),
+                "model": params.model,
+                "allow_remote": params.allow_remote,
+                "api_key_env": params.api_key_env,
+                "judgments": list(params.judgments) or list(TEXT_JUDGMENTS),
+                "packet_routes": dict(sorted(params.packet_routes.items())),
+                "temperature": params.temperature,
+                "json_object": params.json_object,
+                "bilingual": params.bilingual,
+            }
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
             for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
@@ -1319,7 +1459,25 @@ class ExecuteReviewStage(StageHandler):
                 )
                 for route in context.loaded_config.config.routes
             ],
-            metadata={"network_scope": params.network_scope},
+            metadata={
+                "network_scope": params.network_scope,
+                "network_policy": context.loaded_config.config.project.network_policy.value,
+                "base_url": params.base_url,
+                "model": params.model,
+                "api_key_env": params.api_key_env,
+                "allow_remote": params.allow_remote,
+                "judgments": list(params.judgments),
+                "packet_routes": dict(params.packet_routes),
+                "timeout_seconds": params.timeout_seconds,
+                "temperature": params.temperature,
+                "json_object": params.json_object,
+                "bilingual": params.bilingual,
+                "stage_signature": (
+                    context.manifest.stage(context.stage.id).signature
+                    if context.manifest.stage(context.stage.id) is not None
+                    else ""
+                ),
+            },
         )
         adapter = load_review_adapter(params.adapter)
         result = adapter.execute(request, context.stage_dir)
@@ -1344,6 +1502,8 @@ class ExecuteReviewStage(StageHandler):
         )
 
 
+from .related_work_stage import RelatedWorkSearchStage
+
 BUILTIN_STAGE_HANDLERS = (
     IngestStage,
     CommandStage,
@@ -1357,5 +1517,6 @@ BUILTIN_STAGE_HANDLERS = (
     NoveltyStage,
     ExecuteReviewStage,
     ConsensusStage,
+    RelatedWorkSearchStage,
     ReportStage,
 )

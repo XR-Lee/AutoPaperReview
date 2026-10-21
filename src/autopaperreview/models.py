@@ -82,6 +82,7 @@ class FatalClass(str, Enum):
     leakage = "leakage"
     wrong_metric = "wrong_metric"
     unfair_baseline = "unfair_baseline"
+    missing_closest_neighbor = "missing_closest_neighbor"
     unsupported_claim = "unsupported_claim"
     format_desk_reject = "format_desk_reject"
 
@@ -101,6 +102,10 @@ class QueryPerspective(str, Enum):
     same_problem = "same_problem"
     related_techniques = "related_techniques"
     agenda = "agenda"
+    same_technique = "same_technique"
+    alternative_formulation = "alternative_formulation"
+    standard_baselines = "standard_baselines"
+    adjacent_tasks = "adjacent_tasks"
 
 
 class AnchorKind(str, Enum):
@@ -594,6 +599,7 @@ class VisualFinding(StrictModel):
 
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
     page: int = Field(ge=1)
+    page_id: str | None = None
     bbox: list[float]
     page_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     kind: VisualFindingKind

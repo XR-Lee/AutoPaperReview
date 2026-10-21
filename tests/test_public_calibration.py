@@ -11,10 +11,12 @@ from autopaperreview.adapters import AgentJudgmentAdapter, digest_packet_text
 from autopaperreview.models import ReviewPackage
 from autopaperreview.public_calibration import (
     AGENT_ADAPTER,
+    MODEL_ADAPTER,
     ChallengeRequired,
     PublicCalibrationError,
     ScoreRow,
     _resolve_adapter,
+    _write_project,
     assert_local_only,
     fetch_manifest,
     parse_rating,
@@ -207,8 +209,41 @@ class EndToEndTests(unittest.TestCase):
             # state is scored; run_cache still looks for the drop when state is scored
             waiting = run_cache(cache, mode="agent")
             self.assertEqual(waiting["awaiting_judgment"][0]["forum_id"], "SYNTHETIC-FORUM-001")
+            toml = (project / "review.toml").read_text(encoding="utf-8")
+            self.assertIn('type = "related_work_search"', toml)
+            self.assertIn('mode = "off"', toml)
+            self.assertIn('depends_on = ["consensus"]', toml)
 
         self.assertEqual(AGENT_ADAPTER, "autopaperreview.adapters:AgentJudgmentAdapter")
+
+    def test_openai_adapter_is_wired_into_the_run_config(self) -> None:
+        self.assertEqual(
+            _resolve_adapter("adapter", MODEL_ADAPTER),
+            MODEL_ADAPTER,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "paper"
+            destination.mkdir()
+            (destination / "manuscript.txt").write_text("synthetic manuscript\n", encoding="utf-8")
+            _write_project(
+                destination,
+                project_id="pub-synthetic",
+                phase="run",
+                adapter=MODEL_ADAPTER,
+                network_policy="deny",
+                requires_network=False,
+                related_work="off",
+                base_url="http://127.0.0.1:8000/v1",
+                model="local-reviewer",
+            )
+            toml = (destination / "project" / "review.toml").read_text(encoding="utf-8")
+            self.assertIn(MODEL_ADAPTER, toml)
+            self.assertIn('base_url = "http://127.0.0.1:8000/v1"', toml)
+            self.assertIn('model = "local-reviewer"', toml)
+            self.assertIn('dimensions = "M2"', toml)
+            self.assertIn('type = "related_work_search"', toml)
+            with self.assertRaises(PublicCalibrationError):
+                run_cache(Path(temporary) / "cache", mode="adapter", adapter=MODEL_ADAPTER)
 
 
 if __name__ == "__main__":

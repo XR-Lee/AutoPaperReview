@@ -183,6 +183,11 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
         adapter=args.adapter,
         network_policy=args.network_policy,
         requires_network=args.requires_network,
+        related_work=args.related_work,
+        base_url=args.base_url,
+        model=args.model_name,
+        api_key_env=args.api_key_env,
+        allow_remote=args.allow_remote,
     )
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
@@ -233,12 +238,19 @@ def command_doctor(args: argparse.Namespace) -> int:
                 "autopaperreview.adapters:DeterministicManuscriptAdapter",
                 "autopaperreview.adapters:FixtureReviewAdapter",
                 "autopaperreview.adapters:AgentJudgmentAdapter",
+                "autopaperreview.model_exec:OpenAICompatibleAdapter",
+            ],
+            "bundled_visual_inspectors": [
+                "autopaperreview.visual_agent:AgentFindingsInspector",
+                "autopaperreview.visual_agent:HostedVisionInspector",
+                "autopaperreview.model_exec:OpenAICompatibleVisionInspector",
             ],
             "optional_modules": optional_modules,
             "optional_commands": optional_commands,
             "notes": [
                 "Optional modules are not adapters. A stage plugin must convert their output into AutoPaperReview records.",
-                "execute_review calls a declared module:attribute adapter. The core does not call a model API.",
+                "execute_review calls a declared module:attribute adapter.",
+                "OpenAICompatibleAdapter calls an OpenAI-compatible chat endpoint. Loopback is allowed by default, including a hostname that resolves only to loopback. A remote endpoint needs allow_remote, network_policy = allow, and an env-var key. The key is not part of the stage signature. bilingual = true adds a zh-Hans pass. Fixture JSON and the deterministic adapter remain equal options.",
             ],
         }
     )
@@ -525,6 +537,11 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--cache", required=True)
     eval_run.add_argument("--mode", choices=("agent", "adapter"), default="agent")
     eval_run.add_argument("--adapter", help="module:attribute used when --mode adapter")
+    eval_run.add_argument("--base-url", help="OpenAI-compatible chat base URL")
+    eval_run.add_argument("--model", dest="model_name", help="model name sent to that endpoint")
+    eval_run.add_argument("--api-key-env", default="APR_MODEL_API_KEY")
+    eval_run.add_argument("--allow-remote", action="store_true")
+    eval_run.add_argument("--related-work", choices=("off", "agent", "live"), default="off")
     eval_run.add_argument("--network-policy", choices=("deny", "metadata_only", "allow"), default="deny")
     eval_run.add_argument("--requires-network", action="store_true")
     eval_run.set_defaults(func=command_calibrate_eval_run)

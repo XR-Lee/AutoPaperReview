@@ -38,6 +38,7 @@ LOCAL_CACHE_PREFIXES = ("workdir", "reviews", "papers", "uploads", ".autopaperre
 SPREAD_STDEV_FLOOR = 1.0
 SPREAD_UNIQUE_FLOOR = 3
 AGENT_ADAPTER = "autopaperreview.adapters:AgentJudgmentAdapter"
+MODEL_ADAPTER = "autopaperreview.model_exec:OpenAICompatibleAdapter"
 
 # Public venue listings used only when ``/notes?id=`` answers with a browser
 # challenge. These are venue names, not submission ids.
@@ -885,7 +886,26 @@ def _prompt_version(filename: str) -> str:
     return "1.1"
 
 
-def _write_project(destination: Path, *, project_id: str, phase: str, adapter: str, network_policy: str, requires_network: bool) -> None:
+def _toml_string(value: str) -> str:
+    if any(character in value for character in "\n\r\""):
+        raise PublicCalibrationError("TOML string values cannot contain quotes or newlines")
+    return f'"{value}"'
+
+
+def _write_project(
+    destination: Path,
+    *,
+    project_id: str,
+    phase: str,
+    adapter: str,
+    network_policy: str,
+    requires_network: bool,
+    related_work: str = "off",
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key_env: str = "APR_MODEL_API_KEY",
+    allow_remote: bool = False,
+) -> None:
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
     manuscript = (destination / "manuscript.txt").read_text(encoding="utf-8")
@@ -942,16 +962,77 @@ def _write_project(destination: Path, *, project_id: str, phase: str, adapter: s
         ]
         if adapter == AGENT_ADAPTER:
             review_params.append('fixture_path = "judgment.json"')
+        if adapter == MODEL_ADAPTER:
+            if not base_url or not model:
+                raise PublicCalibrationError(
+                    "OpenAICompatibleAdapter requires --base-url and --model"
+                )
+            review_params.append(f"base_url = {_toml_string(base_url)}")
+            review_params.append(f"model = {_toml_string(model)}")
+            review_params.append(f"api_key_env = {_toml_string(api_key_env)}")
+            review_params.append(f"allow_remote = {'true' if allow_remote else 'false'}")
+            review_params.append('judgments = ["contributions", "ledger", "dimensions", "fatal"]')
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
+        if adapter == MODEL_ADAPTER:
+            review_params.extend(
+                [
+                    "",
+                    "[stages.params.packet_routes]",
+                    'contributions = "M0"',
+                    'ledger = "M0"',
+                    'dimensions = "M2"',
+                    'fatal = "M2"',
+                ]
+            )
         review_params.append("")
+        related_params = [
+            "[[stages]]",
+            'id = "related_work"',
+            'type = "related_work_search"',
+            'depends_on = ["ingest"]',
+            "[stages.params]",
+            'venue = "iclr2027"',
+            f"mode = {_toml_string(related_work)}",
+            'network_scope = "metadata"',
+        ]
+        project = destination / "project"
+        findings = project / "related_work_findings.json"
+        confirmation = project / "related_work_confirmation.json"
+        if related_work == "agent":
+            if not findings.is_file():
+                raise PublicCalibrationError(
+                    "related-work agent mode requires related_work_findings.json in the project directory"
+                )
+            related_params.append('findings_path = "related_work_findings.json"')
+        if related_work == "live":
+            related_params.append("requires_network = true")
+        if confirmation.is_file():
+            related_params.append('confirmation_path = "related_work_confirmation.json"')
+        if adapter == MODEL_ADAPTER and related_work in {"agent", "live"}:
+            related_params.append(f"confirmation_adapter = {_toml_string(MODEL_ADAPTER)}")
+            related_params.append(f"confirmation_base_url = {_toml_string(base_url or '')}")
+            related_params.append(f"confirmation_model = {_toml_string(model or '')}")
+            related_params.append(f"confirmation_api_key_env = {_toml_string(api_key_env)}")
+            related_params.append(
+                f"confirmation_allow_remote = {'true' if allow_remote else 'false'}"
+            )
+        related_params.append("")
         review_params.extend(
             [
+                *related_params,
+                "[[stages]]",
+                'id = "consensus"',
+                'type = "consensus"',
+                'depends_on = ["review", "related_work"]',
+                "[stages.params]",
+                "min_independent_routes = 1",
+                "",
                 "[[stages]]",
                 'id = "rate"',
                 'type = "rate"',
-                'depends_on = ["review"]',
+                'depends_on = ["consensus"]',
                 "",
             ]
         )
@@ -1027,7 +1108,8 @@ def _resolve_adapter(mode: str, adapter: str | None) -> str:
     spec = adapter or ""
     if not spec:
         raise PublicCalibrationError(
-            "adapter mode requires --adapter module:attribute. No live model adapter is bundled."
+            "adapter mode requires --adapter module:attribute. "
+            f"The bundled chat adapter is {MODEL_ADAPTER}."
         )
     try:
         load_review_adapter(spec)
@@ -1043,11 +1125,26 @@ def run_cache(
     adapter: str | None = None,
     network_policy: str = "deny",
     requires_network: bool = False,
+    related_work: str = "off",
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key_env: str = "APR_MODEL_API_KEY",
+    allow_remote: bool = False,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    """Run execute_review and rate. Agent mode waits for a judgment drop."""
+    """Run related-work search, execute_review, and rate. Agent mode waits for a judgment drop."""
     cache = assert_local_only(cache, root=root)
+    if related_work not in {"off", "agent", "live"}:
+        raise PublicCalibrationError("related_work must be off, agent, or live")
     spec = _resolve_adapter(mode, adapter)
+    if spec == MODEL_ADAPTER and (not base_url or not model):
+        raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
+    if allow_remote and network_policy != "allow":
+        raise PublicCalibrationError("a remote model endpoint requires --network-policy allow")
+    if allow_remote and not requires_network:
+        raise PublicCalibrationError("a remote model endpoint requires --requires-network")
+    if related_work == "live" and network_policy == "deny":
+        raise PublicCalibrationError("live related-work search requires --network-policy metadata_only or allow")
     if requires_network and network_policy != "allow":
         raise PublicCalibrationError("a network-using adapter requires --network-policy allow")
     awaiting = []
@@ -1083,6 +1180,11 @@ def run_cache(
                 adapter=spec,
                 network_policy=network_policy,
                 requires_network=requires_network,
+                related_work=related_work,
+                base_url=base_url,
+                model=model,
+                api_key_env=api_key_env,
+                allow_remote=allow_remote,
             )
             manifest = run_pipeline(project / "review.toml")
             package_path = project / ".runs" / manifest.run_id / "stages" / "rate" / "package.json"

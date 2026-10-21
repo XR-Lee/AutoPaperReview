@@ -30,6 +30,19 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _note_manuscript_egress(manifest: RunManifest, metadata: dict[str, Any]) -> None:
+    """Record whether a stage sent manuscript content to a non-loopback endpoint."""
+    if "manuscript_left_machine" not in metadata:
+        return
+    updated = dict(manifest.metadata)
+    if metadata.get("manuscript_left_machine"):
+        updated["manuscript_left_machine"] = True
+        updated["manuscript_egress"] = "remote"
+    else:
+        updated.setdefault("manuscript_left_machine", False)
+    manifest.metadata = updated
+
+
 def default_registry() -> StageRegistry:
     registry = StageRegistry()
     for handler_type in (
@@ -71,7 +84,13 @@ def _source_artifact(loaded: LoadedConfig, source_path: Path) -> Artifact:
 
 
 def _run_id(loaded: LoadedConfig, source: Artifact) -> str:
-    return f"{loaded.config.project.id}-{source.sha256[:12]}-{loaded.sha256[:8]}"
+    """Stable directory for one project.
+
+    Source and config hashes are not part of the directory name. A stage reruns
+    only when its own signature changes.
+    """
+    del source
+    return loaded.config.project.id
 
 
 def _stage_signature(
@@ -81,21 +100,27 @@ def _stage_signature(
     source: Artifact,
     dependencies: dict[str, StageRecord],
     handler_material: dict[str, Any],
+    include_source: bool,
 ) -> str:
     dependency_outputs = {
         stage_id: sorted((artifact.role, artifact.sha256) for artifact in record.outputs)
         for stage_id, record in sorted(dependencies.items())
     }
-    return hash_json(
-        {
-            "framework_version": __version__,
-            "stage": stage.model_dump(mode="json"),
-            "source_sha256": source.sha256,
-            "dependency_outputs": dependency_outputs,
-            "handler_material": handler_material,
-            "network_policy": loaded.config.project.network_policy.value,
-        }
-    )
+    payload: dict[str, Any] = {
+        "framework_version": __version__,
+        "stage": {
+            "id": stage.id,
+            "type": stage.type,
+            "depends_on": list(stage.depends_on),
+            "params": stage.params,
+        },
+        "dependency_outputs": dependency_outputs,
+        "handler_material": handler_material,
+        "network_policy": loaded.config.project.network_policy.value,
+    }
+    if include_source:
+        payload["source_sha256"] = source.sha256
+    return hash_json(payload)
 
 
 def _cached_outputs_valid(record: StageRecord, *, loaded: LoadedConfig, run_dir: Path) -> bool:
@@ -196,6 +221,10 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
             path = loaded.resolve(str(stage.params["path"]))
             if not path.is_file():
                 errors.append(f"stage {stage.id} review input does not exist: {path}")
+        if stage.type in {"ingest", "render_pages"} and stage.params.get("supplement"):
+            path = loaded.resolve(str(stage.params["supplement"]))
+            if not path.is_file():
+                errors.append(f"stage {stage.id} supplement does not exist: {path}")
         if stage.type == "prompt_packet":
             wanted = {str(value) for value in stage.params.get("route_ids", [])}
             known_routes = {route.id for route in loaded.config.routes}
@@ -211,7 +240,7 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
                 path = loaded.resolve(str(raw))
                 if not path.exists():
                     errors.append(f"stage {stage.id} inspect path does not exist: {path}")
-        if stage.type in {"command", "literature_grounding", "execute_review"} and stage.params.get(
+        if stage.type in {"command", "literature_grounding", "execute_review", "related_work_search"} and stage.params.get(
             "requires_network"
         ):
             scope = str(stage.params.get("network_scope", "fulltext" if stage.type == "command" else "metadata"))
@@ -263,9 +292,13 @@ def run_pipeline(
 
     if manifest_path.is_file():
         manifest = load_manifest(manifest_path)
-        if manifest.config_sha256 != loaded.sha256 or manifest.source.sha256 != source.sha256:
-            raise PipelineError("existing run manifest does not match the current config/source hashes")
+        if manifest.project_id != loaded.config.project.id:
+            raise PipelineError("existing run manifest is for a different project")
+        manifest.source = source
+        manifest.config_sha256 = loaded.sha256
+        manifest.config_path = str(loaded.path.relative_to(loaded.workspace))
         manifest.config_snapshot = config_snapshot
+        manifest.network_policy = loaded.config.project.network_policy
         manifest.ended_at = None
     else:
         manifest = RunManifest(
@@ -312,6 +345,7 @@ def run_pipeline(
             source=source,
             dependencies=dependencies,
             handler_material=handler_material,
+            include_source=bool(getattr(handler, "reads_source", False)),
         )
         if (
             not force
@@ -374,8 +408,12 @@ def run_pipeline(
                 },
             )
             _replace_stage_record(manifest, completed)
+            _note_manuscript_egress(manifest, completed.metadata)
             save_manifest(manifest, manifest_path)
         except Exception as exc:
+            extra = dict(getattr(exc, "stage_metadata", None) or {})
+            extra.pop("attempt_dir", None)
+            failed_metadata = {"attempt_dir": str(attempt_dir.relative_to(run_dir)), **extra}
             failed = StageRecord(
                 id=stage.id,
                 type=stage.type,
@@ -385,9 +423,10 @@ def run_pipeline(
                 ended_at=utc_now(),
                 attempt=attempt,
                 error=f"{type(exc).__name__}: {exc}",
-                metadata={"attempt_dir": str(attempt_dir.relative_to(run_dir))},
+                metadata=failed_metadata,
             )
             _replace_stage_record(manifest, failed)
+            _note_manuscript_egress(manifest, failed_metadata)
             manifest.ended_at = utc_now()
             save_manifest(manifest, manifest_path)
             raise PipelineError(f"stage {stage.id} failed: {exc}") from exc

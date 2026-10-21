@@ -32,6 +32,8 @@ review_outputs/
 # generated next to review.toml by the report stage
 examples/synthetic/review_report.md
 examples/synthetic/review_report.pdf
+examples/synthetic/related_work/review_report.md
+examples/synthetic/related_work/review_report.pdf
 build/
 dist/
 *.egg-info/

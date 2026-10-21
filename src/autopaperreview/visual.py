@@ -34,6 +34,8 @@ class VisualPageRequest(BaseModel):
     captions: list[str] = Field(default_factory=list)
     width_px: int
     height_px: int
+    page_id: str | None = None
+    document: str = "main"
 
 
 class VisualInspector(Protocol):
@@ -82,8 +84,16 @@ def resolve_manuscript_pdf(source: Path) -> Path | None:
     return sibling_pdf(source)
 
 
-def render_pdf_pages(pdf_path: Path, out_dir: Path, *, dpi: int = 150) -> dict[str, Any]:
-    """Write `page-NNN.png` plus `manifest.json`. Same PDF and DPI, same hashes."""
+def render_pdf_pages(
+    pdf_path: Path,
+    out_dir: Path,
+    *,
+    dpi: int = 150,
+    document_name: str = "main",
+    page_id_prefix: str = "",
+    filename_prefix: str = "page",
+) -> dict[str, Any]:
+    """Write hashed page PNGs. Main pages are `page-NNN.png`. Supplement pages are `S1`, `S2`, ..."""
     pdfium = _pdfium()
     out_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0
@@ -93,13 +103,16 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, *, dpi: int = 150) -> dict[s
         for index, page in enumerate(document):
             bitmap = page.render(scale=scale)
             image = bitmap.to_pil()
-            filename = f"page-{index + 1:03d}.png"
+            number = index + 1
+            filename = f"{filename_prefix}-{number:03d}.png"
             target = out_dir / filename
             image.save(target, format="PNG")
             width_pt, height_pt = page.get_size()
             pages.append(
                 {
-                    "page": index + 1,
+                    "page": number,
+                    "page_id": f"{page_id_prefix}{number}",
+                    "document": document_name,
                     "filename": filename,
                     "sha256": sha256_file(target),
                     "width_px": image.width,
@@ -115,6 +128,7 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, *, dpi: int = 150) -> dict[s
         "pdf_sha256": sha256_file(pdf_path),
         "dpi": dpi,
         "page_count": len(pages),
+        "document": document_name,
         "pages": pages,
     }
     (out_dir / "manifest.json").write_text(
@@ -393,31 +407,57 @@ def format_check_pdf(
             )
         )
         min_px = int(profile["min_page_image_px"])
+        small_label = None
         small_page = None
         for item in manifest.get("pages", []):
             if min(int(item["width_px"]), int(item["height_px"])) < min_px:
-                small_page = int(item["page"])
+                small_label = str(item.get("page_id") or item["page"])
+                small_page = None if item.get("document") == "supplement" else int(item["page"])
                 break
         checks.append(
             FormatCheck(
                 id="FMT-legibility",
                 check="page_raster_legibility",
-                passed=small_page is None,
-                clause_id=None if small_page is None else "wc-4",
+                passed=small_label is None,
+                clause_id=None if small_label is None else "wc-4",
                 page=small_page,
                 detail=_localized(
                     f"Rendered pages are at least {min_px} px on the short side."
-                    if small_page is None
-                    else f"Rendered page {small_page} is below {min_px} px on the short side.",
+                    if small_label is None
+                    else f"Rendered page {small_label} is below {min_px} px on the short side.",
                     f"渲染页的短边至少 {min_px} 像素。"
-                    if small_page is None
-                    else f"渲染后的第 {small_page} 页短边低于 {min_px} 像素。",
+                    if small_label is None
+                    else f"渲染后的第 {small_label} 页短边低于 {min_px} 像素。",
                 ),
+                metadata={} if small_label is None else {"page_id": small_label},
             )
         )
+        supplement_ids = [
+            str(item.get("page_id") or item["page"])
+            for item in manifest.get("pages", [])
+            if item.get("document") == "supplement"
+        ]
+        if supplement_ids:
+            listed = ", ".join(supplement_ids)
+            checks.append(
+                FormatCheck(
+                    id="FMT-supplement",
+                    check="supplement_page_limit",
+                    passed=True,
+                    detail=_localized(
+                        f"Supplement pages {listed} are excluded from the content page limit.",
+                        f"补充材料页 {listed} 不计入正文页数上限。",
+                    ),
+                    metadata={"page_ids": supplement_ids},
+                )
+            )
         blank_caption_page = None
         if page_dir is not None:
-            by_page = {int(item["page"]): item for item in manifest.get("pages", [])}
+            by_page = {
+                int(item["page"]): item
+                for item in manifest.get("pages", [])
+                if item.get("document", "main") != "supplement"
+            }
             for index in range(len(document)):
                 page = document[index]
                 lines = [line.strip() for line in _page_text(page).splitlines()]

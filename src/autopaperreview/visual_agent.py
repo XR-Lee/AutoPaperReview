@@ -63,8 +63,8 @@ class AgentFindingsInspector:
         if not isinstance(payload, dict):
             raise ValueError("agent findings drop must be a JSON object")
         seen = payload.get("pages_seen")
-        if not isinstance(seen, list) or not all(isinstance(item, int) for item in seen):
-            raise ValueError("agent findings drop requires pages_seen as a list of page numbers")
+        if not isinstance(seen, list) or not seen or not all(_page_token(item) for item in seen):
+            raise ValueError("agent findings drop requires pages_seen as a list of page ids")
         findings = payload.get("findings", [])
         if not isinstance(findings, list):
             raise ValueError("agent findings drop requires findings to be a list")
@@ -72,21 +72,22 @@ class AgentFindingsInspector:
         self.status = "checked"
         return payload
 
-    def assert_pages_seen(self, pages: list[int]) -> None:
+    def assert_pages_seen(self, pages: list[Any]) -> None:
         payload = self._load()
-        seen = set(payload["pages_seen"])
-        missing = [page for page in pages if page not in seen]
+        seen = {_page_token(item) for item in payload["pages_seen"]}
+        missing = [page for page in pages if _page_token(page) not in seen]
         if missing:
             raise ValueError(f"agent findings drop did not mark these pages as seen: {missing}")
 
     def inspect(self, request: VisualPageRequest, scratch: Path) -> list[VisualFinding]:
         del scratch
         payload = self._load()
-        if request.page not in set(payload["pages_seen"]):
-            raise ValueError(f"page {request.page} was not marked seen in the agent findings drop")
+        key = _request_page_id(request)
+        if key not in {_page_token(item) for item in payload["pages_seen"]}:
+            raise ValueError(f"page {key} was not marked seen in the agent findings drop")
         matched: list[VisualFinding] = []
         for raw in payload["findings"]:
-            if int(raw.get("page", -1)) != request.page:
+            if not isinstance(raw, dict) or _finding_page_id(raw) != key:
                 continue
             finding = VisualFinding.model_validate(raw)
             if finding.page_image_sha256 != request.page_image_sha256:
@@ -146,9 +147,12 @@ class HostedVisionInspector:
             self.status = "key_absent"
             return []
         image = Path(request.image_path).read_bytes()
+        page_id = request.page_id or str(request.page)
         body = json.dumps(
             {
                 "page": request.page,
+                "page_id": page_id,
+                "document": request.document,
                 "page_image_sha256": request.page_image_sha256,
                 "width_px": request.width_px,
                 "height_px": request.height_px,
@@ -158,7 +162,7 @@ class HostedVisionInspector:
         ).encode("utf-8")
         # The image bytes travel as a sibling part only when a key and allow policy exist.
         scratch.mkdir(parents=True, exist_ok=True)
-        upload = scratch / f"page-{request.page:03d}.png"
+        upload = scratch / f"page-{page_id}.png"
         upload.write_bytes(image)
         http_request = urllib.request.Request(
             self._endpoint,
@@ -185,6 +189,22 @@ class HostedVisionInspector:
             findings.append(finding)
         self.status = "checked"
         return findings
+
+
+def _page_token(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return ""
+    return str(value).strip()
+
+
+def _request_page_id(request: VisualPageRequest) -> str:
+    return request.page_id or str(request.page)
+
+
+def _finding_page_id(raw: dict[str, Any]) -> str:
+    if raw.get("page_id"):
+        return str(raw["page_id"])
+    return str(raw.get("page", ""))
 
 
 def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes:
