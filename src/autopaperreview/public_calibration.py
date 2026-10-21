@@ -1,4 +1,4 @@
-"""Report-only comparison of ``apr-iclr-cap-v1`` to public human scores.
+"""Report-only comparison of the declared ICLR formula to public human scores.
 
 The tool fetches public OpenReview manuscripts and official ratings, runs the
 local pipeline, and writes agreement metrics. It does not fit weights, caps,
@@ -302,6 +302,38 @@ def human_ratings(notes: list[dict[str, Any]]) -> tuple[list[int], list[str]]:
     return ratings, labels
 
 
+SUBSCORE_AXES = ("soundness", "presentation", "contribution")
+SMALL_SCALE = {1, 2, 3, 4}
+
+
+def parse_prefixed_int(value: Any, *, allowed: set[int]) -> int | None:
+    """Leading integer on a public review field, kept only when it is in ``allowed``."""
+    if isinstance(value, dict) and "value" in value:
+        value = value["value"]
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)) and float(int(value)) == float(value):
+        number = int(value)
+        return number if number in allowed else None
+    if isinstance(value, str):
+        head = value.strip().split(":", 1)[0].strip().split(" ", 1)[0]
+        if head.isdigit():
+            number = int(head)
+            return number if number in allowed else None
+    return None
+
+
+def human_subscores(notes: list[dict[str, Any]]) -> dict[str, list[int]]:
+    """Official 1–4 soundness, presentation, and contribution, when the note has them."""
+    found = {axis: [] for axis in SUBSCORE_AXES}
+    for note in latest_official_reviews(notes):
+        for axis in SUBSCORE_AXES:
+            parsed = parse_prefixed_int(content_value(note, axis), allowed=SMALL_SCALE)
+            if parsed is not None:
+                found[axis].append(parsed)
+    return found
+
+
 def nearest_bin(value: float) -> int:
     """Closest bin on 1/3/5/6/8/10. A tie stays on the lower bin."""
     best = ICLR_BINS[0]
@@ -347,6 +379,52 @@ def spearman(left: list[float], right: list[float]) -> float | None:
     if len(left) < 2:
         return None
     return _pearson(_average_ranks(left), _average_ranks(right))
+
+
+def kendall_tau(left: list[float], right: list[float]) -> float | None:
+    """Kendall tau-b. Ties in one side only do not count as concordant or discordant."""
+    count = len(left)
+    if count < 2 or count != len(right):
+        return None
+    concordant = 0
+    discordant = 0
+    ties_left = 0
+    ties_right = 0
+    for index in range(count):
+        for other in range(index + 1, count):
+            left_gap = left[other] - left[index]
+            right_gap = right[other] - right[index]
+            if left_gap == 0 and right_gap == 0:
+                continue
+            if left_gap == 0:
+                ties_left += 1
+            elif right_gap == 0:
+                ties_right += 1
+            elif left_gap * right_gap > 0:
+                concordant += 1
+            else:
+                discordant += 1
+    denominator = (concordant + discordant + ties_left) * (concordant + discordant + ties_right)
+    if denominator <= 0:
+        return None
+    return (concordant - discordant) / (denominator ** 0.5)
+
+
+def confusion_counts(rows: list[ScoreRow]) -> dict[str, Any]:
+    """Human nearest-bin against our venue bin. Both axes are 1/3/5/6/8/10."""
+    labels = [str(item) for item in ICLR_BINS]
+    counts = {human: {ours: 0 for ours in labels} for human in labels}
+    for row in rows:
+        human = str(nearest_bin(row.human_mean))
+        ours = str(int(row.our_bin))
+        if human not in counts or ours not in counts[human]:
+            continue
+        counts[human][ours] += 1
+    return {
+        "human_rule": "nearest bin on 1/3/5/6/8/10; a tie stays on the lower bin",
+        "bins": list(ICLR_BINS),
+        "counts": counts,
+    }
 
 
 def roc_auc(scores: list[float], labels: list[int]) -> float | None:
@@ -396,8 +474,10 @@ def summarize(rows: list[ScoreRow]) -> dict[str, Any]:
         "n_accept": len(accept_scores),
         "n_reject": len(reject_scores),
         "spearman": spearman(ours, means),
+        "kendall": kendall_tau(ours, means),
         "mae": _mean(absolute),
         "signed_error": _mean([row.our_bin - row.human_mean for row in rows]),
+        "confusion": confusion_counts(rows),
         "bin_agreement": _mean([1.0 if hit else 0.0 for hit in bin_hits]) if rows else None,
         "snap_bin_agreement": _mean([1.0 if hit else 0.0 for hit in snap_hits]) if rows else None,
         "reviewer_bin_agreement": _mean(reviewer_hits),
@@ -414,6 +494,19 @@ def summarize(rows: list[ScoreRow]) -> dict[str, Any]:
         "mae_rule": "mean absolute error of the venue bin against the mean official rating",
         "auc_rule": "Mann-Whitney AUC of the venue bin for accept versus reject",
     }
+
+
+def _confusion_markdown(confusion: dict[str, Any]) -> str:
+    bins = [str(item) for item in confusion.get("bins") or ICLR_BINS]
+    counts = confusion.get("counts") or {}
+    header = "| Human bin \\ Our bin | " + " | ".join(bins) + " |"
+    rule = "| --- | " + " | ".join("---" for _ in bins) + " |"
+    lines = [header, rule]
+    for human in bins:
+        row = counts.get(human) or {}
+        cells = " | ".join(str(int(row.get(ours) or 0)) for ours in bins)
+        lines.append(f"| {human} | {cells} |")
+    return "\n".join(lines)
 
 
 def render_report(rows: list[ScoreRow], metrics: dict[str, Any]) -> str:
@@ -438,6 +531,7 @@ def render_report(rows: list[ScoreRow], metrics: dict[str, Any]) -> str:
         "| --- | --- |",
         f"| Papers | {metrics['n']} ({metrics['n_accept']} accept / {metrics['n_reject']} reject) |",
         f"| Spearman (our bin vs human mean) | {cell(metrics['spearman'])} |",
+        f"| Kendall tau-b (our bin vs human mean) | {cell(metrics.get('kendall'))} |",
         f"| MAE vs mean official rating | {cell(metrics['mae'])} |",
         f"| Signed error (ours minus human mean) | {cell(metrics['signed_error'])} |",
         f"| Bin agreement (nearest) | {cell(metrics['bin_agreement'])} |",
@@ -454,6 +548,11 @@ def render_report(rows: list[ScoreRow], metrics: dict[str, Any]) -> str:
         "Bin agreement is the fraction of papers whose venue bin equals the nearest",
         "public-rating mean on 1/3/5/6/8/10. A distance tie stays on the lower bin.",
         "Reviewer bin agreement is the average fraction of official ratings equal to our bin.",
+        "",
+        "Confusion counts use the nearest public-rating bin as the row and our venue bin as the column.",
+        "",
+        _confusion_markdown(metrics.get("confusion") or {}),
+        "",
         f"Clustered is true when fewer than {SPREAD_UNIQUE_FLOOR} distinct bins appear",
         f"or the sample standard deviation is below {SPREAD_STDEV_FLOOR}.",
         "That flag is a diagnostic, not a threshold the formula was tuned to.",
@@ -805,6 +904,39 @@ def fetch_manifest(
     return statuses
 
 
+def materialize_preloaded(
+    cache: Path,
+    item: ManifestPaper,
+    submission: dict[str, Any],
+    reviews: list[dict[str, Any]],
+    *,
+    pdf_fallback: str = "arxiv",
+    client: Any | None = None,
+    text_extractor: TextExtractor | None = None,
+    arxiv_finder: ArxivFinder | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Write one paper cache from notes the caller already holds.
+
+    This skips the venue-listing scan. Human ratings still go only under
+    ``heldout/``. The PDF fallback is the same as ``fetch_manifest``.
+    """
+    cache = assert_local_only(cache, root=root)
+    http = client or HttpOpenReviewClient()
+    status = _fetch_one(
+        http,
+        item,
+        cache,
+        pdf_fallback=pdf_fallback,
+        max_pages=1,
+        text_extractor=text_extractor or extract_pdf_text,
+        arxiv_finder=arxiv_finder or default_arxiv_finder,
+        preloaded=(submission, reviews),
+    )
+    _write_json(paper_dir(cache, item.forum_id) / "status.json", status)
+    return status
+
+
 def _fetch_one(
     client: Any,
     item: ManifestPaper,
@@ -814,6 +946,7 @@ def _fetch_one(
     max_pages: int,
     text_extractor: TextExtractor,
     arxiv_finder: ArxivFinder,
+    preloaded: tuple[dict[str, Any], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     destination = paper_dir(cache, item.forum_id)
     destination.mkdir(parents=True, exist_ok=True)
@@ -828,14 +961,17 @@ def _fetch_one(
         "error": None,
     }
     try:
-        direct = _direct_bundle(client, item.forum_id)
-        if direct is None:
-            submission = _search_submission(
-                client, item.forum_id, listing=item.listing, max_pages=max_pages
-            )
-            reviews = _search_reviews(client, submission)
+        if preloaded is not None:
+            submission, reviews = preloaded
         else:
-            submission, reviews = direct
+            direct = _direct_bundle(client, item.forum_id)
+            if direct is None:
+                submission = _search_submission(
+                    client, item.forum_id, listing=item.listing, max_pages=max_pages
+                )
+                reviews = _search_reviews(client, submission)
+            else:
+                submission, reviews = direct
         decision = decision_of(submission, item.decision)
         title = str(content_value(submission, "title") or "")
         ratings, labels = human_ratings(reviews)
@@ -864,7 +1000,12 @@ def _fetch_one(
         _write_json(heldout / "reviews.json", reviews)
         _write_json(
             heldout / "human.json",
-            {"decision": decision, "ratings": ratings, "rating_labels": labels},
+            {
+                "decision": decision,
+                "ratings": ratings,
+                "rating_labels": labels,
+                "subscores": human_subscores(reviews),
+            },
         )
         status.update(
             {
@@ -1193,14 +1334,23 @@ def run_cache(
             if overall.get("coefficient_set") != COEFFICIENT_SET:
                 raise PublicCalibrationError("rate stage did not use the declared coefficient set")
             metadata = overall.get("metadata") or {}
+            dimension_scores = {
+                str(item.get("dimension")): item.get("score")
+                for item in (package.get("dimension_scores") or [])
+                if isinstance(item, dict) and item.get("dimension")
+            }
             score = {
                 "project_id": project_id_for(forum_id),
                 "forum_id": forum_id,
                 "our_bin": int(overall["value"]),
                 "cap_ids": list(metadata.get("cap_ids") or []),
+                "caps": list(metadata.get("caps") or []),
                 "weighted": metadata.get("weighted"),
                 "gate": metadata.get("gate"),
                 "raw": metadata.get("raw"),
+                "capped": metadata.get("capped"),
+                "dimensions": dimension_scores,
+                "bands_after_ceiling": metadata.get("bands_after_ceiling") or {},
                 "coefficient_set": overall.get("coefficient_set"),
                 "pdf_source": status.get("pdf_source"),
                 "title": status.get("title"),

@@ -6,7 +6,7 @@ reference title, a batched arXiv id list, or a DOI, and no manuscript prose. A c
 kept only when a provider payload contains its id and title. Papers are never
 invented.
 
-Cap numbers follow ``apr-iclr-cap-v1``. ``unfair_baseline`` is venue cap 5
+Cap numbers follow ``apr-iclr-cap-v2``. ``unfair_baseline`` is venue cap 5
 with an experimental-soundness ceiling of 4. ``missing_closest_neighbor`` is
 venue cap 6 with a prior-work ceiling of 2 and an originality ceiling of 4.
 This module does not write ``OverallScore``. It emits blocking issues that
@@ -61,7 +61,7 @@ from .venues import VenueDeadlines, load_venue_deadlines
 
 logger = logging.getLogger("autopaperreview.related_work")
 
-COEFFICIENT_SET = "apr-iclr-cap-v1"
+COEFFICIENT_SET = "apr-iclr-cap-v2"
 ICLR_BINS = (1, 3, 5, 6, 8, 10)
 # Mirror of rating.WEIGHTS / snap_down / CLASS_CAP. Kept local so this branch
 # does not import the rating module. A drift here is a bug.
@@ -101,7 +101,7 @@ _RETRIEVAL_CACHE: dict[str, "HttpResult"] = {}
 
 INTEGRATION_NOTE = (
     "Cap signals become blocking, decision-relevant issues. "
-    "fatal_class unfair_baseline uses the apr-iclr-cap-v1 cap of 5 and an "
+    "fatal_class unfair_baseline uses the apr-iclr-cap-v2 cap of 5 and an "
     "experimental_soundness ceiling of 4 (clause es-4). "
     "fatal_class missing_closest_neighbor uses venue cap 6, "
     "prior_work_contextualization ceiling 2 (pw-2), and originality ceiling 4 (or-4). "
@@ -1786,11 +1786,11 @@ def build_cap_signals(
                 clause_ids={"prior_work_contextualization": "pw-2", "originality": "or-4"},
                 reason_en=(
                     "A verified must-compare paper is absent from the baselines. "
-                    f"Venue cap {MISSING_NEIGHBOR_CAP} leaves room for 1/3/6 under apr-iclr-cap-v1."
+                    f"Venue cap {MISSING_NEIGHBOR_CAP} leaves room for 1/3/6 under apr-iclr-cap-v2."
                 ),
                 reason_zh=(
                     "已核实且必须比较的论文没有进入基线。"
-                    f"会场上限为 {MISSING_NEIGHBOR_CAP}，在 apr-iclr-cap-v1 下仍可落到 1/3/6。"
+                    f"会场上限为 {MISSING_NEIGHBOR_CAP}，在 apr-iclr-cap-v2 下仍可落到 1/3/6。"
                 ),
                 candidate_ids=missing_ids,
                 evidence_ids=_cap_evidence_ids(missing_ids),
@@ -1814,11 +1814,11 @@ def build_cap_signals(
                 clause_ids={"experimental_soundness": "es-4"},
                 reason_en=(
                     "A baseline is given privileged information or solves a different task. "
-                    f"This is the apr-iclr-cap-v1 unfair_baseline cap of {UNFAIR_BASELINE_CAP}."
+                    f"This is the apr-iclr-cap-v2 unfair_baseline cap of {UNFAIR_BASELINE_CAP}."
                 ),
                 reason_zh=(
                     "某个基线获得了特权信息，或解决的是另一个任务。"
-                    f"这对应 apr-iclr-cap-v1 的 unfair_baseline 上限 {UNFAIR_BASELINE_CAP}。"
+                    f"这对应 apr-iclr-cap-v2 的 unfair_baseline 上限 {UNFAIR_BASELINE_CAP}。"
                 ),
                 candidate_ids=matched_ids,
                 evidence_ids=_cap_evidence_ids(matched_ids),
@@ -2034,11 +2034,11 @@ def issues_from_cap_signals(
                 f"已核实且早于投稿截止日的记录 {joined} 没有出现在稿件基线中。"
             )
             impact_en = (
-                f"apr-iclr-cap-v1 caps the venue bin at {signal.venue_cap} "
+                f"apr-iclr-cap-v2 caps the venue bin at {signal.venue_cap} "
                 "and lowers prior-work and originality."
             )
             impact_zh = (
-                f"apr-iclr-cap-v1 将会场档限制在 {signal.venue_cap}，并压低已有工作定位与原创性。"
+                f"apr-iclr-cap-v2 将会场档限制在 {signal.venue_cap}，并压低已有工作定位与原创性。"
             )
             action_en = (
                 "Compare those prior papers under the same metric, or show why they are not the closest neighbors."
@@ -2051,10 +2051,10 @@ def issues_from_cap_signals(
             evidence_en = signal.reason_en
             evidence_zh = signal.reason_zh
             impact_en = (
-                f"apr-iclr-cap-v1 caps the venue bin at {signal.venue_cap} "
+                f"apr-iclr-cap-v2 caps the venue bin at {signal.venue_cap} "
                 "and lowers experimental soundness."
             )
-            impact_zh = f"apr-iclr-cap-v1 将会场档限制在 {signal.venue_cap}，并压低实验可靠性。"
+            impact_zh = f"apr-iclr-cap-v2 将会场档限制在 {signal.venue_cap}，并压低实验可靠性。"
             action_en = (
                 "Remove privileged inputs and different-task baselines from the decision comparison."
             )
@@ -2073,7 +2073,7 @@ def issues_from_cap_signals(
                 confidence=0.9,
                 source_ids=[MANUSCRIPT_SOURCE_ID],
                 evidence_ids=list(dict.fromkeys(evidence_ids)),
-                tags=["apr-iclr-cap-v1", signal.fatal_class],
+                tags=["apr-iclr-cap-v2", signal.fatal_class],
                 anchor=anchor,
                 fatal_class=FatalClass(signal.fatal_class),
                 decision_relevant=True,
@@ -2128,22 +2128,16 @@ def related_work_comparison(judgment: RelatedWorkJudgment | dict[str, Any] | Non
 
 
 def snap_down(value: float) -> int:
-    """Largest ICLR bin that does not exceed ``value``. Same cuts as apr-iclr-cap-v1."""
-    if value < 2:
-        return 1
-    if value < 4:
-        return 3
-    if value < 5.5:
-        return 5
-    if value < 7:
-        return 6
-    if value < 9:
-        return 8
-    return 10
+    """Largest ICLR bin that does not exceed ``value``. Same cuts as ``rating.snap_down``."""
+    chosen = ICLR_BINS[0]
+    for bin_value in ICLR_BINS:
+        if float(bin_value) <= value:
+            chosen = bin_value
+    return int(chosen)
 
 
 def preview_venue_bin(bands: dict[str, float], signals: Sequence[CapSignal]) -> int:
-    """Preview the apr-iclr-cap-v1 bin. This does not write a score onto a package."""
+    """Preview the apr-iclr-cap-v2 bin. This does not write a score onto a package."""
     missing = [name for name in _WEIGHTS if name not in bands]
     if missing:
         raise ValueError(f"preview requires all seven dimension scores; missing {missing}")

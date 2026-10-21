@@ -22,8 +22,9 @@ from autopaperreview.models import (
     SourceRecord,
 )
 from autopaperreview.reporting import render_markdown
-from autopaperreview.rating import apply_rating, calibrate_packages, rate_venue
+from autopaperreview.rating import apply_rating, calibrate_packages, rate_venue, snap_down
 from autopaperreview.rating import TieNote
+from autopaperreview.related_work import snap_down as preview_snap
 from autopaperreview.rubrics import CLAUSES, COEFFICIENT_SET
 from tests.support import localized, make_artifact, make_issue
 
@@ -101,6 +102,38 @@ class RatingFormulaTests(unittest.TestCase):
         self.assertEqual(scored.value, 6)
         self.assertEqual(scored.metadata["gate"], 6)
 
+    def test_raw_seven_lands_in_six(self) -> None:
+        scored = rate_venue(_package("seven", _all(7)))
+        self.assertEqual(scored.metadata["raw"], 7)
+        self.assertEqual(scored.metadata["cap_ids"], [])
+        self.assertEqual(scored.value, 6)
+
+    def test_sound_claims_and_experiments_can_leave_bin_8(self) -> None:
+        scored = rate_venue(
+            _package(
+                "leave-8",
+                dict(originality=6, importance=6, claims=8, soundness=8, writing=6, community=6, prior=6),
+            )
+        )
+        self.assertEqual(scored.metadata["cap_ids"], [])
+        self.assertGreater(scored.metadata["raw"], 7)
+        self.assertLess(scored.metadata["raw"], 8)
+        self.assertEqual(scored.value, 6)
+
+    def test_nonfatal_weak_paper_can_reach_bin_3(self) -> None:
+        scored = rate_venue(_package("weak", _all(4)))
+        self.assertEqual(scored.metadata["cap_ids"], [])
+        self.assertEqual(scored.metadata["raw"], 4)
+        self.assertEqual(scored.value, 3)
+
+    def test_snap_never_rounds_up_past_the_evidence(self) -> None:
+        self.assertEqual(
+            [snap_down(value) for value in (0, 1, 2, 3, 4, 5, 5.5, 6, 7, 7.9, 8, 9, 10, 11)],
+            [1, 1, 1, 3, 3, 5, 5, 6, 6, 6, 8, 8, 10, 10],
+        )
+        for value in (0, 1, 2, 3, 4, 5, 5.5, 6, 7, 7.1, 8, 9, 10, 12):
+            self.assertEqual(snap_down(value), preview_snap(value), value)
+
     def test_missing_closest_neighbor_caps_at_six_and_lowers_originality(self) -> None:
         package = _package(
             "neighbor",
@@ -122,10 +155,10 @@ class RatingFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["cap_ids"], ["I-leak"])
         self.assertLessEqual(scored.metadata["bands_after_ceiling"]["experimental_soundness"], 2)
 
-    def test_frozen_rows_without_caps_share_one_bin(self) -> None:
-        # 5.5 is the snap boundary, so these frozen means (all >= 5.5) share bin 6
-        # until a fatal cap binds. Caps, not reweighting, create the spread.
-        expected = {"A": 6, "B": 6, "C": 6, "D": 6, "E": 6}
+    def test_frozen_rows_follow_the_floor_snap(self) -> None:
+        # Raw means are about 6.49, 6.38, 5.80, 5.52, 5.62. The venue bin is the
+        # largest bin that does not exceed that raw value, so C/D/E land in 5.
+        expected = {"A": 6, "B": 6, "C": 5, "D": 5, "E": 5}
         rows = {"A": ROW_A, "B": ROW_B, "C": ROW_C, "D": ROW_D, "E": ROW_E}
         for name, scores in rows.items():
             with self.subTest(name=name):
@@ -237,7 +270,7 @@ class RatingFormulaTests(unittest.TestCase):
         package = apply_rating(package)
         markdown = render_markdown(package, languages=["en", "zh-Hans"], fill_missing=False)
         require_bilingual_markdown(markdown)
-        self.assertIn("apr-iclr-cap-v1", markdown)
+        self.assertIn("apr-iclr-cap-v2", markdown)
         self.assertIn("已声明评分", markdown)
         self.assertIn("FMT-pages", markdown)
         self.assertEqual(package.overall_score.value, 1)
@@ -252,7 +285,7 @@ class RatingFormulaTests(unittest.TestCase):
 class CalibrationTests(unittest.TestCase):
     def test_different_caps_cannot_share_a_bin(self) -> None:
         low_cap = _package("low", _all(8), issues=[_fatal("I-low", FatalClass.invalid_protocol)])
-        high_cap = _package("high", _all(2), issues=[_fatal("I-high", FatalClass.unfair_baseline)])
+        high_cap = _package("high", _all(4), issues=[_fatal("I-high", FatalClass.unfair_baseline)])
         with self.assertRaisesRegex(ValueError, "different active caps"):
             calibrate_packages([low_cap, high_cap])
 

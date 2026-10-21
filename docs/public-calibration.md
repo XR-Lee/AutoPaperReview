@@ -1,6 +1,6 @@
 # Public calibration eval
 
-`apr-iclr-cap-v1` is a declared formula. This command measures how far that formula sits from public human scores. It does not fit weights, caps, or bins, and it does not write the metrics back into the rating code.
+`apr-iclr-cap-v2` is a declared formula. The venue bin is the largest of 1/3/5/6/8/10 that does not exceed the capped raw score. This command measures how far that formula sits from public human scores. It does not fit weights, caps, or bins, and it does not write the metrics back into the rating code.
 
 The comparison is not a claim about any hosted reviewer's published correlation.
 
@@ -88,6 +88,30 @@ A missing adapter is an error. If that adapter calls a network API, pass `--requ
 ## PDFs
 
 The tool requests the public PDF. If that route answers with a browser check, `--pdf-fallback arxiv` (the default) downloads an arXiv PDF only when the title matches exactly. `--pdf-fallback none` leaves the paper unscored. The report records which source supplied the bytes. Text extraction uses `pdftotext`, `pypdfium2`, or `pypdf`, whichever is installed.
+
+## Benchmark sample
+
+`scripts/select_public_calibration.py` draws a 100-paper sample from the public ICLR 2024 and ICLR 2025 listings. The seed is `20261021`. A paper needs two official ratings on 1/3/5/6/8/10 and an accept or reject decision. Strata are the mean of those ratings:
+
+| Stratum | Mean | Quota |
+| --- | --- | --- |
+| clear_reject | below 4 | 20 |
+| low | 4 up to but not including 5 | 15 |
+| borderline | 5 up to but not including 6.5 | 25 |
+| high | 6.5 up to but not including 8 | 20 |
+| strong | 8 and above | 20 |
+
+Inside a stratum the walk alternates years and round-robins primary areas, taking at most 4 papers from one area before relaxing that cap. Each area-year group is sorted by forum id and shuffled with `Random(seed:stratum:area:year)`. After the PDFs are in, a second shuffle (`Random(seed:split:stratum)`) holds out 40 percent inside each stratum. The tuning split is not chosen from model scores.
+
+The script writes the manifest, the split, the PDFs, and the ratings under the cache directory only. The direct notes route is not required. Search pages the public listings. When the venue PDF route asks for a browser check, the script uses the arXiv title fallback. Listing fetches honour `Retry-After` on HTTP 429 and cap the backoff at 8 seconds. PDF downloads use a 45-second socket timeout.
+
+Rejected submissions are often absent from arXiv, so a stratum can stay short after the first PDF walk. `--extend-rejected N` scores N further rejected submissions that are not in the scored pool yet. The shuffle is `Random(f"{seed}:extend-rejected")`, and `fill_to_surplus` is off for that pass so the extra papers are actually fetched. The run that filled every quota used two extra passes, `--extend-rejected 280` and then `--extend-rejected 220`, each followed by materialize. Those counts are part of the selection procedure. They were not chosen from model scores.
+
+```bash
+PYTHONPATH=src python3 scripts/select_public_calibration.py --cache workdir/calibration-bench
+```
+
+The report metrics include Kendall tau-b and a confusion table of the nearest human bin against the venue bin. Those numbers still do not update the formula.
 
 ## Tests
 

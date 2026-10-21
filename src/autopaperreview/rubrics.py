@@ -6,7 +6,7 @@ A score may omit a clause. Once a clause id is set, the score must equal it.
 
 from __future__ import annotations
 
-COEFFICIENT_SET = "apr-iclr-cap-v1"
+COEFFICIENT_SET = "apr-iclr-cap-v2"
 RUBRIC_ID = "sar_bands_v1"
 DIMENSION_BANDS = (2.0, 4.0, 6.0, 8.0, 10.0)
 ICLR_BINS = (1, 3, 5, 6, 8, 10)

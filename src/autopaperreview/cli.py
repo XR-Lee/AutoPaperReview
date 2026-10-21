@@ -513,7 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     calibrate_eval = subparsers.add_parser(
         "calibrate-eval",
-        help="compare apr-iclr-cap-v1 to public human scores without fitting",
+        help="compare the declared ICLR formula to public human scores without fitting",
     )
     eval_sub = calibrate_eval.add_subparsers(dest="eval_command", required=True)
 

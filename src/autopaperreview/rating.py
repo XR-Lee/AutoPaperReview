@@ -1,6 +1,6 @@
 """Declared ICLR rating: dimension bands, fatal-flaw caps, snap-down bins.
 
-This is not a fitted regression. `coefficient_set` is `apr-iclr-cap-v1`.
+This is not a fitted regression. `coefficient_set` is `apr-iclr-cap-v2`.
 The core does not call a model. Inputs are records already on the package.
 """
 
@@ -57,18 +57,17 @@ CLASS_CEILING: dict[FatalClass, dict[SarDimension, float]] = {
 
 
 def snap_down(value: float) -> int:
-    """Largest ICLR bin that does not exceed `value`."""
-    if value < 2:
-        return 1
-    if value < 4:
-        return 3
-    if value < 5.5:
-        return 5
-    if value < 7:
-        return 6
-    if value < 9:
-        return 8
-    return 10
+    """Largest ICLR bin that does not exceed `value`.
+
+    The scale minimum is 1, so a raw value below 1 still reports 1.
+    Every other cut stays on the lower bin: 2, 4, 5.5, 7, and 9 do not
+    round up to 3, 5, 6, 8, and 10.
+    """
+    chosen = ICLR_BINS[0]
+    for bin_value in ICLR_BINS:
+        if float(bin_value) <= value:
+            chosen = bin_value
+    return int(chosen)
 
 
 def _bands(package: ReviewPackage) -> dict[SarDimension, float]:
@@ -286,7 +285,8 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
         method=OverallScoreMethod.declared_formula,
         coefficient_set=COEFFICIENT_SET,
         notes=(
-            "apr-iclr-cap-v1 is a declared formula with fatal-flaw caps. "
+            "apr-iclr-cap-v2 is a declared formula with fatal-flaw caps. "
+            "The venue bin is the largest ICLR bin that does not exceed the capped raw score. "
             "It is not a fitted ICLR regression."
         ),
         evidence_ids=evidence_ids,
