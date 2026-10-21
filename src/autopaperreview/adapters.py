@@ -1,4 +1,9 @@
-"""Optional review-execution adapters. The core does not call a model API."""
+"""Review-execution adapters.
+
+Fixture and deterministic adapters do not call a model. The OpenAI-compatible
+adapter is `autopaperreview.model_exec:OpenAICompatibleAdapter`, selected with
+the same `module:attribute` string.
+"""
 
 from __future__ import annotations
 

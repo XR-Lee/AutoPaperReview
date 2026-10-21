@@ -599,6 +599,7 @@ class VisualFinding(StrictModel):
 
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
     page: int = Field(ge=1)
+    page_id: str | None = None
     bbox: list[float]
     page_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     kind: VisualFindingKind

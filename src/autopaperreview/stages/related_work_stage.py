@@ -174,6 +174,7 @@ class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
     version = "7"
     params_model = RelatedWorkSearchParams
+    reads_source = True
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
         return RelatedWorkSearchParams.model_validate(context.stage.params)

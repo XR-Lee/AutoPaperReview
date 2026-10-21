@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `ingest` and `render_pages` accept an optional `supplement` path. The supplement is rendered as a second page set (`S1`, `S2`, ...) beside the main pages. `format_check` still applies page limits to the main PDF only and records those supplement ids. `visual_inspect` sees both page sets.
+- The run directory is the project id. A stage signature covers that stage's parameters, the files it reads, and upstream output hashes. Changing an export-gate flag reuses ingest, render, search, and judgments. A manuscript edit still reruns stages that read the manuscript.
+- Added `OpenAICompatibleAdapter` and `OpenAICompatibleVisionInspector`. `execute_review` can call an OpenAI-compatible chat endpoint for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. `visual_inspect` can send rendered page images to the same API. The pipeline validates the JSON, retries a schema failure once, then fails the stage. An excerpt or page hash that does not resolve rejects that contribution, ledger item, or visual finding. There is no silent fallback to the deterministic adapter.
+- A rating dimension whose excerpt does not resolve is retried once with that unresolved-anchor error. If any of the seven dimensions is still missing, `execute_review` fails the stage.
+- Contributions and ledger judgments require at least one item. An empty list is a schema failure and uses the same one-retry path.
+- Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times with a 0.5s then 1s backoff. Any other HTTP 4xx fails immediately. Transport retries are separate from the schema retry.
+- `execute_review` accepts `bilingual = true`. That adds one `zh-Hans` judgment over the accepted English fields, with the same schema retry and stored hashes, so bilingual export can pass.
+- A hostname that resolves only to loopback addresses is loopback. Resolution failure, or any non-loopback address, is remote. The API key value stays out of the stage signature; replacing the key does not rerun a cached stage.
+- Each raw request and response is stored under the stage directory with its SHA-256 on the stage record. A matching stage signature reuses the result and does not call the endpoint again.
+- Loopback endpoints are allowed by default. A remote endpoint requires `allow_remote`, `network_policy = allow`, and an environment-variable API key. The run manifest records `manuscript_left_machine`. Keys are not written to requests, manifests, or errors.
+- Fixture JSON and `AgentFindingsInspector` remain equal options for an agent that writes schema JSON outside the process.
 - Added a public-repo confidentiality policy ([CONFIDENTIALITY.md](CONFIDENTIALITY.md), [AGENTS.md](AGENTS.md)) and a tracked-file check that rejects review work directories, document and image files outside an allowlist, submission-id patterns, and SHA-256 digests of blocked strings.
 - Replaced contribution-list fixtures with synthetic sentences.
 

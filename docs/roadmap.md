@@ -8,7 +8,7 @@ Implemented in the current package:
 
 - Strict canonical review, artifact, stage, and run models.
 - TOML configuration with DAG validation.
-- Hash-derived run identity, stage signatures, output validation, resume, and atomic promotion.
+- A project run directory, per-stage signatures, output validation, resume, and atomic promotion.
 - Built-in ingest, command, prompt-packet, legacy-import, exact-normalized consensus, and report stages.
 - Deny-by-default declared network policy.
 - Entry-point stage plugins.
@@ -28,7 +28,7 @@ Known v0.1 constraints:
 
 The four data-boundary milestones below remain the schema work. Open experiments change the *order of the next executable slices*. The full comparison is [feature gaps versus stronger open experiments](oss-experiment-gaps.md).
 
-v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. A live PydanticAI (or other) model adapter is still optional and not bundled.
+v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. An OpenAI-compatible chat adapter now runs those judgments inside one `run`. PydanticAI is still not bundled.
 
 v0.1.6 shipped first-read review writing: optional `FirstReadNote`, a packaged writing contract prepended to prompt packets, reader-facing report prose, and optional export-gate checks for restated arguments and quotes. See [first-read review writing](first-read-review.md).
 
@@ -36,7 +36,7 @@ Remaining after 0.1.6:
 
 1. Richer locator families and excerpt verification against parsed PDF/DOCX text.
 2. Live citation resolve (Crossref/arXiv) behind a declared adapter.
-3. Optional model-execution adapter that snapshots prompts and raw responses.
+3. Optional model-execution adapter that snapshots prompts and raw responses. The OpenAI-compatible adapter does this for the text judgments and for visual page images. Richer provider SDKs are still out of scope.
 4. Then ObservationRecord, dissent-preserving consensus, parser/visual adapters, and journal-platform adapters as already designed.
 
 Do not take MinerU, PASA, Tavily, ChatArena, a vector index, or a fitted ICLR map into core.
