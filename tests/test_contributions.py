@@ -17,13 +17,14 @@ from autopaperreview.models import LocalizedText, ReviewPackage, ReviewRoute, Ro
 from tests.support import make_artifact, make_issue, localized
 
 
+# Synthetic shapes only. Do not paste sentences from a manuscript into these fixtures.
 PAREN_MANUSCRIPT = """
-Title: Token Merge Study
+Title: Synthetic Ordering Fixture
 
 Abstract
 We propose a method.
 
-Contributions. Our work makes three contributions. (1) We identify pair construction as the key knob under compression. (2) We develop a deterministic local merge with value-feature matching. (3) We establish an accuracy-efficiency trade-off with a five-model protocol.
+Contributions. Our work makes three contributions. (1) We identify ordering of toy pairs as the knob under a fixed budget. (2) We develop a deterministic local step with placeholder matching. (3) We establish a small accuracy trade-off with a three-check protocol.
 
 Related Work
 Other methods exist.
@@ -33,18 +34,19 @@ DOTTED_MANUSCRIPT = """
 Contributions
 The main contributions of this work are as follows:
 
-1. We introduce a graph-streaming framework instead of raw images or point-clouds.
-2. We construct a new dataset containing RGB-D images and corresponding 3D environments.
-3. We conduct a comparative analysis demonstrating a 6.33 times latency reduction versus image streaming.
+1. We introduce a toy streaming sketch instead of raw tables or logs.
+2. We construct a synthetic dataset containing labeled rows and matching notes.
+3. We conduct a comparative check demonstrating a 2.50 times slowdown versus the placeholder.
 
 Methodology
 System overview follows.
 """
 
 TWO_COLUMN = """
-Contributions. Our work makes three contributions. (1) We           whereas token methods adapt
-identify pair construction as the key knob. (2) We develop a        TokenLearner learns compact
-deterministic merge with restoration. (3) We establish a trade-off. Related Work
+Contributions. Our work makes three contributions. (1) We           whereas side notes adapt
+identify ordering of toy pairs as the knob. (2) We develop a        PlaceholderSide learns compact
+deterministic local step with restoration. (3) We establish a       codes for this fixture only
+longer toy trade-off. Related Work
 """
 
 
@@ -52,44 +54,44 @@ class ExtractListedContributionsTests(unittest.TestCase):
     def test_paren_enumeration(self) -> None:
         items = extract_listed_contributions(PAREN_MANUSCRIPT)
         self.assertEqual([item["index"] for item in items], [1, 2, 3])
-        self.assertIn("pair construction", str(items[0]["text"]))
-        self.assertIn("deterministic local merge", str(items[1]["text"]))
-        self.assertIn("accuracy-efficiency", str(items[2]["text"]))
+        self.assertIn("ordering of toy pairs", str(items[0]["text"]))
+        self.assertIn("deterministic local step", str(items[1]["text"]))
+        self.assertIn("three-check", str(items[2]["text"]))
 
     def test_dotted_enumeration(self) -> None:
         items = extract_listed_contributions(DOTTED_MANUSCRIPT)
         self.assertEqual([item["index"] for item in items], [1, 2, 3])
         self.assertTrue(str(items[0]["text"]).startswith("We introduce"))
         self.assertIn("dataset", str(items[1]["text"]))
-        self.assertIn("6.33", str(items[2]["text"]))
+        self.assertIn("2.50", str(items[2]["text"]))
 
     def test_two_column_extract_keeps_left_column(self) -> None:
         items = extract_listed_contributions(TWO_COLUMN)
         self.assertEqual(len(items), 3)
         joined = " ".join(str(item["text"]) for item in items)
-        self.assertNotIn("TokenLearner", joined)
-        self.assertIn("pair construction", joined)
+        self.assertNotIn("PlaceholderSide", joined)
+        self.assertIn("ordering of toy pairs", joined)
 
     def test_roman_and_bullet_lists(self) -> None:
         roman = (
-            "We contribute (i) a markerless framework that jointly solves pose and latency "
-            "on one manifold; (ii) a 2D-3D rendering loss fusing metric depth with masks; "
-            "(iii) an offline excitation-maximizing trajectory planner; and (iv) support "
-            "for Eye-to-Hand and Eye-in-Hand setups.\nRelated Work\n"
+            "We contribute (i) a synthetic marker that jointly labels pose and delay "
+            "on one toy manifold; (ii) a drawing loss that fuses a flat map with masks; "
+            "(iii) an offline fixture path over a grid; and (iv) support "
+            "for bench-left and bench-right setups.\nRelated Work\n"
         )
         items = extract_listed_contributions("Contributions. " + roman)
         self.assertEqual([item["index"] for item in items], [1, 2, 3, 4])
         bullets = """
 Our contributions are:
-• a practical depth-centric RGB-D SLAM architecture for long-horizon reconstruction.
-• a geometry-primary frontend that combines GICP with depth-lifted anchors.
-• an extensive all-real evaluation on public benchmarks and floor-scale capture.
+• a practical toy sketch for a long fixture sequence.
+• a geometry-primary frontend that combines a toy aligner with lifted anchors.
+• an extensive fixture evaluation on stand-in logs and bench-scale capture.
 
 Related Work
 """
         items = extract_listed_contributions(bullets)
         self.assertEqual([item["index"] for item in items], [1, 2, 3])
-        self.assertIn("depth-centric", str(items[0]["text"]))
+        self.assertIn("toy sketch", str(items[0]["text"]))
 
     def test_capitalized_non_we_item_stays_in_the_list(self) -> None:
         text = """

@@ -1,0 +1,16 @@
+---
+description: Public repo — never commit paper-specific or review-specific content
+alwaysApply: true
+---
+
+This repository is public. Commit pipeline code, generic docs, and synthetic fixtures only.
+
+Never commit content tied to a real paper or an under-review submission: PDFs, extracted text, quoted or paraphrased sentences, titles, figure or page images, table numbers, reviews, ratings, submission or forum ids, venue assignment, or reviewer identity.
+
+Keep review inputs and outputs outside the repo in a gitignored directory (`workdir/`, `reviews/`, `papers/`, or `uploads/`).
+
+Do not copy a manuscript into tests. Write a new synthetic fixture.
+
+Do not put a leaked sentence into the denylist, commit message, or docs. Block exact strings only as SHA-256 digests in `scripts/confidentiality_hashes.txt`.
+
+Run `python3 scripts/check_confidentiality.py` on tracked files. Do not force-push `main` to erase history; report the commit SHAs to the owner.

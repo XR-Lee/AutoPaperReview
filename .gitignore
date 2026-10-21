@@ -3,7 +3,32 @@ __pycache__/
 .venv/
 .runs/
 .autopaperreview/
+# Review inputs and outputs stay local. See CONFIDENTIALITY.md.
+workdir/
 reviews/
+papers/
+uploads/
+page_renders/
+page-renders/
+review_output/
+review_outputs/
+# Manuscripts, page renders, and archives
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.tif
+*.tiff
+*.bmp
+*.zip
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.xls
+*.xlsx
 # generated next to review.toml by the report stage
 examples/synthetic/review_report.md
 examples/synthetic/review_report.pdf
