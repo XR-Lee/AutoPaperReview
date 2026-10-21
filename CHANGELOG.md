@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `ingest` and `render_pages` accept an optional `supplement` path. The supplement is rendered as a second page set (`S1`, `S2`, ...) beside the main pages. `format_check` still applies page limits to the main PDF only and records those supplement ids. `visual_inspect` sees both page sets.
+- The run directory is the project id. A stage signature covers that stage's parameters, the files it reads, and upstream output hashes. Changing an export-gate flag reuses ingest, render, search, and judgments. A manuscript edit still reruns stages that read the manuscript.
 - Added `OpenAICompatibleAdapter` and `OpenAICompatibleVisionInspector`. `execute_review` can call an OpenAI-compatible chat endpoint for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. `visual_inspect` can send rendered page images to the same API. The pipeline validates the JSON, retries a schema failure once, then fails the stage. An excerpt or page hash that does not resolve rejects that contribution, ledger item, or visual finding. There is no silent fallback to the deterministic adapter.
 - A rating dimension whose excerpt does not resolve is retried once with that unresolved-anchor error. If any of the seven dimensions is still missing, `execute_review` fails the stage.
 - Contributions and ledger judgments require at least one item. An empty list is a schema failure and uses the same one-retry path.

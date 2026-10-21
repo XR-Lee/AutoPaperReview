@@ -13,7 +13,7 @@ AutoPaperReview is a local-first *harness*. That is a real product, not a missin
 Strengths that most generation-first reviewers still lack:
 
 - Canonical Pydantic records and committed JSON Schema, with unknown fields rejected.
-- A TOML DAG with hash-derived run identity, stage signatures, atomic promotion, and resume.
+- A TOML DAG with a stable project run directory, per-stage signatures, atomic promotion, and resume.
 - Deny-by-default network *declaration* (not an OS sandbox) and shell-free commands.
 - Claims, dimension scores, and venue conclusions must cite evidence IDs.
 - No default overall 0–10. Venue conclusions are separate from dimension scores and are not a fitted ICLR map.

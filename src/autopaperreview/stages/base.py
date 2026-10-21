@@ -41,6 +41,7 @@ class StageHandler(ABC):
     type_name: str
     version = "1"
     params_model: type[BaseModel] | None = None
+    reads_source = False
 
     def validate_params(self, params: dict[str, Any]) -> None:
         if self.params_model is not None:

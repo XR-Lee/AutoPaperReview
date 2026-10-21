@@ -51,21 +51,46 @@ class RenderPagesParams(ParamsModel):
     dpi: int | None = Field(default=None, ge=72, le=300)
     profile: str = "iclr2027"
     require_pdf: bool = True
+    supplement: str | None = None
+
+
+def _supplement_pdf(context: StageContext) -> Path | None:
+    """Render param wins. Otherwise use the file copied by ingest."""
+    params = RenderPagesParams.model_validate(context.stage.params)
+    if params.supplement:
+        path = context.loaded_config.resolve(params.supplement)
+        if not path.is_file():
+            raise FileNotFoundError(f"supplement file does not exist: {path}")
+        return path
+    for stage_id in context.stage.depends_on:
+        directory = context.dependency_dir(stage_id)
+        meta_path = directory / "supplement.json"
+        if not meta_path.is_file():
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        filename = str(meta.get("filename") or "")
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 class RenderPagesStage(StageHandler):
     type_name = "render_pages"
-    version = "1"
+    version = "2"
     params_model = RenderPagesParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
         params = RenderPagesParams.model_validate(context.stage.params)
         pdf = _manuscript_pdf(context)
-        return {
+        material: dict[str, Any] = {
             "profile_sha256": sha256_file(profile_path(params.profile)),
             "pdf_sha256": None if pdf is None else sha256_file(pdf),
             "dpi": params.dpi,
         }
+        if params.supplement:
+            material["supplement_sha256"] = sha256_file(context.loaded_config.resolve(params.supplement))
+        return material
 
     def run(self, context: StageContext) -> StageOutcome:
         params = RenderPagesParams.model_validate(context.stage.params)
@@ -87,17 +112,40 @@ class RenderPagesStage(StageHandler):
         dpi = int(params.dpi or profile.get("render_dpi") or 150)
         page_dir = context.stage_dir / "pages"
         manifest = render_pdf_pages(pdf, page_dir, dpi=dpi)
+        supplement = _supplement_pdf(context)
+        if supplement is not None:
+            extra = render_pdf_pages(
+                supplement,
+                page_dir,
+                dpi=dpi,
+                document_name="supplement",
+                page_id_prefix="S",
+                filename_prefix="supplement",
+            )
+            manifest = {
+                "pdf_sha256": manifest["pdf_sha256"],
+                "supplement_sha256": extra["pdf_sha256"],
+                "dpi": dpi,
+                "page_count": manifest["page_count"],
+                "supplement_page_count": extra["page_count"],
+                "pages": [*manifest["pages"], *extra["pages"]],
+            }
+        rendered = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        (page_dir / "manifest.json").write_text(rendered, encoding="utf-8")
         manifest_path = context.stage_dir / "manifest.json"
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        manifest_path.write_text(rendered, encoding="utf-8")
         artifacts = [_artifact(manifest_path, context, "review.page_manifest")]
         for item in manifest["pages"]:
             artifacts.append(_artifact(page_dir / item["filename"], context, "review.page_image"))
         return StageOutcome(
             artifacts=artifacts,
-            metadata={"page_count": manifest["page_count"], "dpi": dpi, "pdf_sha256": manifest["pdf_sha256"]},
+            metadata={
+                "page_count": manifest["page_count"],
+                "supplement_page_count": manifest.get("supplement_page_count", 0),
+                "dpi": dpi,
+                "pdf_sha256": manifest["pdf_sha256"],
+                "page_ids": [str(item.get("page_id") or item["page"]) for item in manifest["pages"]],
+            },
         )
 
 
@@ -118,6 +166,7 @@ class FormatCheckStage(StageHandler):
     type_name = "format_check"
     version = "1"
     params_model = FormatCheckParams
+    reads_source = True
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
         params = FormatCheckParams.model_validate(context.stage.params)
@@ -167,6 +216,7 @@ class VisualInspectStage(StageHandler):
     type_name = "visual_inspect"
     version = "2"
     params_model = VisualInspectParams
+    reads_source = True
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
         params = VisualInspectParams.model_validate(context.stage.params)
@@ -243,12 +293,13 @@ class VisualInspectStage(StageHandler):
                         for route in context.loaded_config.config.routes
                     ],
                 )
+            page_ids = [str(item.get("page_id") or item["page"]) for item in manifest.get("pages", [])]
             if (
                 params.require_pages_seen
                 and hasattr(inspector, "assert_pages_seen")
                 and findings_path is not None
             ):
-                inspector.assert_pages_seen([int(item["page"]) for item in manifest.get("pages", [])])
+                inspector.assert_pages_seen(page_ids)
             by_sha = {item["sha256"]: item for item in manifest.get("pages", [])}
             for item in manifest.get("pages", []):
                 request_findings = inspector.inspect(
@@ -260,8 +311,12 @@ class VisualInspectStage(StageHandler):
                         raise ValueError(
                             f"visual finding {finding.id} page hash is not in the render manifest"
                         )
-                    if by_sha[finding.page_image_sha256]["page"] != finding.page:
+                    record = by_sha[finding.page_image_sha256]
+                    record_id = str(record.get("page_id") or record["page"])
+                    if int(record["page"]) != finding.page:
                         raise ValueError(f"visual finding {finding.id} page does not match the image hash")
+                    if finding.page_id and finding.page_id != record_id:
+                        raise ValueError(f"visual finding {finding.id} page id does not match the image hash")
                     if finding_matches_caption(finding):
                         raise ValueError(f"visual finding {finding.id} repeats the caption")
                     findings.append(finding)
@@ -309,6 +364,8 @@ def _request(item: dict[str, Any], page_dir: Path):
 
     return VisualPageRequest(
         page=int(item["page"]),
+        page_id=str(item.get("page_id") or item["page"]),
+        document=str(item.get("document") or "main"),
         page_image_sha256=item["sha256"],
         image_path=str(page_dir / item["filename"]),
         width_px=int(item["width_px"]),

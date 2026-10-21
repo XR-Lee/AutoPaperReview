@@ -94,20 +94,20 @@ Each enabled stage follows this lifecycle:
 
 1. Serialize the parsed configuration to `config.snapshot.json`, hash it as an artifact, and bind it to the run manifest.
 2. Resolve successful dependency records.
-3. Compute a signature from framework version, handler type/version, stage configuration, source hash, dependency artifact hashes, handler-specific material, and network policy.
+3. Compute a signature from framework version, handler type/version, that stage's id, type, dependencies, and parameters, dependency artifact hashes, handler-specific material, and network policy. The manuscript hash is included only when the stage reads the manuscript. Other inputs (a PDF, a supplement, a snapshot fixture, a command input file) are hashed by the handler that opens them.
 4. Reuse an earlier result only when its signature matches and every output still exists with the recorded hash.
 5. Otherwise execute in a unique `.attempts` directory.
 6. Validate that every declared output exists inside that attempt directory.
 7. Atomically promote the completed attempt to `stages/<stage-id>`, preserving the previous completed directory if promotion fails.
 8. Record success or failure in `run_manifest.json` through an atomic file replacement.
 
-The run ID is derived from project ID, source hash, and configuration hash. It identifies a source/configuration combination; stage signatures provide the finer cache boundary.
+The run directory name is the project id. Source and configuration hashes are stored on the manifest and do not name the directory. An export-gate change updates the report stage's parameters and reuses ingest, render, search, and judgments when those stages' own inputs are unchanged. A manuscript edit reruns stages that read the manuscript, and downstream stages whose dependency hashes changed.
 
 ## Built-in stages
 
 | Stage | Current behavior |
 |---|---|
-| `ingest` | Records the source and optionally copies it into the run. |
+| `ingest` | Records the source and optionally copies it into the run. An optional `supplement` path is copied beside it and described in `supplement.json`. |
 | `command` | Executes an argument array with `shell=False` and an explicit environment allowlist; records stdout/stderr, logical placeholder paths, declared outputs, environment-key names, and hashes of command input files, then imports declared outputs. |
 | `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Every packet prepends the first-read writing contract. Literature routes can attach query and snapshot excerpts. When a sibling `manuscript.pdf` exists, packets tell the reviewer to inspect every numbered figure on the PDF page; caption paraphrase is not inspection. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
@@ -118,9 +118,9 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, plus one same-problem and one related-technique query per listed contribution. Optionally attaches a snapshot fixture or a declared retriever. Live retrieval requires a network declaration. |
-| `render_pages` | Optional `visual` extra. Rasterizes each PDF page to a hashed PNG and a manifest. Fails closed when a visual route is enabled and the sibling PDF is missing. |
-| `format_check` | Deterministic ICLR 2027 checklist from `profiles/iclr2027.json`: 9-page main text, US Letter, margin floor, anonymity metadata and page-1 email, template marker, font embedding, raster size, blank caption pages. Desk-reject classes set `format_desk_reject`. Other failures set a `writing_clarity` clause ceiling. |
-| `visual_inspect` | Adapter contract. `AgentFindingsInspector` reads a findings drop produced after the pages were opened. `OpenAICompatibleVisionInspector` sends each page PNG to an OpenAI-compatible chat endpoint. `HostedVisionInspector` POSTs page PNGs only under `network_policy = allow` with an optional API key; a missing key sends nothing. Findings carry the page-image hash, a bbox, a non-caption visible mark, and an optional severity, fatal class, or clause. |
+| `render_pages` | Optional `visual` extra. Rasterizes each main PDF page to `page-NNN.png` (`page_id` `1`, `2`, ...). An optional `supplement` path, or the file copied by `ingest`, is a second page set: `supplement-NNN.png` with page ids `S1`, `S2`, .... Fails closed when a visual route is enabled and the sibling PDF is missing. |
+| `format_check` | Deterministic venue checklist from the selected profile (`iclr2027` or `aaai2027`): main-text page limit, total page limit, US Letter, margin floor, anonymity metadata and page-1 email, template marker, font embedding, raster size, blank caption pages. Supplement pages are excluded from those page limits and listed on a passing `FMT-supplement` check. Desk-reject classes set `format_desk_reject`. Other failures set a `writing_clarity` clause ceiling. |
+| `visual_inspect` | Adapter contract over every rendered page, including supplement ids. `AgentFindingsInspector` reads a findings drop produced after the pages were opened. `OpenAICompatibleVisionInspector` sends each page PNG to an OpenAI-compatible chat endpoint. `HostedVisionInspector` POSTs page PNGs only under `network_policy = allow` with an optional API key; a missing key sends nothing. Findings carry the page-image hash, a bbox, a non-caption visible mark, an optional `page_id`, and an optional severity, fatal class, or clause. |
 | `rate` | Pure function. Anchored bands, fatal-flaw caps, and snap-down onto 1/3/5/6/8/10 under `apr-iclr-cap-v1`. Records `cap_ids` and the weighted/gate terms. Does not call a model. |
 | `calibrate_batch` | Orders several packages by that formula. Neighbors in the same bin need `same_bin_justified`. Different active caps cannot share a bin. |
 | `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Reports open with a first-read how-to-read note and inline quotes. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package, including optional first-read/quote and figure-citation budgets. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations, then refuses export if the package or Markdown still has unpaired English or Chinese prose. A declared formula replaces the "no overall score" sentence and the PDF footer. |

@@ -141,6 +141,146 @@ class PipelineIntegrationTests(unittest.TestCase):
             }
             self.assertEqual(second_hashes, first_hashes)
 
+    def test_export_gate_change_reuses_ingest_render_search_and_judgments(self) -> None:
+        try:
+            import reportlab  # noqa: F401
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest("visual extra is required to render pages")
+        from reportlab.pdfgen import canvas
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "manuscript.txt").write_text("Synthetic cohort note.\n", encoding="utf-8")
+            document = canvas.Canvas(str(workspace / "manuscript.pdf"), pagesize=(612, 792))
+            document.drawString(72, 400, "Synthetic cohort note")
+            document.save()
+            (workspace / "snapshots.json").write_text(
+                json.dumps(
+                    {
+                        "snapshots": [
+                            {
+                                "id": "RW1",
+                                "query_ids": ["Q-baselines-1"],
+                                "title": "Synthetic fixture for a cohort baseline",
+                                "retrieved_at": "2026-08-21T00:00:00Z",
+                                "content_kind": "abstract",
+                                "locator": "https://example.invalid/synthetic-cohort",
+                                "excerpt": "A synthetic abstract used only as an offline snapshot.",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "review_input.json").write_text(
+                json.dumps([legacy_issue(detected_by=[], sources=[])]),
+                encoding="utf-8",
+            )
+            (workspace / "marker.py").write_text(
+                "from pathlib import Path\nimport sys\nPath(sys.argv[1]).write_text('held\\n', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            config_path = workspace / "review.toml"
+            config_path.write_text(self._cache_config(explicit_gate=False, blank_line=False), encoding="utf-8")
+
+            first = run_pipeline(config_path)
+            self.assertEqual(first.run_id, "export-cache")
+            self.assertEqual(
+                [stage.status for stage in first.stages],
+                [StageStatus.success] * 6,
+            )
+            self.assertGreater(first.stage("search").metadata["snapshot_count"], 0)
+
+            config_path.write_text(self._cache_config(explicit_gate=True, blank_line=True), encoding="utf-8")
+            second = run_pipeline(config_path)
+            self.assertEqual(second.run_id, first.run_id)
+            self.assertEqual((workspace / ".runs" / second.run_id).name, "export-cache")
+            reused = ["ingest", "pages", "search", "judgments", "marker"]
+            for stage_id in reused:
+                stage = second.stage(stage_id)
+                self.assertEqual(stage.status, StageStatus.skipped, stage_id)
+                self.assertTrue(stage.metadata["cache_hit"], stage_id)
+                self.assertEqual(stage.attempt, 1, stage_id)
+                self.assertEqual(stage.signature, first.stage(stage_id).signature, stage_id)
+            report = second.stage("report")
+            self.assertEqual(report.status, StageStatus.success)
+            self.assertFalse(report.metadata["cache_hit"])
+            self.assertEqual(report.attempt, 2)
+            self.assertEqual(second.stage("search").metadata["snapshot_count"], first.stage("search").metadata["snapshot_count"])
+
+            manuscript = workspace / "manuscript.txt"
+            manuscript.write_text(manuscript.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            third = run_pipeline(config_path)
+            self.assertEqual(third.run_id, first.run_id)
+            self.assertEqual(third.stage("marker").status, StageStatus.skipped)
+            self.assertTrue(third.stage("marker").metadata["cache_hit"])
+            self.assertEqual(third.stage("ingest").status, StageStatus.success)
+            self.assertEqual(third.stage("search").status, StageStatus.success)
+            self.assertGreater(third.stage("search").attempt, 1)
+
+    def _cache_config(self, *, explicit_gate: bool, blank_line: bool) -> str:
+        gap = "\n" if blank_line else ""
+        rating = "\nrequire_rating = false\n" if explicit_gate else "\n"
+        return (
+            textwrap.dedent(
+                f"""
+                schema_version = 1
+                {gap}
+                [project]
+                id = "export-cache"
+                title = "Export cache"
+                source = "manuscript.txt"
+                run_root = ".runs"
+                network_policy = "deny"
+
+                [[stages]]
+                id = "ingest"
+                type = "ingest"
+
+                [[stages]]
+                id = "pages"
+                type = "render_pages"
+                depends_on = ["ingest"]
+                [stages.params]
+                dpi = 72
+                require_pdf = true
+
+                [[stages]]
+                id = "search"
+                type = "literature_grounding"
+                depends_on = ["ingest"]
+                [stages.params]
+                requires_network = false
+                snapshot_path = "snapshots.json"
+
+                [[stages]]
+                id = "judgments"
+                type = "execute_review"
+                depends_on = ["search"]
+                [stages.params]
+                adapter = "autopaperreview.adapters:FixtureReviewAdapter"
+                fixture_path = "review_input.json"
+
+                [[stages]]
+                id = "marker"
+                type = "command"
+                [stages.params]
+                command = ["python3", "marker.py", "{{stage_dir}}/marker.txt"]
+                outputs = ["marker.txt"]
+
+                [[stages]]
+                id = "report"
+                type = "report"
+                depends_on = ["judgments"]
+                [stages.params]
+                min_issues = 0
+                {rating}
+                """
+            ).strip()
+            + "\n"
+        )
+
     def test_deny_policy_blocks_declared_network_command_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

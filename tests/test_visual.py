@@ -261,6 +261,127 @@ class FormatProfileTests(unittest.TestCase):
             self.assertIn("tick labeled with a unit", package_text)
             self.assertIn(page.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
 
+    def test_supplement_is_a_second_page_set(self) -> None:
+        try:
+            import reportlab  # noqa: F401
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest("visual and pdf extras are required")
+        import textwrap
+
+        with self._temporary() as directory:
+            _pdf(directory / "manuscript.pdf", [("Synthetic main page", 72, 400)])
+            _pdf(
+                directory / "supplement.pdf",
+                [(f"Synthetic supplement page {index}", 72, 400) for index in range(1, 11)],
+            )
+            (directory / "manuscript.txt").write_text("Synthetic main page.\n", encoding="utf-8")
+            (directory / "prompt.md").write_text("Inspect every page image.\n", encoding="utf-8")
+
+            def write_config(path: Path, project_id: str, *, on_ingest: bool, on_render: bool) -> None:
+                ingest_params = '\n                    [stages.params]\n                    supplement = "supplement.pdf"\n' if on_ingest else "\n"
+                render_params = (
+                    '\n                    dpi = 72\n                    supplement = "supplement.pdf"\n'
+                    if on_render
+                    else "\n                    dpi = 72\n"
+                )
+                path.write_text(
+                    textwrap.dedent(
+                        f"""
+                        schema_version = 1
+
+                        [project]
+                        id = "{project_id}"
+                        title = "Supplement pages"
+                        source = "manuscript.txt"
+                        run_root = ".runs"
+                        network_policy = "deny"
+
+                        [[routes]]
+                        id = "M9"
+                        name = "Layout QA"
+                        kind = "visual"
+                        prompt = "prompt.md"
+
+                        [[stages]]
+                        id = "ingest"
+                        type = "ingest"
+                        {ingest_params}
+                        [[stages]]
+                        id = "pages"
+                        type = "render_pages"
+                        depends_on = ["ingest"]
+                        [stages.params]
+                        {render_params}
+                        [[stages]]
+                        id = "format"
+                        type = "format_check"
+                        depends_on = ["pages"]
+
+                        [[stages]]
+                        id = "inspect"
+                        type = "visual_inspect"
+                        depends_on = ["pages"]
+                        [stages.params]
+                        adapter = "tests.fake_visual:GoodInspector"
+                        """
+                    ).strip()
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+            write_config(directory / "review.toml", "visual-supplement", on_ingest=True, on_render=False)
+            manifest = run_pipeline(directory / "review.toml")
+            self._assert_supplement_pages(directory, manifest)
+
+            write_config(
+                directory / "render-only.toml",
+                "visual-supplement-render",
+                on_ingest=False,
+                on_render=True,
+            )
+            rendered = run_pipeline(directory / "render-only.toml")
+            self._assert_supplement_pages(directory, rendered)
+
+    def _assert_supplement_pages(self, directory: Path, manifest) -> None:
+        import json
+
+        from autopaperreview.models import ReviewPackage
+
+        run_dir = directory / ".runs" / manifest.run_id
+        page_dir = run_dir / "stages" / "pages" / "pages"
+        self.assertTrue((page_dir / "page-001.png").is_file())
+        self.assertTrue((page_dir / "supplement-001.png").is_file())
+        self.assertTrue((page_dir / "supplement-010.png").is_file())
+        rendered = json.loads((run_dir / "stages" / "pages" / "manifest.json").read_text(encoding="utf-8"))
+        page_ids = [item["page_id"] for item in rendered["pages"]]
+        self.assertEqual(page_ids[0], "1")
+        self.assertEqual(page_ids[1:3], ["S1", "S2"])
+        self.assertIn("S10", page_ids)
+        self.assertEqual(rendered["page_count"], 1)
+        self.assertEqual(rendered["supplement_page_count"], 10)
+        self.assertEqual(manifest.stage("pages").metadata["page_ids"][1], "S1")
+
+        package = ReviewPackage.model_validate_json(
+            (run_dir / "stages" / "format" / "package.json").read_text(encoding="utf-8")
+        )
+        checks = {item.id: item for item in package.format_checks}
+        self.assertTrue(checks["FMT-pages"].passed)
+        self.assertEqual(checks["FMT-pages"].page, 1)
+        self.assertTrue(checks["FMT-supplement"].passed)
+        self.assertIn("S1", checks["FMT-supplement"].detail.primary)
+        self.assertIn("S10", checks["FMT-supplement"].detail.primary)
+        self.assertNotIn("format_desk_reject", checks["FMT-pages"].model_dump_json())
+
+        visual = ReviewPackage.model_validate_json(
+            (run_dir / "stages" / "inspect" / "package.json").read_text(encoding="utf-8")
+        )
+        by_id = {item.page_id: item for item in visual.visual_findings}
+        self.assertEqual(by_id["S1"].id, "VS1")
+        self.assertEqual(by_id["S1"].page, 1)
+        self.assertEqual(by_id["1"].id, "V1")
+        self.assertIn("tick labeled with a unit", by_id["S2"].visible_mark)
+
     def _temporary(self):
         import tempfile
         from contextlib import contextmanager

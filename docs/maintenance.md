@@ -53,7 +53,7 @@ A stage cache entry is reusable only when:
 - Every declared output exists and matches its recorded hash.
 - The previous stage status is successful or cache-skipped.
 
-Signatures must include every input that can change behavior: handler type/version, stage parameters, source and dependency hashes, prompt/config hashes, command input-file hashes, adapter version or code digest, model/seed where relevant, network policy, and relevant runtime material.
+Signatures must include every input that can change that stage's behavior: handler type/version, that stage's parameters, dependency output hashes, and the manuscript hash when the stage reads the manuscript. Also include prompt hashes, command input-file hashes, PDF and supplement hashes, snapshot hashes, adapter version or code digest, model/seed where relevant, network policy, and relevant runtime material. Do not hash the rest of the configuration. An export-gate edit belongs on the report signature only.
 
 Do not include timestamps, run IDs, absolute workspace paths, or secrets in a deterministic signature. Stochastic external responses must be snapshotted and addressed by hash before downstream reuse.
 

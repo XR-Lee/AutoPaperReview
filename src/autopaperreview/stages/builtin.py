@@ -164,13 +164,42 @@ def _enforce_network_declaration(context: StageContext, *, requires_network: boo
         )
 
 
+def _route_fingerprint(context: StageContext) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": route.id,
+            "name": route.name,
+            "kind": route.kind.value,
+            "prompt_version": route.prompt_version,
+            "manuscript_access": route.manuscript_access,
+            "network_access": route.network_access,
+            "model": route.model,
+        }
+        for route in context.loaded_config.config.routes
+    ]
+
+
 class IngestParams(ParamsModel):
     copy_source: bool | None = Field(default=None, alias="copy")
+    supplement: str | None = None
 
 
 class IngestStage(StageHandler):
     type_name = "ingest"
     params_model = IngestParams
+    reads_source = True
+
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        params = IngestParams.model_validate(context.stage.params)
+        copy = (
+            context.loaded_config.config.project.copy_source
+            if params.copy_source is None
+            else params.copy_source
+        )
+        material: dict[str, Any] = {"copy_source": copy}
+        if params.supplement:
+            material["supplement_sha256"] = sha256_file(context.loaded_config.resolve(params.supplement))
+        return material
 
     def run(self, context: StageContext) -> StageOutcome:
         params = IngestParams.model_validate(context.stage.params)
@@ -196,7 +225,27 @@ class IngestStage(StageHandler):
             }
         _write_json(descriptor, descriptor_artifact.model_dump(mode="json"))
         artifacts.append(_artifact(descriptor, context, "manuscript.descriptor"))
-        return StageOutcome(artifacts=artifacts, metadata={"copied": should_copy})
+        if params.supplement:
+            supplement_path = context.loaded_config.resolve(params.supplement)
+            if not supplement_path.is_file():
+                raise FileNotFoundError(f"supplement file does not exist: {supplement_path}")
+            copied_supplement = context.stage_dir / supplement_path.name
+            shutil.copy2(supplement_path, copied_supplement)
+            meta_path = context.stage_dir / "supplement.json"
+            _write_json(
+                meta_path,
+                {
+                    "filename": supplement_path.name,
+                    "sha256": sha256_file(copied_supplement),
+                    "source": params.supplement,
+                },
+            )
+            artifacts.append(_artifact(copied_supplement, context, "manuscript.supplement"))
+            artifacts.append(_artifact(meta_path, context, "manuscript.supplement.descriptor"))
+        return StageOutcome(
+            artifacts=artifacts,
+            metadata={"copied": should_copy, "supplement": bool(params.supplement)},
+        )
 
 
 class CommandParams(ParamsModel):
@@ -367,6 +416,7 @@ class ImportIssuesParams(ParamsModel):
 class ImportIssuesStage(StageHandler):
     type_name = "import_issues"
     params_model = ImportIssuesParams
+    reads_source = True
 
     def _input_path(self, context: StageContext) -> Path:
         params = ImportIssuesParams.model_validate(context.stage.params)
@@ -407,6 +457,7 @@ class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
     version = "5"
     params_model = PromptPacketParams
+    reads_source = True
 
     def _routes(self, context: StageContext, params: PromptPacketParams):
         wanted = set(params.route_ids)
@@ -430,6 +481,11 @@ class PromptPacketStage(StageHandler):
         material: dict[str, Any] = {
             "prompt_hashes": prompt_hashes,
             "first_read_contract_sha256": digest_excerpt(contract),
+            "routes": [
+                item
+                for item in _route_fingerprint(context)
+                if not params.route_ids or item["id"] in set(params.route_ids)
+            ],
         }
         pdf = sibling_pdf(context.source_path)
         if pdf is not None:
@@ -767,6 +823,7 @@ class LiteratureGroundingStage(StageHandler):
     type_name = "literature_grounding"
     version = "4"
     params_model = LiteratureGroundingParams
+    reads_source = True
 
     def _params(self, context: StageContext) -> LiteratureGroundingParams:
         return LiteratureGroundingParams.model_validate(context.stage.params)
@@ -911,6 +968,12 @@ class ReportStage(StageHandler):
     version = "9"
     params_model = ReportParams
 
+    def signature_material(self, context: StageContext) -> dict[str, Any]:
+        return {
+            "default_language": context.loaded_config.config.project.default_language,
+            "routes": _route_fingerprint(context),
+        }
+
     def _package(self, context: StageContext) -> ReviewPackage:
         for stage_id in reversed(context.stage.depends_on):
             stage_dir = context.dependency_dir(stage_id)
@@ -1019,6 +1082,7 @@ class LedgerStage(StageHandler):
     type_name = "ledger"
     version = "3"
     params_model = LedgerParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
         try:
@@ -1151,6 +1215,7 @@ class IntegrityStage(StageHandler):
     type_name = "integrity"
     version = "2"
     params_model = IntegrityParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
         try:
@@ -1216,6 +1281,7 @@ class NoveltyStage(StageHandler):
     type_name = "novelty"
     version = "1"
     params_model = NoveltyParams
+    reads_source = True
 
     def run(self, context: StageContext) -> StageOutcome:
         try:
@@ -1278,13 +1344,17 @@ class ExecuteReviewStage(StageHandler):
     type_name = "execute_review"
     version = "1"
     params_model = ExecuteReviewParams
+    reads_source = True
 
     def _params(self, context: StageContext) -> ExecuteReviewParams:
         return ExecuteReviewParams.model_validate(context.stage.params)
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
         params = self._params(context)
-        material: dict[str, Any] = {"adapter": params.adapter}
+        material: dict[str, Any] = {
+            "adapter": params.adapter,
+            "routes": _route_fingerprint(context),
+        }
         if params.fixture_path:
             material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
         if params.base_url or params.model or params.allow_remote or params.judgments or params.packet_routes:

@@ -1455,6 +1455,8 @@ class OpenAICompatibleVisionInspector:
                 "text": (
                     f"{packet}\n\n## Page\n"
                     f"- page: {request.page}\n"
+                    f"- page_id: {request.page_id or request.page}\n"
+                    f"- document: {request.document}\n"
                     f"- page_image_sha256: {request.page_image_sha256}\n"
                     f"- width_px: {request.width_px}\n"
                     f"- height_px: {request.height_px}\n"
@@ -1462,7 +1464,7 @@ class OpenAICompatibleVisionInspector:
             },
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
         ]
-        judgment = f"visual-page-{request.page}"
+        judgment = f"visual-page-{request.page_id or request.page}"
         try:
             payload = self.session.complete(judgment, user, VisualJudgment)
         except ModelExecutionError as exc:
@@ -1473,7 +1475,12 @@ class OpenAICompatibleVisionInspector:
         assert isinstance(payload, VisualJudgment)
         accepted: list[VisualFinding] = []
         for finding in payload.findings:
-            if finding.page != request.page or finding.page_image_sha256 != request.page_image_sha256:
+            page_id = request.page_id or str(request.page)
+            if (
+                finding.page != request.page
+                or finding.page_image_sha256 != request.page_image_sha256
+                or (finding.page_id is not None and finding.page_id != page_id)
+            ):
                 self.session.reject(
                     judgment,
                     finding.id,

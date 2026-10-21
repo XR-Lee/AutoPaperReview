@@ -8,7 +8,7 @@ Implemented in the current package:
 
 - Strict canonical review, artifact, stage, and run models.
 - TOML configuration with DAG validation.
-- Hash-derived run identity, stage signatures, output validation, resume, and atomic promotion.
+- A project run directory, per-stage signatures, output validation, resume, and atomic promotion.
 - Built-in ingest, command, prompt-packet, legacy-import, exact-normalized consensus, and report stages.
 - Deny-by-default declared network policy.
 - Entry-point stage plugins.
