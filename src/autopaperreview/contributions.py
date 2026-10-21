@@ -96,7 +96,7 @@ def _extract_from_stream(text: str) -> list[dict[str, object]]:
         for position, match in enumerate(markers):
             raw = match.group(1) if match.lastindex else str(position + 1)
             index = _ROMAN_VALUES.get(raw.lower()) if re.fullmatch(r"[ivx]+", raw, re.I) else int(raw)
-            if index < 1 or index > 6 or index in found:
+            if index is None or index < 1 or index > 6 or index in found:
                 continue
             start = match.end()
             end = markers[position + 1].start() if position + 1 < len(markers) else len(window)
