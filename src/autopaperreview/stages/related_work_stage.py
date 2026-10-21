@@ -64,6 +64,7 @@ class RelatedWorkSearchParams(ParamsModel):
     network_scope: str = "metadata"
     max_results_per_query: int = Field(default=5, ge=1, le=25)
     named_method_limit: int = Field(default=15, ge=1, le=40)
+    bibliography_lookup_limit: int = Field(default=60, ge=1, le=200)
     confirmation_path: str | None = None
     confirmation_adapter: str | None = None
     providers: list[str] = Field(
@@ -171,7 +172,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "6"
+    version = "7"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
@@ -188,6 +189,7 @@ class RelatedWorkSearchStage(StageHandler):
             if path.is_file():
                 material["findings_sha256"] = sha256_file(path)
         material["named_method_limit"] = params.named_method_limit
+        material["bibliography_lookup_limit"] = params.bibliography_lookup_limit
         if params.confirmation_path:
             path = context.loaded_config.resolve(params.confirmation_path)
             material["confirmation_path"] = params.confirmation_path
@@ -226,6 +228,7 @@ class RelatedWorkSearchStage(StageHandler):
             max_results=params.max_results_per_query,
             providers=params.providers,
             named_method_limit=params.named_method_limit,
+            bibliography_lookup_limit=params.bibliography_lookup_limit,
             confirmation_path=confirmation_file if confirmation_file is not None and confirmation_file.is_file() else None,
             confirmation_adapter=params.confirmation_adapter,
             confirmation_scratch=context.stage_dir,

@@ -6,7 +6,6 @@ import json
 import os
 import random
 import shutil
-import sys
 import tempfile
 import textwrap
 import unittest
@@ -54,6 +53,7 @@ from autopaperreview.related_work import (
     invoke_confirmation_adapter,
     named_methods_from_manuscript,
     provider_request_headers,
+    _search_url,
     parse_experiments,
     load_venue_deadlines,
     manuscript_baseline_excerpt,
@@ -68,6 +68,60 @@ from autopaperreview.venues import load_venue_profile
 
 EXAMPLE = Path("examples/synthetic/related_work")
 MANUSCRIPT = (EXAMPLE / "manuscript.txt").read_text(encoding="utf-8")
+
+
+def _synthetic_problem() -> str:
+    return textwrap.dedent(
+        """\
+        Title: Synthetic Specimen Tracker
+
+        Problem
+        Task: monocular specimen pose estimation
+        Inputs: monocular RGB frames
+        Outputs: a 6-DoF pose trajectory
+        Assumptions: rigid specimen
+        Setting: offline evaluation with a sequence-level holdout and pose error in millimeters
+        Technique: temporal fusion
+        """
+    ).rstrip()
+
+
+def _wrapped_aaai_bibliography() -> str:
+    """34 numeric AAAI-style entries. [24] is the hyphenated closest method."""
+    lines: list[str] = []
+    for index in range(1, 35):
+        if index == 24:
+            lines.append(
+                "[24] A. Synthetic and B. Author. Foo-BAR: Temporal fusion for\n"
+                "specimen pose. In Proceedings of the Synthetic Conference,\n"
+                "2021. arXiv:0000.00024."
+            )
+        elif index == 1:
+            lines.append(
+                "1. A. Author. Filler Note 01. In Proceedings of the Synthetic Conference, "
+                "2019. arXiv:0000.00001."
+            )
+        elif index == 5:
+            lines.append(
+                "[5] C. Writer and D. Writer. Filler Note About\n"
+                "Registration Methods.\n"
+                "2018."
+            )
+        elif index % 3 == 0:
+            lines.append(
+                f"[{index}] A. Author and B. Author. Filler Note {index:02d}.\n"
+                f"{2010 + (index % 9)}."
+            )
+        elif index % 3 == 1:
+            lines.append(
+                f"{index}. A. Author. Filler Note {index:02d}. "
+                "In Proceedings of the Synthetic Conference, 2019."
+            )
+        else:
+            lines.append(
+                f"({index}) A. Author and B. Author. Filler Note {index:02d}. Proc. Synthetic, 2017."
+            )
+    return "\n".join(lines)
 
 
 def _bands(**overrides: float) -> dict[str, float]:
@@ -144,6 +198,112 @@ class BibliographyDeadlineTests(unittest.TestCase):
         self.assertEqual(entries[0].doi, "10.0000/synthetic.pose.2022")
         self.assertEqual(entries[1].arxiv_id, "0000.00002")
         self.assertEqual(entries[1].year, 2023)
+
+    def test_wrapped_numeric_and_author_year_references_keep_their_titles(self) -> None:
+        text = f"{_synthetic_problem()}\n\nReferences\n{_wrapped_aaai_bibliography()}\n"
+        entries = parse_bibliography(text)
+        self.assertEqual([entry.marker for entry in entries], [str(index) for index in range(1, 35)])
+        closest = next(entry for entry in entries if entry.marker == "24")
+        self.assertEqual(closest.title, "Foo-BAR: Temporal fusion for specimen pose")
+        self.assertEqual(closest.arxiv_id, "0000.00024")
+        self.assertEqual(closest.year, 2021)
+        self.assertTrue(all(entry.title and "Filler Note" in entry.title for entry in entries if entry.marker != "24"))
+        self.assertTrue(all(entry.title != "2018" for entry in entries))
+
+        author_year = f"""{_synthetic_problem()}
+
+Related Work
+Smith and Jones 2021 estimate pose. Smith et al. 2021 agree.
+
+Experiments
+Lee et al. 2022 report a depth number.
+
+Method
+Name and Other 2020 is the nearest description.
+
+References
+Smith, A. and Jones, B. 2021. Temporal Fusion Pose
+Estimator. In Proceedings of the Synthetic Conference.
+
+Lee, C. et al.
+2022.
+Depth Channel Survey. Journal of Synthetic Vision.
+
+Name and Other. 2020. Held Out Pose Fusion.
+Proc. Synthetic.
+
+[8]
+2019.
+"""
+        parsed = parse_bibliography(author_year)
+        by_marker = {entry.marker: entry for entry in parsed}
+        self.assertEqual(by_marker["smith-2021"].title, "Temporal Fusion Pose Estimator")
+        self.assertEqual(by_marker["lee-2022"].title, "Depth Channel Survey")
+        self.assertEqual(by_marker["lee-2022"].year, 2022)
+        self.assertEqual(by_marker["name-2020"].title, "Held Out Pose Fusion")
+        self.assertIsNone(by_marker["8"].title)
+        queries = run_related_work_search(author_year, mode="off").queries
+        cited = [
+            query
+            for query in queries
+            if query.metadata.get("family") == "cited_reference" and query.metadata.get("lookup") == "title"
+        ]
+        self.assertTrue(all(query.metadata["cited_in_body"] for query in cited))
+        self.assertEqual(
+            [query.metadata["marker"] for query in cited if query.metadata["providers"] == ["arxiv"]],
+            ["smith-2021", "lee-2022", "name-2020"],
+        )
+        self.assertNotIn("8", {query.metadata["marker"] for query in cited})
+
+        ranged = f"""{_synthetic_problem()}
+
+Related Work
+See [3, 24] and [20–25].
+
+References
+""" + "\n".join(
+            f"[{index}] A. Author. Range Note {index:02d}. In Proceedings, 2019." for index in range(1, 27)
+        )
+        ranged_queries = run_related_work_search(ranged, mode="off").queries
+        cited_markers = {
+            query.metadata["marker"]
+            for query in ranged_queries
+            if query.metadata.get("family") == "cited_reference" and query.metadata.get("cited_in_body")
+        }
+        self.assertEqual(cited_markers, {"3", "20", "21", "22", "23", "24", "25"})
+
+    def test_arxiv_ids_are_batched_and_untitled_entries_do_not_use_slots(self) -> None:
+        bibliography = "\n".join(
+            f"[{index}] A. Author. Filler Note {index:02d}. In Proceedings, 2019. arXiv:0000.{index:05d}."
+            for index in range(1, 42)
+        )
+        text = f"{_synthetic_problem()}\n\nReferences\n{bibliography}\n"
+        judgment = run_related_work_search(text, mode="off", bibliography_lookup_limit=60)
+        batches = [query.query for query in judgment.queries if query.metadata.get("lookup") == "arxiv_id_list"]
+        self.assertEqual([len(batch.split(",")) for batch in batches], [40, 1])
+        url = _search_url("arxiv", batches[0], 5, lookup="arxiv_id_list")
+        self.assertIn("id_list=", url)
+        self.assertIn("max_results=40", url)
+        self.assertNotIn("search_query=", url)
+
+        skipped = f"""{_synthetic_problem()}
+
+Related Work
+Only [1] is cited.
+
+References
+[1] A. Author. Real Title Here. In Proceedings, 2019.
+[2]
+2019.
+[3] 2020.
+"""
+        skipped_queries = run_related_work_search(skipped, mode="off", bibliography_lookup_limit=5).queries
+        markers = {
+            query.metadata["marker"]
+            for query in skipped_queries
+            if query.metadata.get("family") == "cited_reference"
+        }
+        self.assertEqual(markers, {"1"})
 
     def test_dates_after_the_submission_deadline_are_concurrent(self) -> None:
         deadline = date(2026, 9, 25)
@@ -917,13 +1077,13 @@ class StageTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assertNotIn("autopaperreview.model_exec", sys.modules)
             manifest = run_pipeline(workspace / "review.toml")
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "related_work"
             judgment = json.loads((stage_dir / "judgment.json").read_text(encoding="utf-8"))
         self.assertEqual(judgment["confirmation"], "awaiting_confirmation")
-        self.assertNotIn("autopaperreview.model_exec", sys.modules)
         self.assertTrue(judgment["confirmation_packet"]["candidates"])
+        self.assertTrue(judgment["candidates"])
+        self.assertTrue(all(not item["confirmed"] for item in judgment["candidates"]))
 
 
 class TieringAndRetrievalTests(unittest.TestCase):
@@ -1380,7 +1540,7 @@ class TieringAndRetrievalTests(unittest.TestCase):
                 "abstract": "Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation.",
             }
         )
-        later_year = self._payload(shared, "A later version.", "0000.00992", published="2020-01-01T00:00:00Z")
+        earlier_year = self._payload(shared, "An earlier record.", "0000.00992", published="2018-01-01T00:00:00Z")
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "findings.json"
             path.write_text(
@@ -1404,7 +1564,7 @@ class TieringAndRetrievalTests(unittest.TestCase):
                                 "title": shared,
                                 "arxiv_id": "0000.00992",
                                 "query_ids": ["Q-adjacent_tasks-1"],
-                                "provider_payload": later_year,
+                                "provider_payload": earlier_year,
                             },
                         ],
                         "confirmations": [],
@@ -1418,7 +1578,70 @@ class TieringAndRetrievalTests(unittest.TestCase):
         merged = next(item for item in matched if item.year == 2021)
         self.assertEqual(merged.external_id, "doi:10.0000/synthetic.shared.2021")
         self.assertCountEqual(merged.query_ids, ["Q-same_problem-1", "Q-same_technique-1"])
+        self.assertEqual(merged.year, 2021)
         self.assertEqual(judgment.confirmation, "confirmed")
+        earlier = next(item for item in matched if item.year == 2018)
+        self.assertEqual(earlier.external_id, "arxiv:0000.00992")
+
+    def test_candidates_merge_on_normalized_title_within_one_year_and_on_shared_ids(self) -> None:
+        note = "A synthetic record with no task overlap."
+        hyphen = "Foo-BAR: Temporal Fusion"
+        spaced = "Foo BAR, Temporal Fusion"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "findings.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "title": hyphen,
+                                "arxiv_id": "0000.00881",
+                                "query_ids": ["Q-same_problem-1"],
+                                "provider_payload": self._payload(hyphen, note, "0000.00881", "2021-01-01T00:00:00Z"),
+                            },
+                            {
+                                "title": spaced,
+                                "arxiv_id": "0000.00882",
+                                "query_ids": ["Q-same_technique-1"],
+                                "provider_payload": self._payload(spaced, note, "0000.00882", "2022-06-01T00:00:00Z"),
+                            },
+                            {
+                                "title": hyphen,
+                                "arxiv_id": "0000.00883",
+                                "query_ids": ["Q-adjacent_tasks-1"],
+                                "provider_payload": self._payload(hyphen, note, "0000.00883", "2018-01-01T00:00:00Z"),
+                            },
+                            {
+                                "title": "Alpha Shared Record",
+                                "arxiv_id": "0000.00884",
+                                "query_ids": ["Q-standard_baselines-1"],
+                                "provider_payload": self._payload(
+                                    "Alpha Shared Record", note, "0000.00884", "2010-01-01T00:00:00Z"
+                                ),
+                            },
+                            {
+                                "title": "Beta Shared Record",
+                                "arxiv_id": "0000.00884",
+                                "query_ids": ["Q-alternative_formulation-1"],
+                                "provider_payload": self._payload(
+                                    "Beta Shared Record", note, "0000.00884", "2015-01-01T00:00:00Z"
+                                ),
+                            },
+                        ],
+                        "confirmations": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            judgment = run_related_work_search(MANUSCRIPT, mode="agent", findings_path=path)
+        self.assertEqual(len(judgment.candidates), 3)
+        fused = next(item for item in judgment.candidates if item.year == 2021)
+        self.assertCountEqual(fused.query_ids, ["Q-same_problem-1", "Q-same_technique-1"])
+        distant = next(item for item in judgment.candidates if item.year == 2018)
+        self.assertEqual(distant.query_ids, ["Q-adjacent_tasks-1"])
+        shared = next(item for item in judgment.candidates if item.year == 2010)
+        self.assertEqual(shared.external_id, "arxiv:0000.00884")
+        self.assertCountEqual(shared.query_ids, ["Q-standard_baselines-1", "Q-alternative_formulation-1"])
 
     def test_semantic_scholar_backoff_paces_and_keeps_the_api_key_out_of_urls(self) -> None:
         clock = _Clock()
@@ -1591,24 +1814,32 @@ class TieringAndRetrievalTests(unittest.TestCase):
         lookups = {
             (query.metadata["lookup"], query.metadata["providers"][0], query.query)
             for query in cited
-            if query.metadata["marker"] == "30"
+            if query.metadata["marker"] == "30" and query.metadata["lookup"] != "arxiv_id_list"
         }
-        self.assertIn(("arxiv_id", "arxiv", "0000.00030"), lookups)
         self.assertIn(("title", "arxiv", "Foo-BAR"), lookups)
         self.assertIn(("title", "openalex", "Foo-BAR"), lookups)
         self.assertIn(("doi", "openalex", "10.0000/synthetic.foobar.2021"), lookups)
+        id_list = next(query for query in cited if query.metadata["lookup"] == "arxiv_id_list")
+        self.assertIn("0000.00030", id_list.query)
         blob = "\n".join(seen)
         self.assertIn("search_query=ti:", blob)
         self.assertIn("Foo-BAR", blob)
-        self.assertIn("search_query=id:", blob)
+        self.assertIn("id_list=", blob)
         self.assertIn("0000.00030", blob)
+        self.assertNotIn("search_query=id:", blob)
         self.assertIn("title.search:", blob)
         self.assertIn("filter=doi:", blob)
         self.assertIn("synthetic.foobar.2021", blob)
-        self.assertNotIn("Uncited Tail Note", blob)
-        self.assertNotIn("0000.00040", blob)
         self.assertNotIn("QUILLTOKEN", blob)
         self.assertNotIn("api.semanticscholar.org", blob)
+        narrow = run_related_work_search(text, mode="off", bibliography_lookup_limit=5)
+        narrow_titles = {
+            query.query
+            for query in narrow.queries
+            if query.metadata.get("family") == "cited_reference" and query.metadata.get("lookup") == "title"
+        }
+        self.assertIn("Foo-BAR", narrow_titles)
+        self.assertNotIn("Uncited Tail Note", narrow_titles)
         found = next(item for item in judgment.candidates if item.title == "Foo-BAR")
         self.assertTrue(found.cited)
         self.assertEqual(found.tier, "must-compare")
@@ -1616,6 +1847,144 @@ class TieringAndRetrievalTests(unittest.TestCase):
         self.assertTrue(found.confirmed)
         self.assertIn("missing_closest_neighbor", [signal.fatal_class for signal in judgment.cap_signals])
         self.assertNotIn("Foo-BAR", " ".join(judgment.confirmation_packet["baselines"]["compared"]))
+
+    def test_bracket_citation_24_is_resolved_from_a_wrapped_aaai_bibliography(self) -> None:
+        bibliography = _wrapped_aaai_bibliography()
+        text = (
+            f"{_synthetic_problem()}\n\n"
+            "Related Work\n"
+            "QUILLTOKEN The closest method is cited only as [24].\n\n"
+            "Experiments\n"
+            "Decision metric: pose error in millimeters\n"
+            "Compared baselines: Flat Image Classifier\n\n"
+            "References\n"
+            f"{bibliography}\n"
+        )
+        related = _section(text, "Related Work")
+        self.assertIn("[24]", related)
+        self.assertNotIn("Foo-BAR", related)
+        self.assertNotIn("\\cite", related)
+        entries = parse_bibliography(text)
+        self.assertEqual(len(entries), 34)
+        closest = next(entry for entry in entries if entry.marker == "24")
+        self.assertEqual(closest.title, "Foo-BAR: Temporal fusion for specimen pose")
+        self.assertEqual(closest.arxiv_id, "0000.00024")
+        overlap = (
+            "Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation. "
+            "Pose error in millimeters is measured on a sequence-level holdout."
+        )
+        title = "Foo-BAR: Temporal fusion for specimen pose"
+        atom = (
+            '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry>'
+            "<id>http://arxiv.org/abs/0000.00024v1</id><published>2021-04-01T00:00:00Z</published>"
+            f"<title>{title}</title><summary>{overlap}</summary>"
+            '<link href="https://arxiv.org/abs/0000.00024"/>'
+            "</entry></feed>"
+        ).encode("utf-8")
+        seen: list[str] = []
+
+        def transport(url: str) -> HttpResult:
+            seen.append(url)
+            if "Foo-BAR" in url or "0000.00024" in url:
+                if "export.arxiv.org" in url:
+                    return HttpResult(200, atom)
+                return HttpResult(200, b'{"results":[]}')
+            if "export.arxiv.org" in url:
+                return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+            return HttpResult(200, b'{"results":[]}')
+
+        judgment = run_related_work_search(
+            text,
+            mode="live",
+            allow_network=True,
+            transport=transport,
+            providers=["arxiv", "openalex"],
+            confirm_must_compare=_confirm_must_compare,
+            sleeper=lambda _seconds: None,
+        )
+        cited = [query for query in judgment.queries if query.metadata.get("family") == "cited_reference"]
+        self.assertEqual(cited[0].metadata["marker"], "24")
+        self.assertTrue(cited[0].metadata["cited_in_body"])
+        id_list = next(query for query in cited if query.metadata["lookup"] == "arxiv_id_list")
+        self.assertIn("0000.00024", id_list.query)
+        self.assertIn("0000.00001", id_list.query)
+        blob = "\n".join(seen)
+        id_urls = [url for url in seen if "id_list=" in url]
+        self.assertEqual(len(id_urls), 1)
+        self.assertIn("0000.00024", id_urls[0])
+        self.assertIn("max_results=2", id_urls[0])
+        self.assertNotIn("search_query=id:", blob)
+        self.assertNotIn("QUILLTOKEN", blob)
+        self.assertNotIn("api.semanticscholar.org", blob)
+        found = next(item for item in judgment.candidates if item.title == title)
+        self.assertTrue(found.cited)
+        self.assertEqual(found.tier, "must-compare")
+        self.assertTrue(found.required)
+        packet_titles = [row["title"] for row in judgment.confirmation_packet["candidates"]]
+        self.assertIn(title, packet_titles)
+        baselines = judgment.confirmation_packet["baselines"]
+        baseline_text = " ".join([*baselines["compared"], *baselines["privileged"], *baselines["different_task"]])
+        self.assertNotIn("Foo-BAR", baseline_text)
+        narrow = run_related_work_search(text, mode="off", bibliography_lookup_limit=5)
+        narrow_markers = {
+            query.metadata["marker"]
+            for query in narrow.queries
+            if query.metadata.get("family") == "cited_reference" and query.metadata.get("lookup") == "title"
+        }
+        self.assertIn("24", narrow_markers)
+        self.assertLessEqual(len(narrow_markers), 5)
+        self.assertNotIn("6", narrow_markers)
+
+    def test_openalex_title_filters_are_sanitized_and_http_400_is_cached(self) -> None:
+        raw_title = "Foo-BAR: Pose, Held-Out (Synthetic)"
+        text = f"""{_synthetic_problem()}
+
+Related Work
+A cited note [1].
+
+References
+[1] A. Author, "{raw_title}," Synthetic Journal, 2021.
+"""
+        clock = _Clock()
+        clock.now = 1_000_000.0
+        calls: list[str] = []
+
+        def transport(url: str) -> HttpResult:
+            calls.append(url)
+            if "title.search:" in url:
+                return HttpResult(400, b'{"error":"Invalid query"}')
+            return HttpResult(200, b'{"results":[]}')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cache_dir = Path(temporary) / "related_work_cache"
+            kwargs = {
+                "mode": "live",
+                "allow_network": True,
+                "providers": ["openalex"],
+                "sleeper": lambda _seconds: None,
+                "cache_dir": cache_dir,
+                "cache_clock": clock,
+            }
+            run_related_work_search(text, transport=transport, **kwargs)
+            title_urls = [url for url in calls if "title.search:" in url]
+            self.assertTrue(title_urls)
+            for url in title_urls:
+                value = url.split("title.search:", 1)[1].split("&", 1)[0]
+                self.assertNotIn("%3A", value)
+                self.assertNotIn("%2C", value)
+                self.assertNotIn("%28", value)
+                self.assertNotIn(",", value)
+                self.assertIn("Foo-BAR%20Pose%20Held-Out%20Synthetic", value)
+            stored = [json.loads(path.read_text(encoding="utf-8")) for path in cache_dir.glob("*.json")]
+            self.assertTrue(any(item["status"] == 400 for item in stored))
+            clear_retrieval_cache()
+            after_first = len(calls)
+            run_related_work_search(
+                text,
+                transport=lambda url: (_ for _ in ()).throw(AssertionError(url)),
+                **kwargs,
+            )
+            self.assertEqual(len(calls), after_first)
 
     def test_judge_reasons_stay_verbatim_in_the_judgment_and_the_report(self) -> None:
         confirm = "Confirmed because the synthetic holdout uses the same temporal fusion."

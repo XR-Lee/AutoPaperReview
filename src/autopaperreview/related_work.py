@@ -2,7 +2,7 @@
 
 The search is not a copy of the manuscript bibliography and not one ad-hoc query.
 Keyword calls receive generic topic tokens. Bibliography lookups send a
-reference title, arXiv id, or DOI, and no manuscript prose. A candidate is
+reference title, a batched arXiv id list, or a DOI, and no manuscript prose. A candidate is
 kept only when a provider payload contains its id and title. Papers are never
 invented.
 
@@ -94,7 +94,9 @@ _S2_MIN_INTERVAL = 1.0
 S2_UNAUTH_RETRIES = 2
 S2_UNAUTH_BUDGET_SECONDS = 8.0
 RETRIEVAL_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
-UNCITED_BIBLIOGRAPHY_LOOKUPS = 8
+BIBLIOGRAPHY_LOOKUP_LIMIT = 60
+_ARXIV_ID_BATCH = 40
+_CACHEABLE_STATUSES = frozenset({200, 400})
 _RETRIEVAL_CACHE: dict[str, "HttpResult"] = {}
 
 INTEGRATION_NOTE = (
@@ -821,33 +823,224 @@ def assert_outbound_safe(
         raise RuntimeError("refusing to send manuscript text to an external service")
 
 
+_NUMERIC_ENTRY = re.compile(r"^\s*(?:\[(\d+)\]|\((\d+)\)|(\d{1,3})\.)(?=\s|$)")
+_YEAR_ONLY_LINE = re.compile(r"^\s*(?:19|20)\d{2}[a-z]?\s*[.,;:]?\s*$", re.I)
+_YEAR_LEAD_LINE = re.compile(r"^\s*(?:19|20)\d{2}[a-z]?\b", re.I)
+_AUTHOR_YEAR_START = re.compile(
+    r"^\s*[A-Z][A-Za-z'’\-]+"
+    r"(?:\s*,\s*(?:[A-Z]\.|[A-Z][A-Za-z'’\-]+)|(?:\s+[A-Z]\.)+|\s+et\s+al\.?|\s+and\s+[A-Z])",
+)
+_QUOTED_TITLE = re.compile(r"[\"“]([^\"”]{2,})[\"”]")
+_BRACKET_CITE = re.compile(r"\[([0-9][0-9\s,;–—\-]*)\]")
+_AUTHOR_YEAR_CITE = re.compile(
+    r"\b([A-Z][A-Za-z'’\-]+)\s+et\s+al\.?,?\s+\(?((?:19|20)\d{2})\)?"
+    r"|"
+    r"\b([A-Z][A-Za-z'’\-]+)\s+and\s+[A-Z][A-Za-z'’\-]+,?\s+\(?((?:19|20)\d{2})\)?"
+)
+_ARXIV_URL = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[a-z-]+)?/[0-9]{7})",
+    re.I,
+)
+
+
+def _reference_body(manuscript: str) -> str:
+    """References through the next known heading. Wrapped title lines stay inside."""
+    lines = manuscript.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if _heading_text(line).casefold() in {"references", "bibliography"}:
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    kept: list[str] = []
+    for line in lines[start:]:
+        heading = _heading_text(line).casefold()
+        if heading in _KNOWN_HEADINGS and heading not in {"references", "bibliography"}:
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _numeric_marker(line: str) -> str | None:
+    match = _NUMERIC_ENTRY.match(line)
+    if not match:
+        return None
+    return next(group for group in match.groups() if group)
+
+
+def _plausible_title(title: str | None) -> bool:
+    if not title:
+        return False
+    cleaned = title.strip(" \t,.;:\"'“”")
+    if len(cleaned) < 3 or not re.search(r"[A-Za-z]", cleaned):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}", cleaned):
+        return False
+    if cleaned.casefold().startswith("in proceedings") or cleaned.casefold().startswith("in proc"):
+        return False
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", cleaned)
+    if len(words) >= 2:
+        return True
+    return _is_compact_method_name(cleaned)
+
+
+def _strip_reference_marker(raw: str) -> tuple[str | None, str]:
+    match = re.match(r"^\s*(?:\[(\d+)\]|\((\d+)\)|(\d{1,3})\.)\s*", raw)
+    if not match:
+        return None, raw.strip()
+    marker = next(group for group in match.groups() if group)
+    return marker, raw[match.end() :].strip()
+
+
+def _author_fragment(segment: str) -> bool:
+    """True when a period-separated chunk is an author list, not a title."""
+    text = " ".join(segment.strip(" ,;").split())
+    if not text:
+        return True
+    name = r"(?:[A-Z]\.?\s+)*[A-Z][A-Za-z'’\-]*"
+    if re.fullmatch(rf"{name}(?:\s*(?:,\s*(?:and\s+)?|and\s+){name})*", text):
+        return True
+    if re.fullmatch(r"(?:[A-Z]\.\s*)+", text):
+        return True
+    return False
+
+
+def _title_sentence(text: str) -> str | None:
+    rest = re.sub(r"^(?:19|20)\d{2}[a-z]?[.)]\s+", "", text.strip())
+    sentence = re.split(r"\.\s+", rest, maxsplit=1)[0].strip(" ,.;:")
+    if _plausible_title(sentence) and not _author_fragment(sentence):
+        return sentence
+    return None
+
+
+def _extract_reference_title(body: str) -> str | None:
+    """Quoted titles, the sentence after the authors, or the sentence after the year."""
+    quoted = _QUOTED_TITLE.search(body)
+    if quoted:
+        title = quoted.group(1).strip(" \t,.;:")
+        if _plausible_title(title):
+            return title
+    cleaned = re.sub(r"\barxiv:\s*\S+", " ", body, flags=re.I)
+    cleaned = _ARXIV_URL.sub(" ", cleaned)
+    cleaned = _DOI.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    year_title = re.search(r"(?:19|20)\d{2}[a-z]?[.)]\s+(.+?)\.\s", cleaned + " ")
+    if year_title:
+        title = year_title.group(1).strip(" ,.;:")
+        if _plausible_title(title) and not _author_fragment(title):
+            return title
+    author_block = re.match(
+        r"(?:(?:[A-Z]\.\s*){0,4}[A-Z][A-Za-z'’\-]*|[A-Z][A-Za-z'’\-]+,\s*(?:[A-Z]\.\s*)+)"
+        r"(?:\s*,\s*(?:and\s+)?(?:(?:[A-Z]\.\s*){0,4}[A-Z][A-Za-z'’\-]*|[A-Z][A-Za-z'’\-]+)"
+        r"|\s+and\s+(?:(?:[A-Z]\.\s*){0,4}[A-Z][A-Za-z'’\-]*|[A-Z][A-Za-z'’\-]+)"
+        r"|\s+et\s+al\.?)*"
+        r"\.\s+",
+        cleaned,
+    )
+    if author_block:
+        title = _title_sentence(cleaned[author_block.end() :])
+        if title:
+            return title
+    for segment in re.split(r"\.\s+", cleaned):
+        title = segment.strip(" ,.;:")
+        if _author_fragment(title) or not _plausible_title(title):
+            continue
+        return title
+    return None
+
+
+def _first_surname(raw: str) -> str | None:
+    _marker, body = _strip_reference_marker(raw)
+    patterns = (
+        r"([A-Z][A-Za-z'’\-]+)\s*,",
+        r"(?:[A-Z]\.\s+)+([A-Z][A-Za-z'’\-]+)",
+        r"([A-Z][A-Za-z'’\-]+)\s+et\s+al",
+        r"([A-Z][A-Za-z'’\-]+)\s+and\s+",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, body)
+        if match and match.group(1).casefold() not in {"in", "the", "proceedings", "proc"}:
+            return match.group(1).casefold()
+    return None
+
+
+def _split_reference_entries(body: str) -> list[str]:
+    """Group wrapped reference lines. A year line continues the previous entry."""
+    entries: list[list[str]] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            entries.append(current)
+            current = []
+
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        year_continuation = bool(_YEAR_ONLY_LINE.match(stripped) or _YEAR_LEAD_LINE.match(stripped))
+        new_numeric = _numeric_marker(stripped) is not None
+        new_author = _AUTHOR_YEAR_START.match(stripped) is not None and not year_continuation
+        if current and new_numeric:
+            flush()
+        elif current and new_author:
+            joined = " ".join(current)
+            if _YEAR.search(joined) or len(joined) > 80:
+                flush()
+        current.append(stripped)
+    flush()
+    normalized: list[str] = []
+    for chunk in entries:
+        text = " ".join(piece for line in chunk for piece in line.split())
+        if text:
+            normalized.append(text)
+    return normalized
+
+
 def parse_bibliography(manuscript: str) -> list[BibliographyEntry]:
-    body = _section(manuscript, "References") or _section(manuscript, "Bibliography")
+    body = _reference_body(manuscript)
     if not body:
         return []
-    chunks = re.split(r"\n(?=\s*(?:\[\d+\]|\d+\.\s))", body)
     entries: list[BibliographyEntry] = []
-    for index, chunk in enumerate(chunks, start=1):
-        raw = " ".join(chunk.split())
+    for index, raw in enumerate(_split_reference_entries(body), start=1):
         if len(raw) < 8:
             continue
-        marker_match = re.match(r"\[(\d+)\]", raw)
-        marker = marker_match.group(1) if marker_match else str(index)
-        quoted = _QUOTED.search(raw)
-        arxiv = _ARXIV.search(raw)
+        marker, remainder = _strip_reference_marker(raw)
+        years = [int(year) for year in _YEAR.findall(raw)]
+        year = years[-1] if years else None
+        if marker is None:
+            surname = _first_surname(raw)
+            marker = f"{surname}-{year}" if surname and year else f"ay-{index}"
+        arxiv = _ARXIV.search(raw) or _ARXIV_URL.search(raw)
         doi = _DOI.search(raw)
-        years = _YEAR.findall(raw)
+        title = _extract_reference_title(remainder if marker else raw)
         entries.append(
             BibliographyEntry(
                 marker=marker,
-                title=quoted.group(1).strip(" \t,.;") if quoted else None,
-                year=int(years[-1]) if years else None,
+                title=title,
+                year=year,
                 arxiv_id=norm_arxiv(arxiv.group(1)) if arxiv else None,
                 doi=norm_doi(doi.group(1)) if doi else None,
                 raw=raw[:500],
             )
         )
     return entries
+
+
+def _expand_bracket(body: str) -> set[str]:
+    text = body.strip()
+    range_match = re.fullmatch(r"(\d+)\s*[–—\-]\s*(\d+)", text)
+    if range_match:
+        start = int(range_match.group(1))
+        end = int(range_match.group(2))
+        if start > end:
+            start, end = end, start
+        if end - start > 40:
+            return set()
+        return {str(number) for number in range(start, end + 1)}
+    return {piece for piece in re.split(r"\s*[,;]\s*", text) if piece.isdigit()}
 
 
 def _citation_keys(text: str) -> set[str]:
@@ -857,7 +1050,19 @@ def _citation_keys(text: str) -> set[str]:
             key = piece.strip()
             if key:
                 keys.add(key)
+    for match in _BRACKET_CITE.finditer(text or ""):
+        keys.update(_expand_bracket(match.group(1)))
     return keys
+
+
+def _author_year_cites(text: str) -> set[tuple[str, int]]:
+    found: set[tuple[str, int]] = set()
+    for match in _AUTHOR_YEAR_CITE.finditer(text or ""):
+        surname = match.group(1) or match.group(3)
+        year = match.group(2) or match.group(4)
+        if surname and year:
+            found.add((surname.casefold(), int(year)))
+    return found
 
 
 def _bibliography_sections(manuscript: str) -> list[tuple[int, str]]:
@@ -877,68 +1082,170 @@ def _bibliography_sections(manuscript: str) -> list[tuple[int, str]]:
     return [(0, related), (1, experiments), (2, method)]
 
 
+def _prose_before_references(manuscript: str) -> str:
+    match = re.search(r"(?im)^(references|bibliography)\s*$", manuscript)
+    if not match:
+        return manuscript
+    return manuscript[: match.start()]
+
+
+def _entry_is_cited(entry: BibliographyEntry, text: str) -> bool:
+    if entry.marker in _citation_keys(text):
+        return True
+    surname = _first_surname(entry.raw)
+    if surname and entry.year and (surname, entry.year) in _author_year_cites(text):
+        return True
+    return False
+
+
 def _bibliography_rank(manuscript: str, entry: BibliographyEntry) -> int:
     """0 related work, 1 experiments, 2 method, 3 otherwise."""
-    keys = {entry.marker}
     best = 3
     for rank, body in _bibliography_sections(manuscript):
-        if keys & _citation_keys(body):
+        if _entry_is_cited(entry, body):
             best = min(best, rank)
     return best
+
+
+def _method_offset(manuscript: str) -> int:
+    for name in ("Method", "Methods", "Approach", "Problem"):
+        match = re.search(rf"(?im)^{re.escape(name)}\s*$", manuscript)
+        if match:
+            return match.start()
+    return 0
+
+
+def _cite_distance(manuscript: str, entry: BibliographyEntry) -> int:
+    """How far the nearest in-body citation sits from the method description."""
+    prose = _prose_before_references(manuscript)
+    anchor = _method_offset(manuscript)
+    offsets: list[int] = []
+    if entry.marker.isdigit():
+        for match in _BRACKET_CITE.finditer(prose):
+            if entry.marker in _expand_bracket(match.group(1)):
+                offsets.append(match.start())
+        for match in _CITE.finditer(prose):
+            keys = {piece.strip() for piece in match.group(1).split(",")}
+            if entry.marker in keys:
+                offsets.append(match.start())
+    surname = _first_surname(entry.raw)
+    if surname and entry.year:
+        pattern = re.compile(
+            rf"\b{re.escape(surname)}\b(?:\s+et\s+al\.?|\s+and\s+[A-Z][A-Za-z'’\-]+),?\s+\(?{entry.year}\)?"
+        )
+        offsets.extend(match.start() for match in pattern.finditer(prose))
+    if not offsets:
+        return 10**9
+    return min(abs(offset - anchor) for offset in offsets)
+
+
+def _cited_query(
+    index: int,
+    *,
+    provider: str,
+    lookup: str,
+    text: str,
+    marker: str,
+    cited_in_body: bool,
+) -> RelatedWorkQuery:
+    return RelatedWorkQuery(
+        id=f"Q-cited-{index}",
+        perspective=QueryPerspective.baselines,
+        query=text,
+        generated_from="manuscript_bibliography",
+        metadata={
+            "family": "cited_reference",
+            "specificity": "arxiv_id" if lookup == "arxiv_id_list" else lookup,
+            "outbound": "bibliography-metadata",
+            "providers": [provider],
+            "lookup": lookup,
+            "marker": marker,
+            "cited_in_body": cited_in_body,
+        },
+    )
 
 
 def cited_reference_queries(
     manuscript: str,
     entries: Sequence[BibliographyEntry],
+    *,
+    limit: int = BIBLIOGRAPHY_LOOKUP_LIMIT,
 ) -> list[RelatedWorkQuery]:
     """Resolve bibliography entries by title, arXiv id, and DOI. Metadata only.
 
-    Entries cited in related work, the experiments, or the method section are
-    always included. Other entries follow, up to ``UNCITED_BIBLIOGRAPHY_LOOKUPS``.
-    Semantic Scholar is not queried: arXiv takes ``ti:`` and ``id:``, and
-    OpenAlex takes a title search plus a DOI filter.
+    Entries cited in related work, the experiments, or the method section come
+    first, then the ones nearest the method description. Entries without a
+    plausible title are skipped and do not use a slot. The default budget is
+    60. arXiv ids are sent as batched ``id_list`` lookups. Semantic Scholar is
+    not queried.
     """
+    if limit < 1:
+        raise ValueError("bibliography lookup limit must be at least 1")
     ranked = sorted(
-        entries,
+        (entry for entry in entries if _plausible_title(entry.title)),
         key=lambda entry: (
             _bibliography_rank(manuscript, entry),
+            _cite_distance(manuscript, entry),
             int(entry.marker) if entry.marker.isdigit() else 10**9,
             entry.marker,
         ),
     )
     cited = [entry for entry in ranked if _bibliography_rank(manuscript, entry) < 3]
     uncited = [entry for entry in ranked if _bibliography_rank(manuscript, entry) >= 3]
-    selected = [*cited, *uncited[:UNCITED_BIBLIOGRAPHY_LOOKUPS]]
+    selected = [*cited, *uncited][:limit]
     queries: list[RelatedWorkQuery] = []
     index = 0
     for entry in selected:
-        lookups: list[tuple[str, str, str]] = []
-        if entry.arxiv_id:
-            lookups.append(("arxiv", "arxiv_id", entry.arxiv_id))
+        cited_in_body = _bibliography_rank(manuscript, entry) < 3
         if entry.title:
-            lookups.append(("arxiv", "title", entry.title))
-            lookups.append(("openalex", "title", entry.title))
-        if entry.doi:
-            lookups.append(("openalex", "doi", entry.doi))
-        for provider, lookup, text in lookups:
             index += 1
             queries.append(
-                RelatedWorkQuery(
-                    id=f"Q-cited-{index}",
-                    perspective=QueryPerspective.baselines,
-                    query=text,
-                    generated_from="manuscript_bibliography",
-                    metadata={
-                        "family": "cited_reference",
-                        "specificity": lookup,
-                        "outbound": "bibliography-metadata",
-                        "providers": [provider],
-                        "lookup": lookup,
-                        "marker": entry.marker,
-                        "cited_in_body": _bibliography_rank(manuscript, entry) < 3,
-                    },
+                _cited_query(
+                    index,
+                    provider="arxiv",
+                    lookup="title",
+                    text=entry.title,
+                    marker=entry.marker,
+                    cited_in_body=cited_in_body,
                 )
             )
+            index += 1
+            queries.append(
+                _cited_query(
+                    index,
+                    provider="openalex",
+                    lookup="title",
+                    text=entry.title,
+                    marker=entry.marker,
+                    cited_in_body=cited_in_body,
+                )
+            )
+        if entry.doi:
+            index += 1
+            queries.append(
+                _cited_query(
+                    index,
+                    provider="openalex",
+                    lookup="doi",
+                    text=entry.doi,
+                    marker=entry.marker,
+                    cited_in_body=cited_in_body,
+                )
+            )
+    id_entries = [entry for entry in selected if entry.arxiv_id]
+    for start in range(0, len(id_entries), _ARXIV_ID_BATCH):
+        batch = id_entries[start : start + _ARXIV_ID_BATCH]
+        index += 1
+        queries.append(
+            _cited_query(
+                index,
+                provider="arxiv",
+                lookup="arxiv_id_list",
+                text=",".join(entry.arxiv_id or "" for entry in batch),
+                marker=batch[0].marker,
+                cited_in_body=any(_bibliography_rank(manuscript, entry) < 3 for entry in batch),
+            )
+        )
     return queries
 
 
@@ -2275,8 +2582,21 @@ def _s2_authenticated() -> bool:
     return bool(os.environ.get("S2_API_KEY", "").strip())
 
 
+def _sanitize_openalex_value(value: str) -> str:
+    """Drop commas, colons, quotes, and other characters that break OpenAlex filters."""
+    cleaned = re.sub(r"[^\w\s.-]", " ", value, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", cleaned).strip(" .-")
+
+
 def _search_url(provider: str, query: str, limit: int, *, lookup: str = "") -> str:
     if provider == "arxiv":
+        if lookup == "arxiv_id_list":
+            ids = [part.strip() for part in query.split(",") if part.strip()]
+            joined = ",".join(urllib.parse.quote(part, safe="") for part in ids)
+            return (
+                "https://export.arxiv.org/api/query"
+                f"?id_list={joined}&start=0&max_results={max(len(ids), 1)}"
+            )
         if lookup == "arxiv_id":
             ident = urllib.parse.quote(query, safe="")
             return (
@@ -2299,7 +2619,8 @@ def _search_url(provider: str, query: str, limit: int, *, lookup: str = "") -> s
             quoted = urllib.parse.quote(query, safe="")
             return f"https://api.openalex.org/works?filter=doi:{quoted}&per-page={limit}"
         if lookup == "title":
-            quoted = urllib.parse.quote(query, safe="")
+            sanitized = _sanitize_openalex_value(query) or "untitled"
+            quoted = urllib.parse.quote(sanitized, safe="")
             return f"https://api.openalex.org/works?filter=title.search:{quoted}&per-page={limit}"
         quoted = urllib.parse.quote(query)
         return f"https://api.openalex.org/works?search={quoted}&per-page={limit}"
@@ -2347,7 +2668,7 @@ def _cache_file(cache_dir: Path, key: str) -> Path:
 
 
 def _load_disk_cache(cache_dir: Path | None, key: str, now: float) -> HttpResult | None:
-    """Read one cached HTTP 200. Expired and unreadable files are misses."""
+    """Read one cached HTTP 200 or 400. Expired and unreadable files are misses."""
     if cache_dir is None:
         return None
     path = _cache_file(cache_dir, key)
@@ -2363,7 +2684,7 @@ def _load_disk_cache(cache_dir: Path | None, key: str, now: float) -> HttpResult
         body = base64.b64decode(payload["body"])
     except (KeyError, TypeError, ValueError):
         return None
-    if status != 200 or now - stored_at > RETRIEVAL_CACHE_TTL_SECONDS:
+    if status not in _CACHEABLE_STATUSES or now - stored_at > RETRIEVAL_CACHE_TTL_SECONDS:
         return None
     headers = payload.get("headers") or {}
     if not isinstance(headers, dict):
@@ -2372,8 +2693,8 @@ def _load_disk_cache(cache_dir: Path | None, key: str, now: float) -> HttpResult
 
 
 def _store_disk_cache(cache_dir: Path | None, key: str, result: HttpResult, now: float) -> None:
-    """Persist one HTTP 200. The file name is the provider+query hash. The API key is not written."""
-    if cache_dir is None or result.status != 200:
+    """Persist one HTTP 200 or a negative 400. The file name is the query hash. The API key is not written."""
+    if cache_dir is None or result.status not in _CACHEABLE_STATUSES:
         return
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = _cache_file(cache_dir, key)
@@ -2492,7 +2813,7 @@ def _fetch_provider(
             sleeper(delay)
         elif not budget_sleeper(delay):
             break
-    if result is not None and result.status == 200:
+    if result is not None and result.status in _CACHEABLE_STATUSES:
         _RETRIEVAL_CACHE[key] = result
         _store_disk_cache(cache_dir, key, result, stamp())
     return result, False, None
@@ -2623,13 +2944,23 @@ def _id_values(hit: RawHit) -> set[tuple[str, str]]:
     return values
 
 
+def _dedupe_title(title: str) -> str:
+    """Lowercase and drop punctuation, hyphens, and whitespace."""
+    folded = unicodedata.normalize("NFKC", title).casefold()
+    return re.sub(r"[^a-z0-9]+", "", folded)
+
+
 def _same_work(left: RawHit, right: RawHit) -> bool:
     """One paper can arrive with a DOI from one provider and an arXiv id from another."""
     if _id_values(left) & _id_values(right):
         return True
-    left_title = _normalize_title(left.title)
-    right_title = _normalize_title(right.title)
-    return bool(left_title) and left_title == right_title and left.year is not None and left.year == right.year
+    left_title = _dedupe_title(left.title)
+    right_title = _dedupe_title(right.title)
+    if not left_title or left_title != right_title:
+        return False
+    if left.year is None or right.year is None:
+        return False
+    return abs(left.year - right.year) <= 1
 
 
 def _merge_hit(kept: RawHit, extra: RawHit) -> None:
@@ -2884,6 +3215,7 @@ def run_related_work_search(
     network_policy: str = "deny",
     cache_dir: Path | None = None,
     cache_clock: Callable[[], float] | None = None,
+    bibliography_lookup_limit: int = BIBLIOGRAPHY_LOOKUP_LIMIT,
 ) -> RelatedWorkJudgment:
     if mode not in {"agent", "live", "off"}:
         raise ValueError("mode must be agent, live, or off")
@@ -2895,7 +3227,7 @@ def run_related_work_search(
     )
     queries = generate_search_queries(formulation, method_names)
     if formulation.complete:
-        queries.extend(cited_reference_queries(manuscript, entries))
+        queries.extend(cited_reference_queries(manuscript, entries, limit=bibliography_lookup_limit))
     allow = allow_tokens(formulation)
     named = {
         _normalize_title(query.query)
