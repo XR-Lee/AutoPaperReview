@@ -1,0 +1,15 @@
+{
+  "id": "SYNTHETIC-FORUM-001",
+  "forum": "SYNTHETIC-FORUM-001",
+  "number": 7,
+  "invitations": [
+    "ICLR.cc/2024/Conference/-/Submission",
+    "ICLR.cc/2024/Conference/Submission7/-/Revision"
+  ],
+  "content": {
+    "title": {"value": "Prism Sort on the Lattice-7 benchmark"},
+    "venue": {"value": "ICLR 2024 poster"},
+    "venueid": {"value": "ICLR.cc/2024/Conference"},
+    "pdf": {"value": "/pdf/synthetic-lattice7.pdf"}
+  }
+}

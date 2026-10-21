@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added `calibrate-eval`, a report-only comparison of `apr-iclr-cap-v1` to public official ratings (Spearman, MAE, bin agreement, accept/reject AUC, and score spread). It does not fit weights, caps, or bins. Manuscripts, forum ids, and numeric reports stay in a gitignored cache. `AgentJudgmentAdapter` loads a review drop that must echo prompt-packet digests.
 - Added a public-repo confidentiality policy ([CONFIDENTIALITY.md](CONFIDENTIALITY.md), [AGENTS.md](AGENTS.md)) and a tracked-file check that rejects review work directories, document and image files outside an allowlist, submission-id patterns, and SHA-256 digests of blocked strings.
 - Replaced contribution-list fixtures with synthetic sentences.
 

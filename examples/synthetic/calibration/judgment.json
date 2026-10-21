@@ -1,0 +1,46 @@
+{
+  "manuscript": {
+    "recommendation_en": "The internal hue-order comparison is qualified; the unseen-lattice sentence is not supported."
+  },
+  "methods": [
+    {"id": "M0", "name_en": "Structured closed-book review"}
+  ],
+  "sources": [
+    {"id": "S1", "type": "manuscript", "title": "Synthetic manuscript", "path": "manuscript.txt"}
+  ],
+  "evidence": [
+    {
+      "id": "E1",
+      "source_id": "S1",
+      "locator": "Result",
+      "claim": "The matched comparison supports a qualified claim and a secondary claim is broader than the table.",
+      "excerpt": "The matched comparison supports the qualified claim that hue order helps on this split."
+    }
+  ],
+  "issues": [
+    {
+      "id": "I001",
+      "severity": "moderate",
+      "category": "claims",
+      "title_en": "The unseen-lattice sentence is broader than the single-lattice split",
+      "location": "Abstract",
+      "evidence_en": "The abstract says the number shows generalization to a new lattice, but the protocol uses one lattice.",
+      "impact_en": "A reader can treat a same-lattice accuracy gap as evidence about a new lattice.",
+      "required_action_en": "Qualify the abstract so the claim matches the single lattice split.",
+      "detected_by": ["M0"],
+      "sources": ["S1"],
+      "evidence_ids": ["E1"],
+      "confidence": 0.8,
+      "decision_relevant": false
+    }
+  ],
+  "dimension_scores": [
+    {"dimension": "originality", "score": 6, "clause_id": "or-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "Hue order plus token counts is a specific combination of existing pieces.", "language": "en"}},
+    {"dimension": "importance_of_research_question", "score": 6, "clause_id": "im-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "A community that sorts categorical tokens would use a confirmed version.", "language": "en"}},
+    {"dimension": "claims_supported", "score": 6, "clause_id": "cs-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The matched internal comparison supports a qualified claim; the unseen-lattice sentence is overstated.", "language": "en"}},
+    {"dimension": "experimental_soundness", "score": 6, "clause_id": "es-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "An ablation exists and uncertainty is missing.", "language": "en"}},
+    {"dimension": "writing_clarity", "score": 6, "clause_id": "wc-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The main argument is checkable; the unseen-lattice phrase is easy to misread.", "language": "en"}},
+    {"dimension": "community_value", "score": 6, "clause_id": "cv-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The toy split and hue order are stated with enough detail to repeat.", "language": "en"}},
+    {"dimension": "prior_work_contextualization", "score": 6, "clause_id": "pw-6", "rubric_id": "sar_bands_v1", "evidence_ids": ["E1"], "route_ids": ["M0"], "rationale": {"primary": "The right neighbors are cited and one of them is under-compared.", "language": "en"}}
+  ]
+}

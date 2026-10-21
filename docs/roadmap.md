@@ -41,6 +41,8 @@ Remaining after 0.1.6:
 
 Do not take MinerU, PASA, Tavily, ChatArena, a vector index, or a fitted ICLR map into core.
 
+`calibrate-eval` measures the declared formula against public human scores (Spearman, MAE, bin agreement, accept/reject AUC, and score spread). The measurement is report-only. It must not be used to update weights, caps, or bins. Cached manuscripts and forum ids stay outside git. See [public calibration eval](public-calibration.md).
+
 ## Observation records
 
 Introduce an immutable `ObservationRecord` emitted by a route or adapter before consensus.
