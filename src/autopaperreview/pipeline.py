@@ -30,6 +30,19 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _note_manuscript_egress(manifest: RunManifest, metadata: dict[str, Any]) -> None:
+    """Record whether a stage sent manuscript content to a non-loopback endpoint."""
+    if "manuscript_left_machine" not in metadata:
+        return
+    updated = dict(manifest.metadata)
+    if metadata.get("manuscript_left_machine"):
+        updated["manuscript_left_machine"] = True
+        updated["manuscript_egress"] = "remote"
+    else:
+        updated.setdefault("manuscript_left_machine", False)
+    manifest.metadata = updated
+
+
 def default_registry() -> StageRegistry:
     registry = StageRegistry()
     for handler_type in (
@@ -374,8 +387,12 @@ def run_pipeline(
                 },
             )
             _replace_stage_record(manifest, completed)
+            _note_manuscript_egress(manifest, completed.metadata)
             save_manifest(manifest, manifest_path)
         except Exception as exc:
+            extra = dict(getattr(exc, "stage_metadata", None) or {})
+            extra.pop("attempt_dir", None)
+            failed_metadata = {"attempt_dir": str(attempt_dir.relative_to(run_dir)), **extra}
             failed = StageRecord(
                 id=stage.id,
                 type=stage.type,
@@ -385,9 +402,10 @@ def run_pipeline(
                 ended_at=utc_now(),
                 attempt=attempt,
                 error=f"{type(exc).__name__}: {exc}",
-                metadata={"attempt_dir": str(attempt_dir.relative_to(run_dir))},
+                metadata=failed_metadata,
             )
             _replace_stage_record(manifest, failed)
+            _note_manuscript_egress(manifest, failed_metadata)
             manifest.ended_at = utc_now()
             save_manifest(manifest, manifest_path)
             raise PipelineError(f"stage {stage.id} failed: {exc}") from exc

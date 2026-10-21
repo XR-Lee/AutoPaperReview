@@ -172,12 +172,19 @@ def command_doctor(args: argparse.Namespace) -> int:
             "bundled_review_adapters": [
                 "autopaperreview.adapters:DeterministicManuscriptAdapter",
                 "autopaperreview.adapters:FixtureReviewAdapter",
+                "autopaperreview.model_exec:OpenAICompatibleAdapter",
+            ],
+            "bundled_visual_inspectors": [
+                "autopaperreview.visual_agent:AgentFindingsInspector",
+                "autopaperreview.visual_agent:HostedVisionInspector",
+                "autopaperreview.model_exec:OpenAICompatibleVisionInspector",
             ],
             "optional_modules": optional_modules,
             "optional_commands": optional_commands,
             "notes": [
                 "Optional modules are not adapters. A stage plugin must convert their output into AutoPaperReview records.",
-                "execute_review calls a declared module:attribute adapter. The core does not call a model API.",
+                "execute_review calls a declared module:attribute adapter.",
+                "OpenAICompatibleAdapter calls an OpenAI-compatible chat endpoint. Loopback is allowed by default. A remote endpoint needs allow_remote, network_policy = allow, and an env-var key. Fixture JSON and the deterministic adapter remain equal options.",
             ],
         }
     )

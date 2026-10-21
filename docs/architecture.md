@@ -19,7 +19,7 @@ This document describes the implemented `0.1.x` architecture. Planned additions 
 - A general agent framework.
 - An operating-system network sandbox. The network policy validates declared requirements; adapters and command stages still run as trusted local code.
 - Semantic clustering or adjudication by an LLM.
-- A general PDF/DOCX layout parser, literature retrieval, journal submission, or model-provider clients. Page PNGs and the ICLR format checklist are a narrow optional stage, not a parser.
+- A general PDF/DOCX layout parser, literature retrieval, journal submission, or a multi-provider model SDK. One OpenAI-compatible chat adapter is bundled. Page PNGs and the ICLR format checklist are a narrow optional stage, not a parser.
 - A stable plugin ABI beyond the documented Python entry-point and stage-handler surface.
 
 ## System boundary
@@ -111,7 +111,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `command` | Executes an argument array with `shell=False` and an explicit environment allowlist; records stdout/stderr, logical placeholder paths, declared outputs, environment-key names, and hashes of command input files, then imports declared outputs. |
 | `prompt_packet` | Builds versioned local prompt packets for declared review routes. It does not call a model. Every packet prepends the first-read writing contract. Literature routes can attach query and snapshot excerpts. When a sibling `manuscript.pdf` exists, packets tell the reviewer to inspect every numbered figure on the PDF page; caption paraphrase is not inspection. |
 | `import_issues` | Migrates legacy issue/package JSON into the canonical package. |
-| `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import and deterministic manuscript checks. |
+| `execute_review` | Calls a declared `module:attribute` adapter and validates a `ReviewPackage`. Bundled adapters are fixture import, deterministic manuscript checks, and `OpenAICompatibleAdapter` (OpenAI-compatible chat). |
 | `ledger` / `agenda` | Builds a claim–evidence–risk ledger and investigation questions from local text. When the paper lists numbered contributions, those items are the ledger units; agenda asks evidence completeness and a matched-setting comparator per item. |
 | `workspace_inspect` | Read-only inventory of declared workspace paths. Refuses path escape. |
 | `integrity` | Reference, results, and reproducibility records from snapshots and workspace files. |
@@ -120,10 +120,75 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, plus one same-problem and one related-technique query per listed contribution. Optionally attaches a snapshot fixture or a declared retriever. Live retrieval requires a network declaration. |
 | `render_pages` | Optional `visual` extra. Rasterizes each PDF page to a hashed PNG and a manifest. Fails closed when a visual route is enabled and the sibling PDF is missing. |
 | `format_check` | Deterministic ICLR 2027 checklist from `profiles/iclr2027.json`: 9-page main text, US Letter, margin floor, anonymity metadata and page-1 email, template marker, font embedding, raster size, blank caption pages. Desk-reject classes set `format_desk_reject`. Other failures set a `writing_clarity` clause ceiling. |
-| `visual_inspect` | Adapter contract. `AgentFindingsInspector` reads a findings drop produced after the pages were opened. `HostedVisionInspector` POSTs page PNGs only under `network_policy = allow` with an optional API key; a missing key sends nothing. Findings carry the page-image hash, a bbox, a non-caption visible mark, and an optional severity, fatal class, or clause. |
+| `visual_inspect` | Adapter contract. `AgentFindingsInspector` reads a findings drop produced after the pages were opened. `OpenAICompatibleVisionInspector` sends each page PNG to an OpenAI-compatible chat endpoint. `HostedVisionInspector` POSTs page PNGs only under `network_policy = allow` with an optional API key; a missing key sends nothing. Findings carry the page-image hash, a bbox, a non-caption visible mark, and an optional severity, fatal class, or clause. |
 | `rate` | Pure function. Anchored bands, fatal-flaw caps, and snap-down onto 1/3/5/6/8/10 under `apr-iclr-cap-v1`. Records `cap_ids` and the weighted/gate terms. Does not call a model. |
 | `calibrate_batch` | Orders several packages by that formula. Neighbors in the same bin need `same_bin_justified`. Different active caps cannot share a bin. |
 | `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Reports open with a first-read how-to-read note and inline quotes. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package, including optional first-read/quote and figure-citation budgets. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations, then refuses export if the package or Markdown still has unpaired English or Chinese prose. A declared formula replaces the "no overall score" sentence and the PDF footer. |
+
+## Model execution
+
+`execute_review` can run the bundled chat adapter instead of an external JSON drop. The model makes the judgment. The pipeline checks it before the stage is promoted.
+
+The adapter reads the `prompt_packet` files already produced for the run. It calls an OpenAI-compatible `POST /chat/completions` endpoint once per judgment:
+
+| Judgment | What the model returns | What the pipeline enforces |
+|---|---|---|
+| `contributions` | One item per listed contribution, with an exact excerpt | The excerpt must occur in the manuscript or a retrieved snapshot. Otherwise the item is rejected. |
+| `ledger` | Ledger claims and agenda questions | Same excerpt rule. An agenda item that cites a rejected claim is rejected. |
+| `dimensions` | All seven SAR dimensions, each with a `sar_bands_v1` clause id and an excerpt | The numeric score is the clause. An excerpt that does not resolve drops that dimension. `rate` still requires all seven. |
+| `fatal` | `fatal_class` for issue ids the pipeline assigned (`I-<contribution id>`) | An unknown issue id is rejected. `rate` applies the cap. |
+| visual page | `VisualFinding` records, with the page image attached for a multimodal model | The page-image hash and bbox must match the rendered PNG. A caption restatement fails validation. |
+
+`OpenAICompatibleVisionInspector` is the visual path. It uses the same client from `visual_inspect`, after `render_pages`, and reads the visual route's prompt packet.
+
+Invalid JSON or a schema mismatch is retried once. The retry appends the validation error. A second failure fails the stage. The adapter does not substitute deterministic output.
+
+Every request and response is stored under `stages/<id>/model/` as the bytes that were sent and received. Each file's SHA-256 is listed on the stage record in `model_exchanges`. The API key is not part of those bytes. A successful stage is reused when its signature matches, so the endpoint is not called again. The signature includes the packet hashes, model name, and endpoint. It does not include the key.
+
+Egress is separate from the project network policy:
+
+- `127.0.0.0/8`, `::1`, and `localhost` are loopback. They are allowed while `network_policy` is `deny`. A key is optional.
+- Any other host is remote. The stage must set `allow_remote = true`, the project must set `network_policy = "allow"`, and `api_key_env` must be set in the environment. The run manifest then sets `manuscript_left_machine` to true.
+- A `base_url` must not carry a userinfo, query, or fragment. Put the key only in the environment variable.
+
+Fixture JSON (`FixtureReviewAdapter`, `AgentFindingsInspector`) stays an equal path: packets are written, and a person or agent writes schema JSON from outside the process. Select that adapter when the model should not be called from `run`.
+
+Example:
+
+```toml
+[project]
+network_policy = "deny"
+
+[[stages]]
+id = "review"
+type = "execute_review"
+depends_on = ["prompt_packets"]
+[stages.params]
+adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+base_url = "http://127.0.0.1:8000/v1"
+model = "local-reviewer"
+api_key_env = "APR_MODEL_API_KEY"
+allow_remote = false
+judgments = ["contributions", "ledger", "dimensions", "fatal"]
+
+[stages.params.packet_routes]
+contributions = "M7"
+ledger = "M0"
+dimensions = "M3"
+fatal = "M2"
+
+[[stages]]
+id = "visual"
+type = "visual_inspect"
+depends_on = ["render_pages", "prompt_packets"]
+[stages.params]
+adapter = "autopaperreview.model_exec:OpenAICompatibleVisionInspector"
+base_url = "http://127.0.0.1:8000/v1"
+model = "local-vision"
+packet_route = "M6"
+```
+
+A remote endpoint adds `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. `rate` still computes the venue bin. The model does not emit the overall score.
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
@@ -146,6 +211,8 @@ The current interface is Python-level and intentionally small. Handler versionin
 The default network policy is `deny`; projects may opt into `metadata_only` or `allow`. Stages requesting network access must declare the need and scope before execution. This prevents accidental execution of a stage whose declared policy conflicts with the project, but it is not packet-level enforcement.
 
 Manuscript text, author identities, prompts, model responses, credentials, and reviewer identities are sensitive. They must not be placed in telemetry attributes, source control, or release manifests. Optional adapters should use least-privilege filesystem and network access and should snapshot any external response used as evidence.
+
+The bundled chat adapter snapshots each raw request and response inside the run directory. It sends manuscript text off the machine only for a non-loopback URL when `allow_remote` is set and the project network policy is `allow`. That fact is stored on the run manifest as `manuscript_left_machine`. API keys stay in the environment and are redacted from stored exchanges and error strings.
 
 ## Portability and reproducibility
 

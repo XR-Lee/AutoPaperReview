@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
+from ..model_exec import TEXT_JUDGMENTS, public_base_url
 from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
@@ -1261,6 +1262,15 @@ class ExecuteReviewParams(ParamsModel):
     fixture_path: str | None = None
     requires_network: bool = False
     network_scope: str = "fulltext"
+    base_url: str | None = None
+    model: str | None = None
+    api_key_env: str = "APR_MODEL_API_KEY"
+    allow_remote: bool = False
+    judgments: list[str] = Field(default_factory=list)
+    packet_routes: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=60, gt=0)
+    temperature: float = 0
+    json_object: bool = True
 
 
 class ExecuteReviewStage(StageHandler):
@@ -1276,6 +1286,17 @@ class ExecuteReviewStage(StageHandler):
         material: dict[str, Any] = {"adapter": params.adapter}
         if params.fixture_path:
             material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
+        if params.base_url or params.model or params.allow_remote or params.judgments or params.packet_routes:
+            material["model_execution"] = {
+                "base_url": None if params.base_url is None else public_base_url(params.base_url),
+                "model": params.model,
+                "allow_remote": params.allow_remote,
+                "api_key_env": params.api_key_env,
+                "judgments": list(params.judgments) or list(TEXT_JUDGMENTS),
+                "packet_routes": dict(sorted(params.packet_routes.items())),
+                "temperature": params.temperature,
+                "json_object": params.json_object,
+            }
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
             for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
@@ -1319,7 +1340,24 @@ class ExecuteReviewStage(StageHandler):
                 )
                 for route in context.loaded_config.config.routes
             ],
-            metadata={"network_scope": params.network_scope},
+            metadata={
+                "network_scope": params.network_scope,
+                "network_policy": context.loaded_config.config.project.network_policy.value,
+                "base_url": params.base_url,
+                "model": params.model,
+                "api_key_env": params.api_key_env,
+                "allow_remote": params.allow_remote,
+                "judgments": list(params.judgments),
+                "packet_routes": dict(params.packet_routes),
+                "timeout_seconds": params.timeout_seconds,
+                "temperature": params.temperature,
+                "json_object": params.json_object,
+                "stage_signature": (
+                    context.manifest.stage(context.stage.id).signature
+                    if context.manifest.stage(context.stage.id) is not None
+                    else ""
+                ),
+            },
         )
         adapter = load_review_adapter(params.adapter)
         result = adapter.execute(request, context.stage_dir)

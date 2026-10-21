@@ -44,15 +44,13 @@ DeepReviewer 2.0's own comparison table is the most useful framing: a fluent "fu
 
 ## Priority 0 — the current contract is incomplete
 
-v0.1.5 ships the first executable slice of items 1–4 and 6–8: snapshot excerpts, typed anchors, a report export gate, literature attached to prompt packets, honest `doctor`/`init`, and `execute_review` with bundled deterministic/fixture adapters. A live model adapter is still not bundled. The remaining P0 hole is calling a real model behind a declared adapter.
+v0.1.5 ships the first executable slice of items 1–4 and 6–8: snapshot excerpts, typed anchors, a report export gate, literature attached to prompt packets, honest `doctor`/`init`, and `execute_review` with bundled deterministic/fixture adapters. An OpenAI-compatible chat adapter is now bundled for those judgments and for visual page images. `pydantic_ai` is still not an adapter. The synthetic example still imports fixture JSON.
 
 ### 1. The harness cannot produce a review
 
-`prompt_packet` writes Markdown packets. It does not call a model. The synthetic example *imports* a finished `review_input.json`. `doctor` lists `pydantic_ai` even though no adapter exists.
+`prompt_packet` still only writes Markdown. `execute_review` can now call the bundled OpenAI-compatible adapter, which snapshots the prompt and the raw response and validates them into canonical records. A schema failure retries once and then fails the stage. The synthetic example still imports a finished `review_input.json`. `doctor` lists `pydantic_ai` as an optional module; it is not an adapter.
 
-Until a thin, declared model-execution adapter exists, AutoPaperReview is a review *database and runner*, not a reviewer. That is acceptable if documented as such; it is a product hole if users expect `autopaperreview run` to critique a new PDF.
-
-Minimum adapter: snapshot the prompt, raw response, model identifier, and seed; validate into `ReviewIssue` / `ReviewClaim` / `DimensionScore`; refuse free-form prose as the only output. PydanticAI stays optional.
+PydanticAI stays optional. The remaining hole in this item is a provider-neutral SDK and a seed field, not the absence of any model call.
 
 ### 2. Retrieved snapshots have no citable content
 

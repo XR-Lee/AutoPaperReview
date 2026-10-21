@@ -10,5 +10,6 @@ AutoPaperReview treats unpublished manuscripts, reviewer identities, prompts, re
 - Command stages use an explicit `inherit_env` allowlist. Secret values inherited at runtime are hashed into the cache signature but are not persisted individually.
 - Generated release packages should contain relative paths and content hashes, not cookies, tokens, home-directory paths, or cloud-session identifiers.
 - Parser and model adapters should run with the least filesystem and network access possible.
+- The bundled chat adapter allows loopback endpoints by default. A remote endpoint requires `allow_remote`, `network_policy = allow`, and an API key in the named environment variable. The key is not written to stored requests, manifests, or errors. A remote call records `manuscript_left_machine` on the run.
 
 Report vulnerabilities privately to the repository owner before opening a public issue.

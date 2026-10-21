@@ -11,8 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..artifacts import artifact_from_path
 from ..figures import sibling_pdf
 from ..hashing import sha256_file
-from ..models import ReviewPackage, RouteKind, VisualFinding
+from ..models import ReviewPackage, ReviewRoute, RouteKind, VisualFinding
 from ..reporting import write_package_json
+from ..model_exec import public_base_url
 from ..visual import (
     finding_matches_caption,
     format_check_pdf,
@@ -151,6 +152,13 @@ class VisualInspectParams(ParamsModel):
     endpoint: str | None = None
     api_key_env: str = "APR_VISION_API_KEY"
     require_pages_seen: bool = True
+    model: str | None = None
+    allow_remote: bool = False
+    base_url: str | None = None
+    packet_route: str | None = None
+    timeout_seconds: float = Field(default=60, gt=0)
+    temperature: float = 0
+    json_object: bool = True
 
 
 class VisualInspectStage(StageHandler):
@@ -167,6 +175,14 @@ class VisualInspectStage(StageHandler):
             "endpoint": params.endpoint,
             "api_key_env": params.api_key_env,
         }
+        if params.model:
+            material["model"] = params.model
+        if params.base_url:
+            material["base_url"] = public_base_url(params.base_url)
+        if params.allow_remote:
+            material["allow_remote"] = True
+        if params.packet_route:
+            material["packet_route"] = params.packet_route
         if params.findings_path:
             path = _resolve_workspace_file(context, params.findings_path)
             material["findings_sha256"] = sha256_file(path) if path.is_file() else None
@@ -192,9 +208,40 @@ class VisualInspectStage(StageHandler):
             if hasattr(inspector, "bind"):
                 inspector.bind(
                     findings_path=findings_path,
-                    endpoint=params.endpoint,
+                    endpoint=params.base_url or params.endpoint,
                     api_key_env=params.api_key_env,
                     network_allowed=network_allowed,
+                )
+            if hasattr(inspector, "configure"):
+                packets: dict[str, str] = {}
+                for stage_id in context.stage.depends_on:
+                    for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
+                        packets[path.stem] = path.read_text(encoding="utf-8")
+                running = context.manifest.stage(context.stage.id)
+                inspector.configure(
+                    model=params.model,
+                    allow_remote=params.allow_remote,
+                    base_url=params.base_url or params.endpoint,
+                    packets=packets,
+                    packet_route=params.packet_route,
+                    network_policy=context.loaded_config.config.project.network_policy.value,
+                    stage_signature="" if running is None else running.signature,
+                    timeout_seconds=params.timeout_seconds,
+                    temperature=params.temperature,
+                    json_object=params.json_object,
+                    routes=[
+                        ReviewRoute(
+                            id=route.id,
+                            name=route.name,
+                            kind=route.kind,
+                            prompt_version=route.prompt_version,
+                            model=route.model,
+                            manuscript_access=route.manuscript_access,
+                            network_access=route.network_access,
+                            metadata=dict(route.metadata),
+                        )
+                        for route in context.loaded_config.config.routes
+                    ],
                 )
             if (
                 params.require_pages_seen
@@ -227,9 +274,25 @@ class VisualInspectStage(StageHandler):
         )
         output = context.stage_dir / "package.json"
         write_package_json(package, output)
+        artifacts = [_artifact(output, context, "review.package.visual")]
+        model_dir = context.stage_dir / "model"
+        model_meta: dict[str, Any] = {}
+        if model_dir.is_dir():
+            for path in sorted(model_dir.rglob("*")):
+                if path.is_file():
+                    artifacts.append(_artifact(path, context, "review.adapter.raw"))
+            index = model_dir / "exchanges.json"
+            if index.is_file():
+                loaded = json.loads(index.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    model_meta = loaded
         return StageOutcome(
-            artifacts=[_artifact(output, context, "review.package.visual")],
-            metadata={"finding_count": len(findings), "visual_status": package.metadata["visual_status"]},
+            artifacts=artifacts,
+            metadata={
+                "finding_count": len(findings),
+                "visual_status": package.metadata["visual_status"],
+                **model_meta,
+            },
         )
 
 
