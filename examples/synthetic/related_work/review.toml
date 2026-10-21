@@ -64,3 +64,5 @@ type = "report"
 depends_on = ["rate"]
 [stages.params]
 bilingual = true
+require_first_read_on_major = true
+require_quote_on_major = true

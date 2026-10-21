@@ -13,8 +13,11 @@ From labeled lines in the manuscript:
 - numbered contributions
 - experiment baselines, including privileged inputs and different-task baselines
 - the references section, so a candidate can be marked cited or not
+- method names in related work, baselines, and the bibliography, for name-only lookups
 
 A formulation is complete only when task, inputs, outputs, assumptions, and setting are all present. An unlabeled manuscript does not produce outbound queries.
+
+A section ends at the next real heading: a known heading name, or a short title-case line that is not a labeled field and does not end in sentence punctuation. Body prose after that heading stays out of the earlier block.
 
 ## Queries
 
@@ -28,13 +31,13 @@ Five families, one keyword query each:
 | `standard_baselines` | Baselines and benchmarks for the sub-problem |
 | `adjacent_tasks` | Neighboring tasks that delimit scope |
 
-A query may contain only generic tokens from those fields, plus a small glue list (`baseline`, `input`, `survey`, and so on). The submission title, abstract sentences, and contribution prose are not queries. The HTTP client checks the search string again and refuses the request if it is not on that allowlist.
+A keyword query may contain only generic tokens from those fields, plus a small glue list (`baseline`, `input`, `survey`, and so on). The submission title, abstract sentences, and contribution prose are not keyword queries. The HTTP client checks the search string again and refuses the request if it is not on that allowlist.
 
-Public titles are not copied out of the manuscript. The host may search those titles itself and put the provider response in the findings file.
+The manuscript's own method names are an extra family. `named_methods_from_manuscript` collects baseline names, Related Work or Prior Work labels (`closest method`, `named method`, `method`), and bibliography titles, drops the submission title, sorts them, and keeps at most eight. Each becomes a name-only query (`family = named_method`, ids `Q-named-N`). Those strings may leave the keyword allowlist. They still cannot be the submission title or an abstract sentence of eight or more words. This is how a closest method the manuscript already cites is retrieved and checked.
 
 ## Retrieval
 
-`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 or 503 stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. A read that exceeds the timeout is logged as `timeout`. Other providers still run. If every provider fails, or none are available, `status=degraded`, the search invents no papers, and it does not apply a cap. If at least one provider returns records and another fails, `status=partial`. The judgment lists `failed_providers`, and the report says the search may be incomplete.
+`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 is a transport retry: the client honours `Retry-After` up to two seconds, retries twice, and then logs `rate_limited` without stopping the rest of that provider's queries. HTTP 503 still stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. A read that exceeds the timeout is logged as `timeout`. Other providers still run. A successful response is cached by the SHA-256 of the provider name and the query text, and hits are sorted by normalized title and external id, so the same queries produce the same candidate set. If every provider fails, or none are available, `status=degraded`, the search invents no papers, and it does not apply a cap. If at least one provider returns records and another fails, `status=partial`. The judgment lists `failed_providers`, and the report says the search may be incomplete.
 
 `mode = "agent"` is the host-in-the-loop path, shaped like `AgentFindingsInspector`: the host runs the queries, then drops `findings.json`. A candidate is kept only when `provider_payload` parses as arXiv Atom, OpenAlex, Semantic Scholar, or Crossref JSON and the parsed id and title match the drop. A title with no payload, or a payload whose title differs, is dropped and logged.
 
@@ -42,7 +45,13 @@ Public titles are not copied out of the manuscript. The host may search those ti
 
 ## Candidate record
 
-Each verified paper has a title, venue, year, id, link, one-line summary, whether the bibliography cites it, the date relation to the venue submission deadline (`prior`, `concurrent`, `unknown`), a tier (`must-compare`, `should-discuss`, `optional`), and a reason in English and Simplified Chinese.
+Each verified paper has a title, venue, year, id, link, one-line summary, whether the bibliography cites it, the date relation to the venue submission deadline (`prior`, `concurrent`, `unknown`), a relevance score, a tier (`must-compare`, `should-discuss`, `optional`), a confirmation flag and one-line reason, and a reason in English and Simplified Chinese.
+
+Citation is an arXiv id, a DOI, or a normalized title. Token overlap is not a citation. A shorter title matches a longer one only when it is at least four tokens and a contiguous phrase inside the longer title.
+
+A paper is must-compare only when the title and abstract cover the formulated task and also cover the technique or the setting. A survey, review, dataset, benchmark, or generator is should-discuss at most, even when the abstract names the same inputs. Mentioning an input modality does not mean the paper already solves the task. Relevance is `0.5 * task + 0.3 * technique + 0.2 * setting`. Modality adds nothing.
+
+Before a retrieval cap can cite a must-compare paper, the judging agent confirms it. Pass `confirm_must_compare` (a hook that returns a boolean and a one-line reason) or, in agent mode, a `confirmations` list on `findings.json` with `external_id` or `title`, `confirmed`, and `reason`. The hook overrides the file. Unconfirmed items become should-discuss. After confirmation, at most three required neighbours remain, highest relevance first, then normalized title. The rest are discussion only. The missing-neighbor cap cites only those confirmed neighbours.
 
 A paper published after `submission_deadline` is concurrent. It can be discussed. It is not a required baseline. A missing date is not treated as required either.
 
@@ -68,15 +77,15 @@ Cap signals use coefficient set `apr-iclr-cap-v1` and do not themselves write a 
 
 Cap 6 is the next ICLR bin above the unfair-baseline cap. `preview_venue_bin` is only a separation check. `rate_venue()` is the only writer of `OverallScore`. When both caps are active, the effective cap is the minimum (5).
 
-`missing_closest_neighbor` requires a verified candidate dated on or before the venue submission deadline. Concurrent work (after the deadline) and an undated record stay in the discussion. They do not become required baselines and they do not cite a cap.
+`missing_closest_neighbor` requires a confirmed candidate dated on or before the venue submission deadline and verified by a provider that succeeded. Concurrent work (after the deadline) and an undated record stay in the discussion. They do not become required baselines and they do not cite a cap. The cap cites at most the three confirmed neighbours kept by the relevance cap.
 
-`unfair_baseline` is emitted on a completed search and always cites the manuscript anchor `E-manuscript-baselines`, a quote of the paper's own Experiments and References lines. That anchor has to resolve: the issue's evidence id is that record, and the quote is the paper's baseline text rather than an empty or unlabeled placeholder. It also cites a verified prior candidate when the baseline name matches one. A missing-neighbor cap cites the same manuscript anchor plus each verified prior candidate (external id, venue, year, and date relation), and it is dropped if it has no verified prior candidate.
+`unfair_baseline` is manuscript evidence. It fires on a completed or partial search and always cites the manuscript anchor `E-manuscript-baselines`. The quote is the labeled experiment lines only (decision metric, compared baselines, privileged baselines, different-task baselines), whitespace collapsed to one line and cut at 1200 characters. An empty or unlabeled placeholder does not resolve. The report renders that quote as a Markdown blockquote so the bilingual gap detector skips it. The issue also carries a bilingual `FirstReadNote` (`paper_said`, `explanation`, `quote`, intent `issue`, `blocking`) so `require_first_read_on_major` can pass. It cites a verified prior candidate when the baseline name matches one. A missing-neighbor cap cites the same manuscript anchor plus each confirmed prior candidate (external id, venue, year, and date relation), attaches the same kind of first-read note, and is dropped if it has no confirmed prior candidate.
 
 ### Partial outage
 
 `status=partial` means at least one provider logged success and at least one logged `offline`, `rate_limited`, `http_error`, or `timeout`. `failed_providers` lists the providers that failed. The Related Work section says the search may be incomplete, in English and in Simplified Chinese.
 
-A partial search may emit `missing_closest_neighbor` (cap 6) when a provider that succeeded verified a must-compare paper dated on or before the deadline and that paper is absent from the baselines. It does not emit `unfair_baseline`. A provider that only failed contributes no candidate and cannot lower the venue cap further. `rate` drops a related-work cap on a partial package unless it is that missing-neighbor cap and every cited candidate was verified by a successful provider.
+A partial search may emit `missing_closest_neighbor` (cap 6) when a provider that succeeded verified a confirmed must-compare paper dated on or before the deadline and that paper is absent from the baselines. It also emits `unfair_baseline` (cap 5) when the manuscript anchor resolves. Only the retrieval cap depends on provider success. A provider that only failed contributes no candidate and cannot create or strengthen that retrieval cap. `rate` keeps `unfair_baseline` on a partial package when the anchor resolves, and it keeps `missing_closest_neighbor` only when every cited candidate was confirmed and verified by a successful provider.
 
 ### Degraded search
 
@@ -86,7 +95,7 @@ If every requested provider fails, a provider times out before returning records
 
 `novelty` reads the comparison of baselines and closest neighbours before it assigns tags. `rate` reads the same comparison before it uses the originality band. When a config contains `related_work_search`, both `novelty` and `rate` must depend on it, directly or through an earlier stage. Clause ids stay `pw-2` / `pw-4` / `pw-6` / `pw-8` / `es-4` / `or-4`. Copy a clause onto a dimension score only when the reviewer accepts that advice. The ceiling inside `rate` is what changes the bin.
 
-The report section is bilingual (`en` / `zh-Hans`) and includes suggested weakness and rebuttal sentences. The stage also writes `related_work.md`.
+The report section is bilingual (`en` / `zh-Hans`) and includes suggested weakness and rebuttal sentences. The dimension table shows the assigned score and clause beside the after-ceiling band when `overall_score.metadata.bands_after_ceiling` has that dimension. The stage also writes `related_work.md`.
 
 ## Venue deadlines
 

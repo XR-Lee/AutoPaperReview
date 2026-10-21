@@ -168,7 +168,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "3"
+    version = "4"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:

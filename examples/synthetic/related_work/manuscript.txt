@@ -19,6 +19,9 @@ Contributions
 (2) We add a temporal fusion module on top of a public single-frame pose estimator.
 (3) We report pose error in millimeters on the holdout split.
 
+Related Work
+Closest method: Ribbon Fuse Estimator
+
 Experiments
 Decision metric: pose error in millimeters
 Compared baselines: Flat Image Classifier

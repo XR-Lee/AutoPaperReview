@@ -10,16 +10,19 @@ venue cap 6 with a prior-work ceiling of 2 and an originality ceiling of 4.
 This module does not write ``OverallScore``. It emits blocking issues that
 ``rate_venue()`` reads through ``active_caps()``. A degraded search, including
 a search where every provider failed, emits no cap. A partial outage can emit
-``missing_closest_neighbor`` only from a provider that succeeded. See
+``missing_closest_neighbor`` only from a provider that succeeded, and it still
+emits ``unfair_baseline`` when the manuscript baseline anchor resolves. See
 ``docs/related-work-search.md``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import socket
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -37,8 +40,10 @@ from .contributions import extract_listed_contributions
 from .models import (
     Anchor,
     AnchorKind,
+    CommentIntent,
     EvidenceRecord,
     FatalClass,
+    FirstReadNote,
     LocalizedText,
     QueryPerspective,
     RelatedWorkQuery,
@@ -72,6 +77,10 @@ MISSING_NEIGHBOR_CEILINGS = {
 }
 MANUSCRIPT_SOURCE_ID = "S-manuscript"
 MANUSCRIPT_BASELINE_EVIDENCE_ID = "E-manuscript-baselines"
+MAX_MUST_COMPARE = 3
+_MAX_429_RETRIES = 2
+_MAX_RETRY_AFTER_SECONDS = 2.0
+_RETRIEVAL_CACHE: dict[str, "HttpResult"] = {}
 
 INTEGRATION_NOTE = (
     "Cap signals become blocking, decision-relevant issues. "
@@ -84,9 +93,10 @@ INTEGRATION_NOTE = (
     "experiment lines without a verified candidate, and it always cites the manuscript "
     "baseline anchor. Concurrent work is discussion only. status=degraded (every provider "
     "failed, a timeout, or no provider) emits no cap and must not lower the score. "
-    "status=partial lists the failed providers and may emit missing_closest_neighbor "
-    "only for a neighbour verified by a provider that succeeded. A failed provider never "
-    "creates or strengthens a cap. rate_venue() remains the only writer of OverallScore. "
+    "status=partial lists the failed providers. It may emit missing_closest_neighbor "
+    "only for a confirmed neighbour verified by a provider that succeeded, and it still "
+    "emits unfair_baseline when the manuscript baseline anchor resolves. A failed provider "
+    "never creates or strengthens a retrieval cap. rate_venue() remains the only writer of OverallScore. "
     "Agent mode follows AgentFindingsInspector: the host writes a JSON drop after it "
     "runs the search, and a candidate is kept only when its provider payload parses to "
     "the same id and title."
@@ -120,10 +130,46 @@ _ARXIV = re.compile(
 )
 _YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
 _QUOTED = re.compile(r"\"([^\"]{8,})\"")
-_HEADING = re.compile(
-    r"^(abstract|problem|contributions|experiments|references|methods|results|conclusion)\s*$",
-    re.I,
+_KNOWN_HEADINGS = frozenset(
+    {
+        "abstract",
+        "problem",
+        "contributions",
+        "experiments",
+        "references",
+        "bibliography",
+        "methods",
+        "method",
+        "results",
+        "conclusion",
+        "conclusions",
+        "introduction",
+        "related work",
+        "prior work",
+        "background",
+        "discussion",
+        "appendix",
+        "acknowledgements",
+        "acknowledgments",
+        "approach",
+        "evaluation",
+        "implementation",
+        "limitations",
+        "supplementary",
+        "supplementary material",
+    }
 )
+_HEADING_CONNECTORS = frozenset(
+    {"and", "of", "the", "for", "in", "on", "with", "to", "a", "an", "vs", "via"}
+)
+_METHOD_LABELS = frozenset({"closest method", "named method", "named methods", "method"})
+_NON_METHOD_ZH = {
+    "survey": "综述",
+    "review": "综述",
+    "dataset": "数据集",
+    "benchmark": "基准",
+    "generator": "生成器",
+}
 _PRIVILEGED = re.compile(r"ground[- ]truth scale|oracle scale|privileged", re.I)
 _DIFFERENT_TASK = re.compile(r"different task|rather than|instead of", re.I)
 
@@ -223,7 +269,22 @@ class RelatedCandidate(Strict):
     reason_en: str
     reason_zh: str
     provider: str = ""
+    relevance: float = 0.0
+    confirmed: bool = False
+    confirmation_reason: str = ""
     query_ids: list[str] = Field(default_factory=list)
+
+
+class MustCompareConfirmation(Strict):
+    """Judging-agent decision for one must-compare candidate."""
+
+    external_id: str = ""
+    title: str = ""
+    confirmed: bool = False
+    reason: str = ""
+
+
+MustCompareHook = Callable[["RelatedCandidate"], tuple[bool, str]]
 
 
 class BaselineGap(Strict):
@@ -306,9 +367,10 @@ class RawHit:
 
 
 class HttpResult:
-    def __init__(self, status: int, body: bytes) -> None:
+    def __init__(self, status: int, body: bytes, headers: dict[str, str] | None = None) -> None:
         self.status = status
         self.body = body
+        self.headers = {key.lower(): value for key, value in (headers or {}).items()}
 
 
 class RetrievalFailure(Exception):
@@ -364,25 +426,53 @@ def manuscript_title(text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _heading_text(line: str) -> str:
+    stripped = line.strip()
+    stripped = re.sub(r"^#{1,6}\s+", "", stripped)
+    stripped = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", stripped)
+    return stripped.strip()
+
+
+def _is_real_heading(line: str) -> bool:
+    """A section ends at the next real heading, not only at a short name list."""
+    text = _heading_text(line)
+    if not text or _LABEL.match(text):
+        return False
+    if text.endswith((".", "?", "!", ";", ",")):
+        return False
+    words = text.split()
+    if not words or len(words) > 8 or len(text) > 80:
+        return False
+    if not re.search(r"[A-Za-z]", text):
+        return False
+    if text.casefold() in _KNOWN_HEADINGS:
+        return True
+    return all(word[:1].isupper() or word.casefold() in _HEADING_CONNECTORS for word in words)
+
+
 def _section(text: str, name: str) -> str:
-    match = re.search(rf"(?im)^{re.escape(name)}\s*$", text)
-    if not match:
+    lines = text.splitlines()
+    wanted = name.casefold()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if _heading_text(line).casefold() == wanted:
+            start = index + 1
+            break
+    if start is None:
         return ""
-    rest = text[match.end() :]
-    nxt = re.search(
-        r"(?im)^(abstract|problem|contributions|experiments|references|methods|results|conclusion)\s*$",
-        rest,
-    )
-    if nxt:
-        rest = rest[: nxt.start()]
-    return rest.strip()
+    kept: list[str] = []
+    for line in lines[start:]:
+        if _is_real_heading(line):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _labeled_fields(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped or _HEADING.match(stripped):
+        if not stripped or _is_real_heading(stripped):
             continue
         match = _LABEL.match(stripped)
         if not match:
@@ -444,8 +534,41 @@ def query_is_public(query: str, allow: set[str]) -> bool:
     return bool(tokens) and all(token in allow for token in tokens)
 
 
-def generate_search_queries(formulation: ProblemFormulation) -> list[RelatedWorkQuery]:
-    """Build one keyword query per family. No manuscript sentences and no submission title."""
+def named_methods_from_manuscript(manuscript: str) -> list[str]:
+    """Method names the manuscript itself uses in baselines, related work, and references.
+
+    Each name is returned alone, sorted, and capped. The submission title is omitted.
+    """
+    names: list[str] = []
+    experiments = parse_experiments(manuscript)
+    for item in [*experiments.compared, *experiments.privileged, *experiments.different_task]:
+        names.append(_baseline_name(item))
+    related = _section(manuscript, "Related Work") or _section(manuscript, "Prior Work")
+    for line in related.splitlines():
+        match = _LABEL.match(line.strip())
+        if match and match.group(1).strip().lower() in _METHOD_LABELS:
+            names.extend(_split_items(match.group(2)))
+    for entry in parse_bibliography(manuscript):
+        if entry.title:
+            names.append(entry.title)
+    title = _normalize_title(manuscript_title(manuscript))
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        normalized = _normalize_title(name)
+        if len(normalized.split()) < 2 or normalized in seen or (title and normalized == title):
+            continue
+        seen.add(normalized)
+        cleaned.append(" ".join(name.split()))
+    cleaned.sort(key=_normalize_title)
+    return cleaned[:8]
+
+
+def generate_search_queries(
+    formulation: ProblemFormulation,
+    named_methods: Sequence[str] = (),
+) -> list[RelatedWorkQuery]:
+    """Build one keyword query per family, plus name-only lookups for named methods."""
     if not formulation.complete:
         return []
     allow = allow_tokens(formulation)
@@ -487,13 +610,42 @@ def generate_search_queries(formulation: ProblemFormulation) -> list[RelatedWork
                 metadata={"family": family, "specificity": "mid", "outbound": "keywords-only"},
             )
         )
+    seen_names: set[str] = set()
+    name_index = 0
+    for name in named_methods:
+        normalized = _normalize_title(name)
+        if not normalized or normalized in seen_names or len(normalized.split()) < 2:
+            continue
+        seen_names.add(normalized)
+        name_index += 1
+        queries.append(
+            RelatedWorkQuery(
+                id=f"Q-named-{name_index}",
+                perspective=QueryPerspective.baselines,
+                query=" ".join(name.split()),
+                generated_from="manuscript_method_name",
+                metadata={"family": "named_method", "specificity": "name", "outbound": "name-only"},
+            )
+        )
     return queries
 
 
-def assert_outbound_safe(query: str, manuscript: str, allow: set[str]) -> None:
+def assert_outbound_safe(
+    query: str,
+    manuscript: str,
+    allow: set[str],
+    *,
+    named: set[str] | None = None,
+) -> None:
     title = manuscript_title(manuscript)
-    if title and _normalize_title(title) and _normalize_title(title) in _normalize_title(query):
+    normalized_query = _normalize_title(query)
+    if title and _normalize_title(title) and _normalize_title(title) in normalized_query:
         raise RuntimeError("refusing to send the submission title to an external service")
+    if named and normalized_query in named:
+        abstract = _normalize_title(_section(manuscript, "Abstract"))
+        if abstract and len(normalized_query.split()) >= 8 and normalized_query in abstract:
+            raise RuntimeError("refusing to send manuscript text to an external service")
+        return
     if not query_is_public(query, allow):
         raise RuntimeError("refusing to send manuscript text to an external service")
 
@@ -562,6 +714,20 @@ def _mentions(name: str, title: str) -> bool:
     return len(left & right) / min(len(left), len(right)) >= 0.6
 
 
+def _titles_match(left: str, right: str) -> bool:
+    """Normalized title equality. A long title may contain the other as a phrase."""
+    first = _normalize_title(left)
+    second = _normalize_title(right)
+    if not first or not second:
+        return False
+    if first == second:
+        return True
+    short, long = (first, second) if len(first) <= len(second) else (second, first)
+    if len(short.split()) < 4:
+        return False
+    return f" {short} " in f" {long} "
+
+
 def is_cited(hit: RawHit, entries: Sequence[BibliographyEntry]) -> bool:
     arxiv = norm_arxiv(hit.arxiv_id) if hit.arxiv_id else None
     doi = norm_doi(hit.doi) if hit.doi else None
@@ -570,7 +736,7 @@ def is_cited(hit: RawHit, entries: Sequence[BibliographyEntry]) -> bool:
             return True
         if doi and entry.doi and doi == entry.doi:
             return True
-        if entry.title and _mentions(entry.title, hit.title):
+        if entry.title and _titles_match(entry.title, hit.title):
             return True
     return False
 
@@ -601,38 +767,71 @@ def _covers(text: str, phrase: str) -> bool:
     return hits >= max(1, (len(needed) + 1) // 2)
 
 
+def _non_method_kind(hit: RawHit) -> str | None:
+    """Surveys, reviews, datasets, benchmarks, and generators are not methods."""
+    title = hit.title or ""
+    lead = (hit.summary or "")[:240]
+    checks = (
+        ("survey", r"\bsurveys?\b"),
+        ("review", r"\breviews?\b"),
+        ("dataset", r"\bdatasets?\b"),
+        ("benchmark", r"\bbenchmarks?\b"),
+        ("generator", r"\bgenerators?\b"),
+    )
+    for kind, pattern in checks:
+        if re.search(pattern, title, re.I):
+            return kind
+    presented = (
+        ("survey", r"\b(?:a|an|this)\s+(?:systematic\s+|literature\s+)?survey\b"),
+        ("review", r"\b(?:a|an|this)\s+(?:systematic\s+|literature\s+)?review\b"),
+        ("dataset", r"\b(?:a|an|this)\s+datasets?\b"),
+        ("benchmark", r"\b(?:a|an|this)\s+benchmarks?\b"),
+        ("generator", r"\b(?:a|an|this)\s+(?:\w+\s+){0,3}generators?\b"),
+    )
+    for kind, pattern in presented:
+        if re.search(pattern, lead, re.I):
+            return kind
+    return None
+
+
+def _overlap(blob: str, phrase: str) -> float:
+    needed = keywords(phrase, limit=8)
+    if not needed:
+        return 0.0
+    hay = {token.lower() for token in _TOKEN.findall(blob)}
+    return sum(1 for token in needed if token in hay) / len(needed)
+
+
+def relevance_score(hit: RawHit, formulation: ProblemFormulation) -> float:
+    """Task overlap weighted above technique and setting. Modality alone adds nothing."""
+    blob = f"{hit.title} {hit.summary}"
+    task = _overlap(blob, formulation.task)
+    technique = _overlap(blob, formulation.technique) if formulation.technique else 0.0
+    setting = _overlap(blob, formulation.setting)
+    return round(0.5 * task + 0.3 * technique + 0.2 * setting, 4)
+
+
 def _base_tier(
     hit: RawHit,
     formulation: ProblemFormulation,
 ) -> tuple[CandidateTier, str, str]:
     blob = f"{hit.title} {hit.summary}"
-    modality = formulation.extra_modality or ""
-    if modality and modality.lower() in blob.lower() and _covers(blob, formulation.task):
-        return (
-            "must-compare",
-            f"Already accepts {modality} as input, so it may already solve the task.",
-            f"已经把{modality}作为输入，因此可能已经能完成该任务。",
-        )
-    if _covers(blob, formulation.task) and (
-        _covers(blob, formulation.inputs) or _covers(blob, formulation.outputs)
-    ):
-        return (
-            "must-compare",
-            "Same task and the same inputs or outputs as the submission.",
-            "与投稿的任务相同，并且输入或输出相同。",
-        )
-    sub = formulation.subproblem or formulation.task
-    if _covers(blob, sub) and re.search(r"\b(baseline|benchmark)\b", blob, re.I):
-        return (
-            "must-compare",
-            "Standard baseline or benchmark for the sub-problem.",
-            "该子问题的标准基线或基准。",
-        )
-    if formulation.technique and _covers(blob, formulation.technique) and _covers(blob, formulation.task):
+    kind = _non_method_kind(hit)
+    if kind:
+        zh = _NON_METHOD_ZH[kind]
         return (
             "should-discuss",
-            "Same technique on this task, but not established as the same setting.",
-            "技术路线相同，但还不能确定设定完全一致。",
+            f"This is a {kind}, so it can be discussed and is not a must-compare method.",
+            f"这是{zh}，可以讨论，但不是必须比较的方法。",
+        )
+    task_ok = _covers(blob, formulation.task)
+    technique_ok = bool(formulation.technique) and _covers(blob, formulation.technique)
+    setting_ok = _covers(blob, formulation.setting)
+    if task_ok and (technique_ok or setting_ok):
+        return (
+            "must-compare",
+            "Same task and the same technique or setting as the submission.",
+            "与投稿的任务相同，并且技术路线或设定相同。",
         )
     if formulation.adjacent_tasks and any(_covers(blob, item) for item in formulation.adjacent_tasks):
         return (
@@ -692,8 +891,67 @@ def build_candidate(
         reason_en=reason_en,
         reason_zh=reason_zh,
         provider=hit.provider,
+        relevance=relevance_score(hit, formulation),
         query_ids=list(dict.fromkeys(hit.query_ids)),
     )
+
+
+def _limit_must_compare(candidates: list[RelatedCandidate]) -> list[RelatedCandidate]:
+    """Keep at most MAX_MUST_COMPARE confirmed neighbours, highest relevance first.
+
+    Runs after confirmation so an unconfirmed neighbour does not consume a slot.
+    """
+    ranked = sorted(
+        (item for item in candidates if item.required),
+        key=lambda item: (-item.relevance, _normalize_title(item.title), item.external_id),
+    )
+    keep = {item.id for item in ranked[:MAX_MUST_COMPARE]}
+    for item in candidates:
+        if item.required and item.id not in keep:
+            item.required = False
+            item.tier = "should-discuss"
+            item.reason_en += " Ranked below the must-compare cap, so it is discussion-only."
+            item.reason_zh += "相关性排在必须比较的名额之外，因此只作为讨论。"
+    return candidates
+
+
+def _apply_confirmations(
+    candidates: list[RelatedCandidate],
+    confirmations: Sequence[MustCompareConfirmation],
+    hook: MustCompareHook | None,
+) -> list[RelatedCandidate]:
+    """Confirm must-compare items before the numeric cap. Unconfirmed items stay discussion-only."""
+    by_external = {item.external_id.strip(): item for item in confirmations if item.external_id.strip()}
+    by_title = {_normalize_title(item.title): item for item in confirmations if item.title.strip()}
+    for item in candidates:
+        if not item.required:
+            continue
+        confirmed = False
+        reason = ""
+        record = by_external.get(item.external_id) or by_title.get(_normalize_title(item.title))
+        if record is not None and record.confirmed and record.reason.strip():
+            confirmed = True
+            reason = record.reason.strip().splitlines()[0]
+        if hook is not None:
+            accepted, why = hook(item)
+            if accepted and why.strip():
+                confirmed = True
+                reason = why.strip().splitlines()[0]
+            else:
+                confirmed = False
+                reason = ""
+        if confirmed and reason:
+            item.confirmed = True
+            item.confirmation_reason = reason[:240]
+            item.reason_en += f" Confirmed: {item.confirmation_reason}"
+            item.reason_zh += f"已确认：{item.confirmation_reason}"
+            continue
+        item.required = False
+        item.tier = "should-discuss"
+        item.confirmed = False
+        item.reason_en += " The judging agent did not confirm it, so it is discussion-only."
+        item.reason_zh += "判断模型没有确认它，因此只作为讨论。"
+    return candidates
 
 
 def _named_in(title: str, items: Sequence[str]) -> bool:
@@ -845,8 +1103,13 @@ def evidence_id_for_candidate(candidate_id: str) -> str:
 
 
 def _eligible_cap_candidate(candidate: RelatedCandidate) -> bool:
-    """A cap may cite only a verified paper dated on or before the venue deadline."""
-    return bool(candidate.external_id) and candidate.date_relation == "prior" and candidate.required
+    """A retrieval cap cites a confirmed prior must-compare paper."""
+    return (
+        bool(candidate.external_id)
+        and candidate.date_relation == "prior"
+        and candidate.required
+        and candidate.confirmed
+    )
 
 
 def _provider_sets(logs: Sequence[RetrievalLogEntry]) -> tuple[list[str], list[str]]:
@@ -904,12 +1167,12 @@ def build_cap_signals(
     candidates: Sequence[RelatedCandidate] = (),
     logs: Sequence[RetrievalLogEntry] = (),
 ) -> list[CapSignal]:
-    """Emit caps from a complete search, or a missing-neighbor cap from a partial one.
+    """Emit retrieval caps from successful providers, and manuscript caps on partial searches.
 
-    ``unfair_baseline`` is manuscript evidence and still requires every provider
-    to have succeeded. A failed provider never adds that stronger cap.
-    ``missing_closest_neighbor`` on a partial search cites only a candidate
-    verified by a provider that logged success.
+    ``unfair_baseline`` is manuscript evidence. It fires on a complete or partial
+    search when the manuscript anchor resolves, and it does not need a verified
+    candidate. ``missing_closest_neighbor`` cites only a confirmed prior neighbour
+    verified by a provider that succeeded. A failed provider never adds a cap.
     """
     if status not in {"complete", "partial"}:
         return []
@@ -949,7 +1212,7 @@ def build_cap_signals(
                 evidence_ids=_cap_evidence_ids(missing_ids),
             )
         )
-    if unfair and status == "complete":
+    if unfair and status in {"complete", "partial"}:
         matched: list[str] = []
         for gap in unfair:
             for candidate in candidates:
@@ -984,22 +1247,70 @@ def _bilingual(english: str, chinese: str) -> LocalizedText:
     return LocalizedText(primary=english, language="en", translations={"zh-Hans": chinese})
 
 
+def _collapse(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def manuscript_baseline_excerpt(manuscript: str) -> str:
-    """Paper-owned baseline and related-work lines. Not the abstract or title."""
-    parts = [
-        section.strip()
-        for section in (
-            _section(manuscript, "Experiments"),
-            _section(manuscript, "References"),
-        )
-        if section.strip()
-    ]
-    text = "\n".join(parts).strip()
+    """Labeled baseline lines only, with whitespace collapsed to one line."""
+    fields = _labeled_fields(_section(manuscript, "Experiments"))
+    lines: list[str] = []
+    for key, label in (
+        ("decision_metric", "Decision metric"),
+        ("compared", "Compared baselines"),
+        ("privileged", "Privileged baselines"),
+        ("different_task", "Different-task baselines"),
+    ):
+        value = fields.get(key, "").strip()
+        if value:
+            lines.append(f"{label}: {value}")
+    text = _collapse(" ".join(lines))
     if not text:
         text = "No labeled baseline or related-work lines were found."
     if len(text) > 1200:
         text = text[:1197].rstrip() + "..."
     return text
+
+
+def _cap_first_read(
+    signal: CapSignal,
+    excerpt: str,
+    cited: Sequence[RelatedCandidate],
+) -> FirstReadNote:
+    quote = _collapse(excerpt) or None
+    if signal.fatal_class == "missing_closest_neighbor":
+        names = ", ".join(item.title for item in cited) or "a verified prior method"
+        paper_en = f"The experiments do not compare against {names}."
+        paper_zh = f"实验没有与{names}比较。"
+        explanation_en = (
+            "A first-time reader needs that comparison before treating the result as new. "
+            f"The venue cap stays {signal.venue_cap} until those prior methods are compared fairly."
+        )
+        explanation_zh = (
+            "第一次读这篇稿件的人，需要先看到这次比较，才能判断结果是不是新的。"
+            f"在公平比较这些已有方法之前，会场上限保持在 {signal.venue_cap}。"
+        )
+    else:
+        paper_en = (
+            "A listed baseline is given privileged information, such as ground-truth scale, "
+            "or it solves a different task."
+        )
+        paper_zh = "列出的某个基线带有特权信息（例如真实尺度），或者它解决的是另一个任务。"
+        explanation_en = (
+            "That baseline cannot decide the claim. "
+            f"The venue cap stays {signal.venue_cap} until the decision comparison uses the same task and the same inputs."
+        )
+        explanation_zh = (
+            "该基线不能用来决定主张是否成立。"
+            f"在决定性比较使用同一任务和同一输入之前，会场上限保持在 {signal.venue_cap}。"
+        )
+    return FirstReadNote(
+        paper_said=_bilingual(paper_en, paper_zh),
+        explanation=_bilingual(explanation_en, explanation_zh),
+        quote=quote,
+        intent=CommentIntent.issue,
+        blocking=True,
+    )
 
 
 def manuscript_baseline_records(
@@ -1038,14 +1349,15 @@ def manuscript_baseline_records(
 def related_work_cap_applies(judgment: RelatedWorkJudgment, issue: ReviewIssue) -> bool:
     """Whether ``rate`` should keep a related-work cap for this search status.
 
-    A failed provider cannot create or strengthen a cap. On a partial search the
-    only cap that applies is ``missing_closest_neighbor``, and every cited
-    candidate must have been verified by a provider that logged success.
+    A failed provider cannot create or strengthen a retrieval cap. On a partial
+    search, ``unfair_baseline`` still applies when the manuscript anchor resolves,
+    and ``missing_closest_neighbor`` applies only when every cited candidate was
+    confirmed and verified by a provider that logged success.
     """
     if issue.metadata.get("source") != "related_work_search":
         return True
     if issue.fatal_class == FatalClass.unfair_baseline:
-        if judgment.status != "complete":
+        if judgment.status not in {"complete", "partial"}:
             return False
         if MANUSCRIPT_BASELINE_EVIDENCE_ID not in issue.evidence_ids:
             return False
@@ -1082,9 +1394,10 @@ def issues_from_cap_signals(
 ) -> list[ReviewIssue]:
     """Blocking issues for active_caps().
 
-    A complete search may emit both caps. A partial search may emit only
-    ``missing_closest_neighbor``. Degraded and not-run emit none.
-    ``unfair_baseline`` always requires a resolvable manuscript anchor and
+    A complete or partial search may emit both caps. Degraded and not-run emit none.
+    ``missing_closest_neighbor`` requires a confirmed prior candidate from a
+    provider that succeeded. ``unfair_baseline`` is manuscript evidence: it fires
+    on a complete or partial search when the manuscript anchor resolves, and it
     never requires a verified candidate.
     """
     if judgment.status not in {"complete", "partial"}:
@@ -1101,7 +1414,7 @@ def issues_from_cap_signals(
     issues: list[ReviewIssue] = []
     for signal in judgment.cap_signals:
         if signal.fatal_class == "unfair_baseline":
-            if judgment.status != "complete":
+            if judgment.status not in {"complete", "partial"}:
                 continue
             if MANUSCRIPT_BASELINE_EVIDENCE_ID not in signal.evidence_ids:
                 continue
@@ -1180,6 +1493,7 @@ def issues_from_cap_signals(
                 anchor=anchor,
                 fatal_class=FatalClass(signal.fatal_class),
                 decision_relevant=True,
+                first_read=_cap_first_read(signal, anchor_excerpt, cited),
                 metadata={
                     "source": "related_work_search",
                     "coefficient_set": COEFFICIENT_SET,
@@ -1694,16 +2008,75 @@ def _query_text_from_url(url: str) -> str:
     return ""
 
 
+def clear_retrieval_cache() -> None:
+    """Drop cached provider metadata. Tests use this to isolate transports."""
+    _RETRIEVAL_CACHE.clear()
+
+
+def _query_cache_key(provider: str, query: str) -> str:
+    return hashlib.sha256(f"{provider}\n{query}".encode("utf-8")).hexdigest()
+
+
+def _retry_after_seconds(result: HttpResult) -> float:
+    raw = result.headers.get("retry-after", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return min(max(float(raw), 0.0), _MAX_RETRY_AFTER_SECONDS)
+    except ValueError:
+        return 0.0
+
+
 def guarded_get(
     url: str,
     *,
     manuscript: str,
     allow: set[str],
     transport: Transport,
+    named: set[str] | None = None,
 ) -> HttpResult:
     query = _query_text_from_url(url)
-    assert_outbound_safe(query, manuscript, allow)
+    assert_outbound_safe(query, manuscript, allow, named=named)
     return transport(url)
+
+
+def _fetch_provider(
+    provider: str,
+    query: RelatedWorkQuery,
+    *,
+    manuscript: str,
+    allow: set[str],
+    named: set[str],
+    transport: Transport,
+    limit: int,
+    sleeper: Callable[[float], None],
+) -> tuple[HttpResult | None, bool, RetrievalLogEntry | None]:
+    """Fetch one query. HTTP 429 retries and does not abort the provider."""
+    key = _query_cache_key(provider, query.query)
+    cached = _RETRIEVAL_CACHE.get(key)
+    if cached is not None:
+        return cached, True, None
+    url = _search_url(provider, query.query, limit)
+    result: HttpResult | None = None
+    for attempt in range(_MAX_429_RETRIES + 1):
+        try:
+            result = guarded_get(url, manuscript=manuscript, allow=allow, transport=transport, named=named)
+        except RetrievalFailure as exc:
+            return None, False, _log(provider, exc.status, str(exc), query.id)
+        except TimeoutError as exc:
+            return None, False, _log(provider, "timeout", str(exc), query.id)
+        except RuntimeError as exc:
+            return None, False, _log(provider, "dropped", str(exc), query.id)
+        if result.status != 429:
+            break
+        if attempt == _MAX_429_RETRIES:
+            break
+        delay = _retry_after_seconds(result)
+        if delay > 0:
+            sleeper(delay)
+    if result is not None and result.status == 200:
+        _RETRIEVAL_CACHE[key] = result
+    return result, False, None
 
 
 def live_search(
@@ -1714,34 +2087,47 @@ def live_search(
     transport: Transport,
     providers: Sequence[str],
     limit: int,
+    named: set[str] | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> tuple[list[RawHit], list[RetrievalLogEntry]]:
     hits: list[RawHit] = []
     logs: list[RetrievalLogEntry] = []
     blocked: set[str] = set()
+    named_queries = named or set()
+    pause = sleeper or time.sleep
     for provider in providers:
         for query in queries:
             if provider in blocked:
                 logs.append(_log(provider, "skipped", "provider already unavailable", query.id))
                 continue
-            url = _search_url(provider, query.query, limit)
-            try:
-                result = guarded_get(url, manuscript=manuscript, allow=allow, transport=transport)
-            except RetrievalFailure as exc:
-                logs.append(_log(provider, exc.status, str(exc), query.id))
-                blocked.add(provider)
+            result, from_cache, failure = _fetch_provider(
+                provider,
+                query,
+                manuscript=manuscript,
+                allow=allow,
+                named=named_queries,
+                transport=transport,
+                limit=limit,
+                sleeper=pause,
+            )
+            if failure is not None:
+                logs.append(failure)
+                if failure.status in _DEGRADED_LOGS or failure.status == "dropped":
+                    blocked.add(provider)
                 continue
-            except TimeoutError as exc:
-                logs.append(_log(provider, "timeout", str(exc), query.id))
-                blocked.add(provider)
-                continue
-            except RuntimeError as exc:
-                logs.append(_log(provider, "dropped", str(exc), query.id))
-                blocked.add(provider)
-                continue
-            if result.status in {429, 503}:
+            assert result is not None
+            if result.status == 429:
                 logs.append(
-                    _log(provider, "rate_limited", f"HTTP {result.status}; stopping this provider", query.id)
+                    _log(
+                        provider,
+                        "rate_limited",
+                        f"HTTP 429 after {_MAX_429_RETRIES} retries; continuing with later queries",
+                        query.id,
+                    )
                 )
+                continue
+            if result.status == 503:
+                logs.append(_log(provider, "rate_limited", "HTTP 503; stopping this provider", query.id))
                 blocked.add(provider)
                 continue
             if result.status != 200:
@@ -1752,11 +2138,15 @@ def live_search(
                 parsed = parse_arxiv_atom(body)
             else:
                 parsed = parse_provider_payload(body)
+            parsed.sort(key=lambda hit: (_normalize_title(hit.title), hit.external_id()))
             for hit in parsed:
                 hit.query_ids = [query.id]
                 hit.provider = provider
                 hits.append(hit)
-            logs.append(_log(provider, "ok", f"{len(parsed)} records", query.id))
+            detail = f"{len(parsed)} records"
+            if from_cache:
+                detail += " (cached)"
+            logs.append(_log(provider, "ok", detail, query.id))
     return hits, logs
 
 
@@ -1811,6 +2201,21 @@ def _status_from(
     return "complete" if mode in {"agent", "live"} else "not_run"
 
 
+def load_confirmations(path: Path) -> list[MustCompareConfirmation]:
+    """Read judging-agent confirmations from an agent findings drop."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return []
+    items = raw.get("confirmations", [])
+    if not isinstance(items, list):
+        raise ValueError("confirmations must be a list")
+    confirmations: list[MustCompareConfirmation] = []
+    for item in items:
+        if isinstance(item, dict):
+            confirmations.append(MustCompareConfirmation.model_validate(item))
+    return confirmations
+
+
 def run_related_work_search(
     manuscript: str,
     *,
@@ -1822,15 +2227,23 @@ def run_related_work_search(
     max_results: int = 5,
     providers: Sequence[str] | None = None,
     deadlines: VenueDeadlines | None = None,
+    confirm_must_compare: MustCompareHook | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> RelatedWorkJudgment:
     if mode not in {"agent", "live", "off"}:
         raise ValueError("mode must be agent, live, or off")
     profile = deadlines or load_venue_deadlines(venue_key)
     formulation = derive_formulation(manuscript)
-    queries = generate_search_queries(formulation)
+    method_names = named_methods_from_manuscript(manuscript) if formulation.complete else []
+    queries = generate_search_queries(formulation, method_names)
     allow = allow_tokens(formulation)
+    named = {
+        _normalize_title(query.query)
+        for query in queries
+        if query.metadata.get("family") == "named_method"
+    }
     for query in queries:
-        assert_outbound_safe(query.query, manuscript, allow)
+        assert_outbound_safe(query.query, manuscript, allow, named=named)
     entries = parse_bibliography(manuscript)
     experiments = parse_experiments(manuscript)
     logs: list[RetrievalLogEntry] = []
@@ -1883,6 +2296,8 @@ def run_related_work_search(
                 transport=caller,
                 providers=chosen,
                 limit=max_results,
+                named=named,
+                sleeper=sleeper,
             )
             hits.extend(found)
             logs.extend(live_logs)
@@ -1895,7 +2310,15 @@ def run_related_work_search(
             logs.append(_log("local", "dropped", f"ignored unknown query ids {unknown_ids} on {hit.title}"))
         hit.query_ids = [query_id for query_id in hit.query_ids if query_id in known_query_ids]
 
-    ranked = sorted(deduped, key=lambda hit: (_TIER_RANK[_base_tier(hit, formulation)[0]], hit.title.lower()))
+    ranked = sorted(
+        deduped,
+        key=lambda hit: (
+            _TIER_RANK[_base_tier(hit, formulation)[0]],
+            -relevance_score(hit, formulation),
+            _normalize_title(hit.title),
+            hit.external_id(),
+        ),
+    )
     candidates = [
         build_candidate(
             hit,
@@ -1906,6 +2329,9 @@ def run_related_work_search(
         )
         for index, hit in enumerate(ranked, start=1)
     ]
+    confirmations = load_confirmations(findings_path) if findings_path is not None and mode == "agent" else []
+    candidates = _apply_confirmations(candidates, confirmations, confirm_must_compare)
+    candidates = _limit_must_compare(candidates)
     status = _status_from(
         mode,
         logs,

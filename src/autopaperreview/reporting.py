@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .i18n import ensure_package_languages, normalize_languages, require_language
 from .models import (
+    DimensionScore,
     IntegrityRecord,
     LedgerClaim,
     LocalizedText,
@@ -200,6 +201,35 @@ def _render_how_to_read(languages: Sequence[str]) -> list[str]:
     return lines
 
 
+def _after_ceiling(package: ReviewPackage, score: DimensionScore) -> float | None:
+    overall = package.overall_score
+    if overall is None:
+        return None
+    bands = overall.metadata.get("bands_after_ceiling")
+    if not isinstance(bands, dict):
+        return None
+    value = bands.get(score.dimension.value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _dimension_numbers(package: ReviewPackage, score: DimensionScore) -> str:
+    """Assigned score and clause beside the post-ceiling band, when rating has run."""
+    clause = f" `{score.clause_id}`" if score.clause_id else ""
+    assigned = f"{score.score:.1f}/10{clause}"
+    after = _after_ceiling(package, score)
+    if after is None:
+        return assigned
+    return f"assigned {assigned}; after ceiling {after:.1f}/10"
+
+
+def _quote_block(quote: str, *, bilingual: bool) -> list[str]:
+    collapsed = re.sub(r"\s+", " ", quote).strip()
+    label = "**Quoted passage / 原文摘录.**" if bilingual else "**Quoted passage.**"
+    return [label, "", f"> {collapsed}", ""]
+
+
 def _render_first_read_mono(
     issue: ReviewIssue, package: ReviewPackage, language: str
 ) -> list[str]:
@@ -212,14 +242,12 @@ def _render_first_read_mono(
         lines.append(f"**What the paper said.** {issue.first_read.paper_said.resolve(language)}")
         lines.append("")
         if quote:
-            lines.append(f"**Quoted passage.** {quote}")
-            lines.append("")
+            lines.extend(_quote_block(quote, bilingual=False))
         lines.append(f"**Why this matters.** {issue.first_read.explanation.resolve(language)}")
         lines.append("")
     elif quote:
         lines.append("")
-        lines.append(f"**Quoted passage.** {quote}")
-        lines.append("")
+        lines.extend(_quote_block(quote, bilingual=False))
     return lines
 
 
@@ -242,8 +270,7 @@ def _render_first_read_bilingual(
         )
         lines.append("")
         if quote:
-            lines.append(f"**Quoted passage / 原文摘录.** {quote}")
-            lines.append("")
+            lines.extend(_quote_block(quote, bilingual=True))
         lines.append("**Why this matters / 为何重要.**")
         lines.extend(
             _prose_items(
@@ -254,8 +281,7 @@ def _render_first_read_bilingual(
         )
         lines.append("")
     elif quote:
-        lines.append(f"**Quoted passage / 原文摘录.** {quote}")
-        lines.append("")
+        lines.extend(_quote_block(quote, bilingual=True))
     return lines
 
 
@@ -696,9 +722,8 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             rationale = score.rationale.resolve(language) if score.rationale else ""
             detail = f" — {rationale}" if rationale else ""
             label = dimension_label(score.dimension, language)
-            clause = f" `{score.clause_id}`" if score.clause_id else ""
             lines.append(
-                f"- **{score.dimension.value}:** {label} — {score.score:.1f}/10{clause}"
+                f"- **{score.dimension.value}:** {label} — {_dimension_numbers(package, score)}"
                 f"{_evidence_suffix(score.evidence_ids)}{detail}"
             )
         lines.append("")
@@ -877,9 +902,8 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.extend([_heading("Dimension Scores", languages), ""])
         for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
             labels = " / ".join(dimension_label(score.dimension, language) for language in languages)
-            clause = f" `{score.clause_id}`" if score.clause_id else ""
             lines.append(
-                f"- **{score.dimension.value}:** {labels} — {score.score:.1f}/10{clause}"
+                f"- **{score.dimension.value}:** {labels} — {_dimension_numbers(package, score)}"
                 f"{_evidence_suffix(score.evidence_ids)}"
             )
             if score.rationale:
