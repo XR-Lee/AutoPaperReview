@@ -4,13 +4,12 @@ The search is not the manuscript bibliography and not one ad-hoc query.
 Outbound calls receive generic topic keywords only. A candidate is kept only
 when a provider payload contains its id and title. Papers are never invented.
 
-Cap numbers for ``unfair_baseline`` match ``apr-iclr-cap-v1`` (venue cap 5,
-experimental-soundness ceiling 4). ``missing_closest_neighbor`` is not a fatal
-class on that scale. It uses venue cap 6 so a missing neighbor and an unfair
-baseline do not collapse to the same cap, and other dimension scores can still
-snap to 1, 3, or 6. This module does not write ``OverallScore``. Wire the
-signals into ``rating.py`` after that stage lands; see
-``docs/related-work-search.md``.
+Cap numbers follow ``apr-iclr-cap-v1``. ``unfair_baseline`` is venue cap 5
+with an experimental-soundness ceiling of 4. ``missing_closest_neighbor`` is
+venue cap 6 with a prior-work ceiling of 2 and an originality ceiling of 4.
+This module does not write ``OverallScore``. It emits blocking issues that
+``rate_venue()`` reads through ``active_caps()``. A degraded search emits no
+cap. See ``docs/related-work-search.md``.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -32,7 +32,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .contributions import extract_listed_contributions
-from .models import QueryPerspective, RelatedWorkQuery
+from .models import (
+    Anchor,
+    AnchorKind,
+    EvidenceRecord,
+    FatalClass,
+    LocalizedText,
+    QueryPerspective,
+    RelatedWorkQuery,
+    ReviewIssue,
+    Severity,
+    SourceRecord,
+)
 from .venues import VenueDeadlines, load_venue_deadlines
 
 logger = logging.getLogger("autopaperreview.related_work")
@@ -57,16 +68,18 @@ MISSING_NEIGHBOR_CEILINGS = {
     "prior_work_contextualization": 2.0,
     "originality": 4.0,
 }
+MANUSCRIPT_SOURCE_ID = "S-manuscript"
+MANUSCRIPT_BASELINE_EVIDENCE_ID = "E-manuscript-baselines"
 
 INTEGRATION_NOTE = (
-    "Standalone until the rating stage lands. Map unfair_baseline onto a blocking, "
-    "decision-relevant issue with fatal_class unfair_baseline so active_caps() applies "
-    "venue cap 5 and an experimental_soundness ceiling of 4 (clause es-4). "
-    "missing_closest_neighbor is not a FatalClass in apr-iclr-cap-v1. Add it with venue "
-    "cap 6, prior_work_contextualization ceiling 2 (pw-2), and originality ceiling 4 (or-4). "
-    "Cap 6 is the next ICLR bin above unfair_baseline, so the two flaws do not share a cap "
-    "and other dimensions can still separate papers below the cap. Do not write OverallScore "
-    "in this module; rate_venue() remains the score writer. Agent mode follows "
+    "Cap signals become blocking, decision-relevant issues. "
+    "fatal_class unfair_baseline uses the apr-iclr-cap-v1 cap of 5 and an "
+    "experimental_soundness ceiling of 4 (clause es-4). "
+    "fatal_class missing_closest_neighbor uses venue cap 6, "
+    "prior_work_contextualization ceiling 2 (pw-2), and originality ceiling 4 (or-4). "
+    "Only a verified candidate dated on or before the venue deadline can support a cap. "
+    "Concurrent work is discussion only. status=degraded emits no cap and must not lower "
+    "the score. rate_venue() remains the only writer of OverallScore. Agent mode follows "
     "AgentFindingsInspector: the host writes a JSON drop after it runs the search, and a "
     "candidate is kept only when its provider payload parses to the same id and title."
 )
@@ -132,7 +145,16 @@ _LABEL_KEYS = {
 DateRelation = Literal["prior", "concurrent", "unknown"]
 CandidateTier = Literal["must-compare", "should-discuss", "optional"]
 SearchStatus = Literal["complete", "degraded", "not_run"]
-LogStatus = Literal["ok", "offline", "rate_limited", "http_error", "skipped", "dropped", "unconfigured"]
+LogStatus = Literal[
+    "ok",
+    "offline",
+    "rate_limited",
+    "http_error",
+    "timeout",
+    "skipped",
+    "dropped",
+    "unconfigured",
+]
 
 
 class Strict(BaseModel):
@@ -223,6 +245,7 @@ class CapSignal(Strict):
     reason_en: str
     reason_zh: str
     candidate_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class RelatedWorkJudgment(Strict):
@@ -806,15 +829,43 @@ def build_clause_advice(
     return advice
 
 
+def evidence_id_for_candidate(candidate_id: str) -> str:
+    return f"E-RW-{candidate_id}"
+
+
+def _eligible_cap_candidate(candidate: RelatedCandidate) -> bool:
+    """A cap may cite only a verified paper dated on or before the venue deadline."""
+    return bool(candidate.external_id) and candidate.date_relation == "prior" and candidate.required
+
+
+def _cap_evidence_ids(candidate_ids: Sequence[str]) -> list[str]:
+    return [
+        MANUSCRIPT_BASELINE_EVIDENCE_ID,
+        *[evidence_id_for_candidate(candidate_id) for candidate_id in candidate_ids],
+    ]
+
+
 def build_cap_signals(
     *,
     gaps: Sequence[BaselineGap],
     status: SearchStatus,
+    candidates: Sequence[RelatedCandidate] = (),
 ) -> list[CapSignal]:
+    """Emit caps only after a completed search. Degraded and not-run emit none."""
+    if status != "complete":
+        return []
+    by_id = {item.id: item for item in candidates}
     signals: list[CapSignal] = []
-    missing_ids = [gap.candidate_id for gap in gaps if gap.kind == "missing_baseline" and gap.candidate_id]
+    missing_ids: list[str] = []
+    for gap in gaps:
+        if gap.kind != "missing_baseline" or not gap.candidate_id:
+            continue
+        candidate = by_id.get(gap.candidate_id)
+        if candidate is None or not _eligible_cap_candidate(candidate):
+            continue
+        missing_ids.append(candidate.id)
     unfair = [gap for gap in gaps if gap.kind in {"privileged_baseline", "different_task"}]
-    if status != "not_run" and missing_ids:
+    if missing_ids:
         signals.append(
             CapSignal(
                 id="CAP-missing-neighbor",
@@ -831,9 +882,18 @@ def build_cap_signals(
                     f"会场上限为 {MISSING_NEIGHBOR_CAP}，在 apr-iclr-cap-v1 下仍可落到 1/3/6。"
                 ),
                 candidate_ids=missing_ids,
+                evidence_ids=_cap_evidence_ids(missing_ids),
             )
         )
     if unfair:
+        matched: list[str] = []
+        for gap in unfair:
+            for candidate in candidates:
+                if not _eligible_cap_candidate(candidate):
+                    continue
+                if _mentions(candidate.title, gap.title) or _mentions(gap.title, candidate.title):
+                    matched.append(candidate.id)
+        matched_ids = list(dict.fromkeys(matched))
         signals.append(
             CapSignal(
                 id="CAP-unfair-baseline",
@@ -849,10 +909,193 @@ def build_cap_signals(
                     "某个基线获得了特权信息，或解决的是另一个任务。"
                     f"这对应 apr-iclr-cap-v1 的 unfair_baseline 上限 {UNFAIR_BASELINE_CAP}。"
                 ),
-                candidate_ids=[],
+                candidate_ids=matched_ids,
+                evidence_ids=_cap_evidence_ids(matched_ids),
             )
         )
     return signals
+
+
+def _bilingual(english: str, chinese: str) -> LocalizedText:
+    return LocalizedText(primary=english, language="en", translations={"zh-Hans": chinese})
+
+
+def manuscript_baseline_excerpt(manuscript: str) -> str:
+    """Paper-owned baseline and related-work lines. Not the abstract or title."""
+    parts = [
+        section.strip()
+        for section in (
+            _section(manuscript, "Experiments"),
+            _section(manuscript, "References"),
+        )
+        if section.strip()
+    ]
+    text = "\n".join(parts).strip()
+    if not text:
+        text = "No labeled baseline or related-work lines were found."
+    if len(text) > 1200:
+        text = text[:1197].rstrip() + "..."
+    return text
+
+
+def manuscript_baseline_records(
+    manuscript: str,
+    *,
+    sha256: str | None,
+    locator: str,
+) -> tuple[SourceRecord, EvidenceRecord]:
+    excerpt = manuscript_baseline_excerpt(manuscript)
+    anchor = Anchor(
+        kind=AnchorKind.quote,
+        display="Experiments / References",
+        artifact_sha256=sha256,
+        excerpt=excerpt,
+    )
+    source = SourceRecord(
+        id=MANUSCRIPT_SOURCE_ID,
+        kind="manuscript",
+        title="Manuscript",
+        locator=locator,
+        sha256=sha256,
+    )
+    evidence = EvidenceRecord(
+        id=MANUSCRIPT_BASELINE_EVIDENCE_ID,
+        source_id=MANUSCRIPT_SOURCE_ID,
+        locator="Experiments / References",
+        claim="Baselines and related-work lines named in the manuscript.",
+        excerpt=excerpt,
+        artifact_sha256=sha256,
+        anchor=anchor,
+        metadata={"role": "manuscript_baselines"},
+    )
+    return source, evidence
+
+
+def issues_from_cap_signals(
+    judgment: RelatedWorkJudgment,
+    *,
+    anchor_excerpt: str,
+) -> list[ReviewIssue]:
+    """Blocking issues for active_caps(). Empty unless the search completed."""
+    if judgment.status != "complete":
+        return []
+    by_id = {item.id: item for item in judgment.candidates}
+    anchor = Anchor(
+        kind=AnchorKind.quote,
+        display="Experiments / References",
+        excerpt=anchor_excerpt,
+    )
+    issues: list[ReviewIssue] = []
+    for signal in judgment.cap_signals:
+        cited = [
+            by_id[candidate_id]
+            for candidate_id in signal.candidate_ids
+            if candidate_id in by_id and _eligible_cap_candidate(by_id[candidate_id])
+        ]
+        if signal.fatal_class == "missing_closest_neighbor" and not cited:
+            continue
+        evidence_ids = [MANUSCRIPT_BASELINE_EVIDENCE_ID]
+        evidence_ids.extend(evidence_id_for_candidate(item.id) for item in cited)
+        external_ids = [item.external_id for item in cited]
+        if signal.fatal_class == "missing_closest_neighbor":
+            joined = ", ".join(external_ids)
+            title_en = "Closest verified neighbor is missing from the baselines"
+            title_zh = "已核实的最近相关工作没有进入基线"
+            evidence_en = (
+                f"Verified prior records {joined} are dated before the submission deadline "
+                "and are absent from the manuscript baselines."
+            )
+            evidence_zh = (
+                f"已核实且早于投稿截止日的记录 {joined} 没有出现在稿件基线中。"
+            )
+            impact_en = (
+                f"apr-iclr-cap-v1 caps the venue bin at {signal.venue_cap} "
+                "and lowers prior-work and originality."
+            )
+            impact_zh = (
+                f"apr-iclr-cap-v1 将会场档限制在 {signal.venue_cap}，并压低已有工作定位与原创性。"
+            )
+            action_en = (
+                "Compare those prior papers under the same metric, or show why they are not the closest neighbors."
+            )
+            action_zh = "在同一指标下比较这些已有论文，或说明它们为什么不是最近的相关工作。"
+            category = "related work"
+        else:
+            title_en = "A baseline is privileged or solves a different task"
+            title_zh = "某个基线带有特权信息或解决的是另一个任务"
+            evidence_en = signal.reason_en
+            evidence_zh = signal.reason_zh
+            impact_en = (
+                f"apr-iclr-cap-v1 caps the venue bin at {signal.venue_cap} "
+                "and lowers experimental soundness."
+            )
+            impact_zh = f"apr-iclr-cap-v1 将会场档限制在 {signal.venue_cap}，并压低实验可靠性。"
+            action_en = (
+                "Remove privileged inputs and different-task baselines from the decision comparison."
+            )
+            action_zh = "从决定性比较中去掉特权输入和答非所问的基线。"
+            category = "experimental soundness"
+        issues.append(
+            ReviewIssue(
+                id=signal.id,
+                severity=Severity.major,
+                category=category,
+                title=_bilingual(title_en, title_zh),
+                location="Experiments / References",
+                evidence=_bilingual(evidence_en, evidence_zh),
+                impact=_bilingual(impact_en, impact_zh),
+                required_action=_bilingual(action_en, action_zh),
+                confidence=0.9,
+                source_ids=[MANUSCRIPT_SOURCE_ID],
+                evidence_ids=list(dict.fromkeys(evidence_ids)),
+                tags=["apr-iclr-cap-v1", signal.fatal_class],
+                anchor=anchor,
+                fatal_class=FatalClass(signal.fatal_class),
+                decision_relevant=True,
+                metadata={
+                    "source": "related_work_search",
+                    "coefficient_set": COEFFICIENT_SET,
+                    "venue_cap": signal.venue_cap,
+                    "candidate_ids": [item.id for item in cited],
+                    "candidate_external_ids": external_ids,
+                    "manuscript_anchor": MANUSCRIPT_BASELINE_EVIDENCE_ID,
+                    "clause_ids": dict(signal.clause_ids),
+                },
+            )
+        )
+    return issues
+
+
+def related_work_comparison(judgment: RelatedWorkJudgment | dict[str, Any] | None) -> dict[str, Any] | None:
+    """Baselines versus closest neighbours. Scoring reads this before a score is written."""
+    if judgment is None:
+        return None
+    record = judgment if isinstance(judgment, RelatedWorkJudgment) else RelatedWorkJudgment.model_validate(judgment)
+    missing_ids = {gap.candidate_id for gap in record.gaps if gap.kind == "missing_baseline"}
+    neighbours = []
+    for candidate in record.candidates:
+        if candidate.tier == "optional" and not candidate.required:
+            continue
+        neighbours.append(
+            {
+                "id": candidate.id,
+                "external_id": candidate.external_id,
+                "date_relation": candidate.date_relation,
+                "required": candidate.required,
+                "tier": candidate.tier,
+                "verified": True,
+                "in_baselines": candidate.id not in missing_ids,
+            }
+        )
+    return {
+        "status": record.status,
+        "baselines": {
+            "missing": [gap.title for gap in record.gaps if gap.kind == "missing_baseline"],
+            "privileged": [gap.title for gap in record.gaps if gap.kind == "privileged_baseline"],
+            "different_task": [gap.title for gap in record.gaps if gap.kind == "different_task"],
+        },
+        "closest_neighbours": neighbours,
+    }
 
 
 def snap_down(value: float) -> int:
@@ -949,7 +1192,7 @@ def _suggested_text(
 
 def _log(provider: str, status: LogStatus, detail: str, query_id: str | None = None) -> RetrievalLogEntry:
     entry = RetrievalLogEntry(provider=provider, query_id=query_id, status=status, detail=detail)
-    if status in {"offline", "rate_limited", "dropped", "http_error"}:
+    if status in {"offline", "rate_limited", "dropped", "http_error", "timeout"}:
         logger.warning(
             "related-work search: provider %s %s%s: %s",
             provider,
@@ -1287,7 +1530,10 @@ def urllib_transport(url: str, timeout: float = 20.0) -> HttpResult:
         body = exc.read() if exc.fp else b""
         return HttpResult(status=exc.code, body=body)
     except urllib.error.URLError as exc:
-        raise RetrievalFailure("offline", str(exc.reason)) from exc
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            raise RetrievalFailure("timeout", str(reason)) from exc
+        raise RetrievalFailure("offline", str(reason)) from exc
 
 
 def _search_url(provider: str, query: str, limit: int) -> str:
@@ -1354,6 +1600,10 @@ def live_search(
                 logs.append(_log(provider, exc.status, str(exc), query.id))
                 blocked.add(provider)
                 continue
+            except TimeoutError as exc:
+                logs.append(_log(provider, "timeout", str(exc), query.id))
+                blocked.add(provider)
+                continue
             except RuntimeError as exc:
                 logs.append(_log(provider, "dropped", str(exc), query.id))
                 blocked.add(provider)
@@ -1401,12 +1651,21 @@ def _dedupe(hits: Sequence[RawHit]) -> list[RawHit]:
 
 
 _TIER_RANK = {"must-compare": 0, "should-discuss": 1, "optional": 2}
+_DEGRADED_LOGS = {"offline", "rate_limited", "http_error", "timeout"}
 
 
-def _status_from(mode: str, logs: Sequence[RetrievalLogEntry], searched: bool) -> SearchStatus:
+def _status_from(
+    mode: str,
+    logs: Sequence[RetrievalLogEntry],
+    searched: bool,
+    *,
+    providers_available: bool = True,
+) -> SearchStatus:
     if not searched:
         return "not_run"
-    if any(entry.status in {"offline", "rate_limited", "http_error"} for entry in logs):
+    if not providers_available:
+        return "degraded"
+    if any(entry.status in _DEGRADED_LOGS for entry in logs):
         return "degraded"
     return "complete" if mode in {"agent", "live"} else "not_run"
 
@@ -1436,7 +1695,8 @@ def run_related_work_search(
     logs: list[RetrievalLogEntry] = []
     hits: list[RawHit] = []
     searched = False
-    chosen = list(providers or ("arxiv", "openalex", "semantic_scholar"))
+    providers_available = True
+    chosen = list(("arxiv", "openalex", "semantic_scholar") if providers is None else providers)
     unknown = [name for name in chosen if name not in {"arxiv", "openalex", "semantic_scholar"}]
     if unknown:
         raise ValueError(f"unknown related-work providers: {unknown}")
@@ -1470,17 +1730,21 @@ def run_related_work_search(
         if not allow_network:
             raise PermissionError("live related-work search requires metadata network access")
         searched = True
-        caller = transport or urllib_transport
-        found, live_logs = live_search(
-            queries,
-            manuscript=manuscript,
-            allow=allow,
-            transport=caller,
-            providers=chosen,
-            limit=max_results,
-        )
-        hits.extend(found)
-        logs.extend(live_logs)
+        if not chosen:
+            providers_available = False
+            logs.append(_log("local", "unconfigured", "zero providers available"))
+        else:
+            caller = transport or urllib_transport
+            found, live_logs = live_search(
+                queries,
+                manuscript=manuscript,
+                allow=allow,
+                transport=caller,
+                providers=chosen,
+                limit=max_results,
+            )
+            hits.extend(found)
+            logs.extend(live_logs)
 
     known_query_ids = {query.id for query in queries}
     deduped = _dedupe(hits)
@@ -1501,12 +1765,17 @@ def run_related_work_search(
         )
         for index, hit in enumerate(ranked, start=1)
     ]
-    status = _status_from(mode, logs, searched and formulation.complete)
+    status = _status_from(
+        mode,
+        logs,
+        searched and formulation.complete,
+        providers_available=providers_available,
+    )
     gaps = compare_experiments(candidates, experiments) if formulation.complete else []
     if status == "not_run":
         gaps = [gap for gap in gaps if gap.kind != "missing_baseline"]
     advice = build_clause_advice(gaps=gaps, candidates=candidates, status=status)
-    signals = build_cap_signals(gaps=gaps, status=status)
+    signals = build_cap_signals(gaps=gaps, status=status, candidates=candidates)
     effective = min((signal.venue_cap for signal in signals), default=None)
     weakness_en, weakness_zh, rebuttal_en, rebuttal_zh = _suggested_text(
         formulation=formulation,

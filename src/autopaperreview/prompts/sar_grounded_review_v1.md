@@ -30,6 +30,7 @@ On any blocking, decision-relevant issue set `decision_relevant` true and `fatal
 
 - `invalid_protocol`, `leakage`, `wrong_metric` — the formula caps the ICLR bin at 3
 - `unfair_baseline`, `unsupported_claim` — the formula caps the ICLR bin at 5
+- `missing_closest_neighbor` — a verified pre-deadline neighbor is absent from the baselines; the formula caps the ICLR bin at 6
 - `format_desk_reject` — anonymity or page-limit break; the formula caps the ICLR bin at 1
 
 You propose the class. You do not choose the ICLR 1/3/5/6/8/10 bin. The `rate` stage computes it from the bands and the caps. Do not put that bin in `recommendation` as if it were a separate score.

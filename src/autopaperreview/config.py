@@ -87,7 +87,39 @@ class HarnessConfig(ConfigModel):
 
         for stage_id in stage_ids:
             visit(stage_id)
+        self._require_related_work_before_scoring(by_id)
         return self
+
+    def _require_related_work_before_scoring(self, by_id: dict[str, StageConfig]) -> None:
+        """Novelty and originality scores read the baseline comparison first."""
+        enabled = [stage for stage in self.stages if stage.enabled]
+        related_ids = {stage.id for stage in enabled if stage.type == "related_work_search"}
+        if not related_ids:
+            return
+
+        def reaches(stage_id: str) -> bool:
+            seen: set[str] = set()
+            stack = list(by_id[stage_id].depends_on)
+            while stack:
+                current = stack.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                if current in related_ids:
+                    return True
+                stack.extend(by_id[current].depends_on)
+            return False
+
+        for stage in enabled:
+            if stage.type not in {"novelty", "rate"}:
+                continue
+            if reaches(stage.id):
+                continue
+            raise ValueError(
+                f"stage {stage.id} ({stage.type}) must depend on related_work_search "
+                "so novelty and originality are scored after baselines are compared "
+                "with closest neighbours"
+            )
 
     def ordered_stages(self) -> list[StageConfig]:
         result: list[StageConfig] = []

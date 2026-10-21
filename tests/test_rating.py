@@ -101,6 +101,20 @@ class RatingFormulaTests(unittest.TestCase):
         self.assertEqual(scored.value, 6)
         self.assertEqual(scored.metadata["gate"], 6)
 
+    def test_missing_closest_neighbor_caps_at_six_and_lowers_originality(self) -> None:
+        package = _package(
+            "neighbor",
+            _all(8),
+            issues=[_fatal("I-miss", FatalClass.missing_closest_neighbor)],
+        )
+        scored = rate_venue(package)
+        self.assertEqual(scored.value, 6)
+        self.assertEqual(scored.metadata["cap_ids"], ["I-miss"])
+        bands = scored.metadata["bands_after_ceiling"]
+        self.assertEqual(bands["prior_work_contextualization"], 2.0)
+        self.assertEqual(bands["originality"], 4.0)
+        self.assertEqual(scored.metadata["related_work_comparison"], None)
+
     def test_leakage_cap_overrides_high_bands(self) -> None:
         package = _package("leak", _all(8), issues=[_fatal("I-leak", FatalClass.leakage)])
         scored = rate_venue(package)

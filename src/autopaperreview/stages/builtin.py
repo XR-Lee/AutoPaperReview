@@ -1218,15 +1218,16 @@ class IntegrityStage(StageHandler):
 
 
 class NoveltyParams(ParamsModel):
-    pass
+    require_related_work: bool = False
 
 
 class NoveltyStage(StageHandler):
     type_name = "novelty"
-    version = "1"
+    version = "2"
     params_model = NoveltyParams
 
     def run(self, context: StageContext) -> StageOutcome:
+        params = NoveltyParams.model_validate(context.stage.params)
         try:
             text = context.source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
@@ -1235,12 +1236,42 @@ class NoveltyStage(StageHandler):
         ledger = _package_with(context, "ledger_claims")
         if literature is None or ledger is None:
             raise FileNotFoundError("novelty stage requires ledger_claims and retrieved_snapshots")
+        from ..related_work import related_work_comparison
+
+        judgment = None
+        for package in _load_dependency_packages(context):
+            raw = package.metadata.get("related_work")
+            if raw:
+                judgment = raw
+                break
+        if params.require_related_work and judgment is None:
+            raise FileNotFoundError(
+                "novelty scoring requires the related-work comparison of baselines and closest neighbours"
+            )
+        comparison = related_work_comparison(judgment) if judgment is not None else None
         assessments = assess_novelty(
             claims=ledger.ledger_claims,
             snapshots=literature.retrieved_snapshots,
             evidence=literature.evidence,
             manuscript_text=text,
+            comparison=comparison,
         )
+        comparison_record = None
+        if assessments and assessments[0].metadata.get("related_work_comparison"):
+            comparison_record = assessments[0].metadata["related_work_comparison"]
+        elif comparison is not None:
+            comparison_record = {
+                "status": comparison.get("status"),
+                "baseline_counts": {
+                    key: len(comparison["baselines"][key])
+                    for key in ("missing", "privileged", "different_task")
+                },
+                "closest_neighbour_ids": [
+                    item.get("id")
+                    for item in comparison["closest_neighbours"]
+                    if isinstance(item, dict) and item.get("id")
+                ],
+            }
         package = ReviewPackage(
             project_id=context.loaded_config.config.project.id,
             manuscript=context.manifest.source,
@@ -1251,7 +1282,12 @@ class NoveltyStage(StageHandler):
             ledger_claims=ledger.ledger_claims,
             agenda=ledger.agenda,
             novelty_assessments=assessments,
-            metadata={"novelty": {"assessment_count": len(assessments)}},
+            metadata={
+                "novelty": {
+                    "assessment_count": len(assessments),
+                    "related_work_comparison": comparison_record,
+                }
+            },
         )
         novelty_path = context.stage_dir / "novelty.json"
         package_path = context.stage_dir / "package.json"

@@ -537,6 +537,7 @@
         "leakage",
         "wrong_metric",
         "unfair_baseline",
+        "missing_closest_neighbor",
         "unsupported_claim",
         "format_desk_reject"
       ],

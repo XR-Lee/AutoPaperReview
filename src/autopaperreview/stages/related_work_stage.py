@@ -18,7 +18,16 @@ from ..models import (
     SnapshotContentKind,
     SourceRecord,
 )
-from ..related_work import RelatedWorkJudgment, render_related_work_markdown, run_related_work_search
+from ..related_work import (
+    MANUSCRIPT_SOURCE_ID,
+    RelatedWorkJudgment,
+    evidence_id_for_candidate,
+    issues_from_cap_signals,
+    manuscript_baseline_excerpt,
+    manuscript_baseline_records,
+    render_related_work_markdown,
+    run_related_work_search,
+)
 from ..reporting import write_package_json
 from ..venues import profile_dir
 from .base import StageContext, StageHandler, StageOutcome
@@ -134,13 +143,23 @@ def _snapshots(
         )
         evidence.append(
             EvidenceRecord(
-                id=f"E-{candidate.id}",
+                id=evidence_id_for_candidate(candidate.id),
                 source_id=f"S-{candidate.id}",
                 locator=candidate.link,
                 claim=candidate.summary,
                 excerpt=candidate.summary,
                 retrieval_query=query_text,
-                metadata={"candidate_id": candidate.id, "tier": candidate.tier},
+                metadata={
+                    "candidate_id": candidate.id,
+                    "external_id": candidate.external_id,
+                    "venue": candidate.venue,
+                    "year": candidate.year,
+                    "published": candidate.published,
+                    "date_relation": candidate.date_relation,
+                    "verified": True,
+                    "required": candidate.required,
+                    "tier": candidate.tier,
+                },
             )
         )
     return snapshots, sources, evidence
@@ -148,7 +167,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "1"
+    version = "2"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
@@ -194,11 +213,23 @@ class RelatedWorkSearchStage(StageHandler):
         )
         retrieved_at = datetime.now(timezone.utc)
         snapshots, sources, evidence = _snapshots(judgment, retrieved_at=retrieved_at)
+        baseline_source, baseline_evidence = manuscript_baseline_records(
+            manuscript,
+            sha256=context.manifest.source.sha256,
+            locator=context.source_path.name,
+        )
+        if not any(item.id == MANUSCRIPT_SOURCE_ID for item in sources):
+            sources.append(baseline_source)
+        excerpt = manuscript_baseline_excerpt(manuscript)
+        issues = issues_from_cap_signals(judgment, anchor_excerpt=excerpt)
+        if issues and not any(item.id == baseline_evidence.id for item in evidence):
+            evidence.append(baseline_evidence)
         package = ReviewPackage(
             project_id=context.loaded_config.config.project.id,
             manuscript=context.manifest.source,
             sources=sources,
             evidence=evidence,
+            issues=issues,
             related_work_queries=judgment.queries,
             retrieved_snapshots=snapshots,
             metadata={"related_work": judgment.model_dump(mode="json")},

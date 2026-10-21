@@ -82,6 +82,7 @@ class FatalClass(str, Enum):
     leakage = "leakage"
     wrong_metric = "wrong_metric"
     unfair_baseline = "unfair_baseline"
+    missing_closest_neighbor = "missing_closest_neighbor"
     unsupported_claim = "unsupported_claim"
     format_desk_reject = "format_desk_reject"
 

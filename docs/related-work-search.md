@@ -34,7 +34,7 @@ Public titles are not copied out of the manuscript. The host may search those ti
 
 ## Retrieval
 
-`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 or 503 stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. Other providers still run. A failed search does not invent papers and does not apply a missing-neighbor cap.
+`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 or 503 stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. Other providers still run. A failed search, a timeout, or zero available providers sets `status=degraded`, invents no papers, and does not apply a cap.
 
 `mode = "agent"` is the host-in-the-loop path, shaped like `AgentFindingsInspector`: the host runs the queries, then drops `findings.json`. A candidate is kept only when `provider_payload` parses as arXiv Atom, OpenAlex, Semantic Scholar, or Crossref JSON and the parsed id and title match the drop. A title with no payload, or a payload whose title differs, is dropped and logged.
 
@@ -61,24 +61,29 @@ Clause advice, aligned with `sar_bands_v1` once that rubric is on the branch tha
 | Neighbors are present, but the comparison is unfair or off-task | `pw-6`, `es-4` |
 | Privileged input or a different task | `es-4` and `unfair_baseline` |
 
-Cap signals use coefficient set `apr-iclr-cap-v1` and do not write a score:
+Cap signals use coefficient set `apr-iclr-cap-v1` and do not themselves write a score:
 
-- `unfair_baseline`: venue cap **5**, `experimental_soundness` ceiling 4. This matches `CLASS_CAP` / `CLASS_CEILING` in the rating stage.
-- `missing_closest_neighbor`: venue cap **6**, `prior_work_contextualization` ceiling 2, `originality` ceiling 4.
+- `unfair_baseline`: venue cap **5**, `experimental_soundness` ceiling 4. The search emits a blocking, decision-relevant issue with that `fatal_class`. `active_caps()` already applies the cap.
+- `missing_closest_neighbor`: venue cap **6**, `prior_work_contextualization` ceiling 2, `originality` ceiling 4. `FatalClass.missing_closest_neighbor` is on `apr-iclr-cap-v1`, so this flaw does not share the cap-5 bin rule with `unfair_baseline`.
 
-Cap 6 is the next ICLR bin above the unfair-baseline cap, so the two flaws do not share a cap. `preview_venue_bin` applies the same weights, `min(claims, soundness) + 1` gate, and snap onto 1/3/5/6/8/10. Papers that share a missing-neighbor cap can still land in different bins when their other scores differ. When both caps are active, the effective cap is the minimum (5).
+Cap 6 is the next ICLR bin above the unfair-baseline cap. `preview_venue_bin` is only a separation check. `rate_venue()` is the only writer of `OverallScore`. When both caps are active, the effective cap is the minimum (5).
 
-### Wiring after the rating stage lands
+A cap is emitted only when the search status is `complete` and the supporting candidate is verified and dated on or before the venue submission deadline. Concurrent work (after the deadline) and an undated record stay in the discussion. They do not become required baselines and they do not cite a cap.
 
-Do not import `rating.py` from this module. When that stage is on `main`:
+Each cap issue cites two evidence records:
 
-1. Turn each `CapSignal` into a blocking, decision-relevant issue (or the record type `active_caps()` already reads).
-2. Set `fatal_class = unfair_baseline` for that signal. No rating change is required; the cap is already 5.
-3. Add `FatalClass.missing_closest_neighbor` with `CLASS_CAP` 6 and ceilings `prior_work_contextualization = 2`, `originality = 4`. Leaving it at cap 5 would force it to share a bin rule with `unfair_baseline`.
-4. Copy `clause_id` onto the dimension score when the reviewer accepts the advice. The clause table must stay `pw-2` / `pw-4` / `pw-6` / `pw-8` / `es-4` / `or-4`.
-5. Keep `rate_venue()` as the only writer of `OverallScore`.
+- the verified candidate, including its external id, venue, year, and date relation
+- the manuscript anchor `E-manuscript-baselines`, a quote of the paper's own Experiments and References lines
 
-`preview_venue_bin` is a separation check for this module. Delete the call sites that treat it as a score once `rate_venue()` consumes the signals.
+`unfair_baseline` always cites that manuscript anchor. It also cites a verified prior candidate when the baseline name matches one. A missing-neighbor cap is dropped if it has no verified prior candidate.
+
+### Degraded search
+
+A provider failure, HTTP 429 or 503, a timeout, or zero providers available sets `status=degraded`. The judgment still records whatever was verified, and the report can discuss it. `build_cap_signals` returns no signals, the stage writes no fatal issues, and `rate` ignores any related-work cap whose search status is not `complete`. The score does not drop because the search failed.
+
+### Scoring order
+
+`novelty` reads the comparison of baselines and closest neighbours before it assigns tags. `rate` reads the same comparison before it uses the originality band. When a config contains `related_work_search`, both `novelty` and `rate` must depend on it, directly or through an earlier stage. Clause ids stay `pw-2` / `pw-4` / `pw-6` / `pw-8` / `es-4` / `or-4`. Copy a clause onto a dimension score only when the reviewer accepts that advice. The ceiling inside `rate` is what changes the bin.
 
 The report section is bilingual (`en` / `zh-Hans`) and includes suggested weakness and rebuttal sentences. The stage also writes `related_work.md`.
 

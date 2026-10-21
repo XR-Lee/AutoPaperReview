@@ -42,13 +42,37 @@ def infer_manuscript_setting(claims: list[LedgerClaim], manuscript_text: str) ->
     return {"task": task, "dataset": dataset, "metric": metric}
 
 
+def _comparison_record(comparison: dict | None) -> dict | None:
+    """Read baselines against closest neighbours before any novelty tag is assigned."""
+    if comparison is None:
+        return None
+    baselines = comparison.get("baselines")
+    neighbours = comparison.get("closest_neighbours")
+    if not isinstance(baselines, dict) or not isinstance(neighbours, list):
+        raise ValueError(
+            "novelty scoring requires the related-work comparison of baselines and closest neighbours"
+        )
+    for key in ("missing", "privileged", "different_task"):
+        if key not in baselines:
+            raise ValueError(f"related-work baselines are missing {key}")
+    return {
+        "status": comparison.get("status"),
+        "baseline_counts": {key: len(baselines[key]) for key in ("missing", "privileged", "different_task")},
+        "closest_neighbour_ids": [
+            item.get("id") for item in neighbours if isinstance(item, dict) and item.get("id")
+        ],
+    }
+
+
 def assess_novelty(
     *,
     claims: list[LedgerClaim],
     snapshots: list[RetrievedSourceSnapshot],
     evidence: list[EvidenceRecord],
     manuscript_text: str,
+    comparison: dict | None = None,
 ) -> list[NoveltyAssessment]:
+    comparison_record = _comparison_record(comparison)
     setting = infer_manuscript_setting(claims, manuscript_text)
     evidence_ids = {item.id for item in evidence}
     assessments: list[NoveltyAssessment] = []
@@ -95,6 +119,8 @@ def assess_novelty(
                 "comparable": comparable,
                 "note_code": note_code,
             }
+            if comparison_record is not None:
+                metadata["related_work_comparison"] = comparison_record
             if note_params:
                 metadata["note_params"] = note_params
             assessments.append(

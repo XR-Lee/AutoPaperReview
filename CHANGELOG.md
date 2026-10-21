@@ -2,14 +2,20 @@
 
 ## Unreleased
 
-- Added `related_work_search` (pending PR #12). Before novelty or prior-work scores, the stage derives the task, inputs, outputs, assumptions, and setting, then builds keyword queries for the same problem, the same technique, alternative formulations, standard baselines, and adjacent tasks. Manuscript text is not sent to a provider.
-- Live retrieval uses the arXiv API, OpenAlex, and Semantic Scholar, and logs offline or rate-limited providers without inventing papers. Agent mode reads a findings drop and keeps a candidate only when the provider payload resolves the same id and title.
-- Candidates record venue, year, link, a one-line summary, whether the bibliography cites them, and whether they are prior, concurrent, or undated relative to the venue submission deadline. Tiers are must-compare, should-discuss, and optional.
-- Experiment comparison flags missing must-compare baselines, privileged inputs such as ground-truth scale, and baselines that solve a different task. Clause advice and cap signals follow `apr-iclr-cap-v1` (`unfair_baseline` at 5, `missing_closest_neighbor` at 6) so those flaws do not collapse to one bin. The stage does not write an overall score.
-- Reports gain a bilingual Related Work section, and the stage writes `related_work.md` with suggested weakness and rebuttal sentences.
-- Venue deadline sidecars: ICLR 2027 abstract 2026-09-18 and submission 2026-09-25; AAAI-27 abstract 2026-07-21 and submission 2026-07-28. See [related-work search](docs/related-work-search.md).
 - Added a public-repo confidentiality policy ([CONFIDENTIALITY.md](CONFIDENTIALITY.md), [AGENTS.md](AGENTS.md)) and a tracked-file check that rejects review work directories, document and image files outside an allowlist, submission-id patterns, and SHA-256 digests of blocked strings.
 - Replaced contribution-list fixtures with synthetic sentences.
+
+## 0.1.9 - 2026-10-21
+
+- Added `related_work_search`. Before novelty or prior-work scores, the stage derives the task, inputs, outputs, assumptions, and setting, then builds keyword queries for the same problem, the same technique, alternative formulations, standard baselines, and adjacent tasks. Manuscript text is not sent to a provider.
+- Live retrieval uses the arXiv API, OpenAlex, and Semantic Scholar, and logs offline, timeout, or rate-limited providers without inventing papers. Agent mode reads a findings drop and keeps a candidate only when the provider payload resolves the same id and title.
+- Candidates record venue, year, link, a one-line summary, whether the bibliography cites them, and whether they are prior, concurrent, or undated relative to the venue submission deadline. Tiers are must-compare, should-discuss, and optional.
+- Experiment comparison flags missing must-compare baselines, privileged inputs such as ground-truth scale, and baselines that solve a different task. Clause advice follows `apr-iclr-cap-v1`. The search stage does not write an overall score.
+- `FatalClass.missing_closest_neighbor` caps `apr-iclr-cap-v1` at 6 (`prior_work_contextualization` ceiling 2, `originality` ceiling 4). The existing `unfair_baseline` signal is a blocking issue and keeps its cap of 5. `rate` applies both through `active_caps()`. Each cap cites the verified candidate id and metadata when a prior paper supports it, plus the manuscript's own baseline and related-work anchor.
+- Only a verified candidate dated on or before the venue deadline can support a cap. Concurrent work is discussion only. A search failure, timeout, or zero available providers records `status=degraded` and emits no cap, so the score does not drop.
+- `novelty` reads baselines against closest neighbours before it assigns tags. In one config, `novelty` and `rate` must depend on `related_work_search`. `rate` reads that comparison before it scores originality.
+- Reports gain a bilingual Related Work section, and the stage writes `related_work.md` with suggested weakness and rebuttal sentences.
+- Venue deadline sidecars: ICLR 2027 abstract 2026-09-18 and submission 2026-09-25; AAAI-27 abstract 2026-07-21 and submission 2026-07-28. See [related-work search](docs/related-work-search.md).
 
 ## 0.1.8 - 2026-10-20
 

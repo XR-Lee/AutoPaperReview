@@ -12,7 +12,17 @@ from pathlib import Path
 
 from autopaperreview.bilingual_coverage import require_bilingual_markdown
 from autopaperreview.pipeline import PipelineError, run_pipeline
+from autopaperreview.models import (
+    DimensionScore,
+    EvidenceRecord,
+    FatalClass,
+    ReviewPackage,
+    SarDimension,
+    SourceRecord,
+)
+from autopaperreview.rating import rate_venue
 from autopaperreview.related_work import (
+    MANUSCRIPT_BASELINE_EVIDENCE_ID,
     CapSignal,
     HttpResult,
     RetrievalFailure,
@@ -20,12 +30,17 @@ from autopaperreview.related_work import (
     assert_outbound_safe,
     classify_date,
     derive_formulation,
+    evidence_id_for_candidate,
     generate_search_queries,
+    issues_from_cap_signals,
     load_venue_deadlines,
+    manuscript_baseline_excerpt,
+    manuscript_baseline_records,
     parse_bibliography,
     preview_venue_bin,
     run_related_work_search,
 )
+from tests.support import make_artifact
 from autopaperreview.venues import load_venue_profile
 
 EXAMPLE = Path("examples/synthetic/related_work")
@@ -191,6 +206,15 @@ class AgentAndLiveTests(unittest.TestCase):
         self.assertEqual(classes["unfair_baseline"].venue_cap, 5)
         self.assertEqual(classes["unfair_baseline"].dimension_ceilings["experimental_soundness"], 4.0)
         self.assertEqual(classes["missing_closest_neighbor"].venue_cap, 6)
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, classes["unfair_baseline"].evidence_ids)
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, classes["missing_closest_neighbor"].evidence_ids)
+        self.assertIn(evidence_id_for_candidate(public.id), classes["missing_closest_neighbor"].evidence_ids)
+        self.assertIn(evidence_id_for_candidate(depth.id), classes["missing_closest_neighbor"].evidence_ids)
+        self.assertNotIn(concurrent.id, classes["missing_closest_neighbor"].candidate_ids)
+        self.assertNotIn(
+            evidence_id_for_candidate(concurrent.id),
+            classes["missing_closest_neighbor"].evidence_ids,
+        )
         self.assertEqual(judgment.effective_venue_cap, 5)
         clauses = {item.clause_id for item in judgment.clause_advice}
         self.assertIn("pw-2", clauses)
@@ -245,8 +269,40 @@ class AgentAndLiveTests(unittest.TestCase):
         self.assertIn("rate_limited", warning)
         self.assertIn("offline", warning)
         self.assertEqual(judgment.status, "degraded")
+        self.assertEqual(judgment.cap_signals, [])
+        self.assertIsNone(judgment.effective_venue_cap)
         self.assertTrue(any(item.title.startswith("A Public Baseline") for item in judgment.candidates))
         self.assertTrue(any(item.cited for item in judgment.candidates))
+
+    def test_timeout_and_zero_providers_emit_no_cap(self) -> None:
+        def timeout(url: str) -> HttpResult:
+            raise RetrievalFailure("timeout", "timed out")
+
+        timed = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=timeout,
+            providers=["arxiv"],
+        )
+        self.assertEqual(timed.status, "degraded")
+        self.assertEqual(timed.cap_signals, [])
+        self.assertIsNone(timed.effective_venue_cap)
+        self.assertTrue(any(entry.status == "timeout" for entry in timed.logs))
+
+        def unused(url: str) -> HttpResult:
+            raise AssertionError(url)
+
+        empty = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=unused,
+            providers=[],
+        )
+        self.assertEqual(empty.status, "degraded")
+        self.assertEqual(empty.cap_signals, [])
+        self.assertTrue(any("zero providers" in entry.detail for entry in empty.logs))
 
     def test_live_mode_without_network_is_refused_before_transport(self) -> None:
         def transport(url: str) -> HttpResult:
@@ -286,12 +342,141 @@ class CapSeparationTests(unittest.TestCase):
         self.assertNotEqual(missing.venue_cap, unfair.venue_cap)
 
 
+class CapWiringTests(unittest.TestCase):
+    def _scored_package(self, judgment, issues):
+        source, baseline = manuscript_baseline_records(
+            MANUSCRIPT,
+            sha256=None,
+            locator="manuscript.txt",
+        )
+        sources = [source]
+        evidence = [baseline]
+        for candidate in judgment.candidates:
+            source_id = f"S-{candidate.id}"
+            sources.append(
+                SourceRecord(
+                    id=source_id,
+                    kind="retrieved-abstract",
+                    title=candidate.title,
+                    locator=candidate.link,
+                )
+            )
+            evidence.append(
+                EvidenceRecord(
+                    id=evidence_id_for_candidate(candidate.id),
+                    source_id=source_id,
+                    locator=candidate.link,
+                    claim=candidate.summary,
+                    excerpt=candidate.summary,
+                    metadata={
+                        "candidate_id": candidate.id,
+                        "external_id": candidate.external_id,
+                        "venue": candidate.venue,
+                        "year": candidate.year,
+                        "published": candidate.published,
+                        "date_relation": candidate.date_relation,
+                        "verified": True,
+                    },
+                )
+            )
+        scores = [
+            DimensionScore(
+                dimension=dimension,
+                score=8,
+                evidence_ids=[MANUSCRIPT_BASELINE_EVIDENCE_ID],
+            )
+            for dimension in SarDimension
+        ]
+        return ReviewPackage(
+            project_id="synthetic-caps",
+            manuscript=make_artifact(),
+            sources=sources,
+            evidence=evidence,
+            issues=issues,
+            dimension_scores=scores,
+            metadata={"related_work": judgment.model_dump(mode="json")},
+        )
+
+    def test_completed_search_caps_cite_evidence_and_lower_the_bin(self) -> None:
+        judgment = run_related_work_search(
+            MANUSCRIPT,
+            venue_key="iclr2027",
+            mode="agent",
+            findings_path=EXAMPLE / "findings.json",
+            allow_network=False,
+        )
+        issues = issues_from_cap_signals(
+            judgment,
+            anchor_excerpt=manuscript_baseline_excerpt(MANUSCRIPT),
+        )
+        by_class = {issue.fatal_class: issue for issue in issues}
+        self.assertEqual(set(by_class), {FatalClass.missing_closest_neighbor, FatalClass.unfair_baseline})
+        missing = by_class[FatalClass.missing_closest_neighbor]
+        self.assertTrue(missing.decision_relevant)
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, missing.evidence_ids)
+        self.assertGreaterEqual(len(missing.evidence_ids), 2)
+        self.assertIsNotNone(missing.anchor)
+        self.assertIn("Compared baselines", missing.anchor.excerpt or "")
+        package = self._scored_package(judgment, issues)
+        evidence = {item.id: item for item in package.evidence}
+        for evidence_id in missing.evidence_ids:
+            if evidence_id == MANUSCRIPT_BASELINE_EVIDENCE_ID:
+                self.assertEqual(evidence[evidence_id].metadata["role"], "manuscript_baselines")
+                self.assertIsNotNone(evidence[evidence_id].anchor)
+                continue
+            record = evidence[evidence_id]
+            self.assertTrue(record.metadata["verified"])
+            self.assertEqual(record.metadata["date_relation"], "prior")
+            self.assertTrue(record.metadata["external_id"])
+        scored = rate_venue(package)
+        self.assertEqual(scored.value, 5)
+        self.assertCountEqual(scored.metadata["cap_ids"], ["CAP-missing-neighbor", "CAP-unfair-baseline"])
+        self.assertEqual(scored.metadata["related_work_comparison"]["status"], "complete")
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, scored.evidence_ids)
+        self.assertTrue(any(item.startswith("E-RW-") for item in scored.evidence_ids))
+        bands = scored.metadata["bands_after_ceiling"]
+        self.assertEqual(bands["experimental_soundness"], 4.0)
+        self.assertEqual(bands["originality"], 4.0)
+        self.assertEqual(bands["prior_work_contextualization"], 2.0)
+
+    def test_degraded_search_does_not_lower_the_score(self) -> None:
+        def offline(url: str) -> HttpResult:
+            raise RetrievalFailure("offline", "name resolution failed")
+
+        judgment = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=offline,
+            providers=["arxiv", "openalex"],
+        )
+        self.assertEqual(judgment.status, "degraded")
+        excerpt = manuscript_baseline_excerpt(MANUSCRIPT)
+        self.assertEqual(issues_from_cap_signals(judgment, anchor_excerpt=excerpt), [])
+        injected = issues_from_cap_signals(
+            judgment.model_copy(update={"status": "complete", "cap_signals": []}),
+            anchor_excerpt=excerpt,
+        )
+        self.assertEqual(injected, [])
+        from tests.test_rating import _all, _fatal, _package
+
+        issue = _fatal("CAP-unfair-baseline", FatalClass.unfair_baseline)
+        issue.metadata = {"source": "related_work_search"}
+        package = _package("degraded", _all(8), issues=[issue])
+        package.metadata["related_work"] = judgment.model_dump(mode="json")
+        scored = rate_venue(package)
+        self.assertEqual(scored.value, 8)
+        self.assertEqual(scored.metadata["cap_ids"], [])
+        self.assertEqual(scored.metadata["related_work_comparison"]["status"], "degraded")
+
+
 class StageTests(unittest.TestCase):
     def test_pipeline_writes_bilingual_related_work_section(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            for name in ("manuscript.txt", "findings.json", "review.toml"):
-                shutil.copy(EXAMPLE / name, workspace / name)
+            for path in EXAMPLE.iterdir():
+                if path.is_file():
+                    shutil.copy(path, workspace / path.name)
             manifest = run_pipeline(workspace / "review.toml")
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "related_work"
             markdown = (stage_dir / "related_work.md").read_text(encoding="utf-8")
@@ -310,6 +495,22 @@ class StageTests(unittest.TestCase):
             queries = json.loads((stage_dir / "queries.json").read_text(encoding="utf-8"))
             self.assertEqual(len(queries), 5)
             self.assertTrue(all("Zephyr" not in query["query"] for query in queries))
+            run_dir = workspace / ".runs" / manifest.run_id / "stages"
+            rated = json.loads((run_dir / "rate" / "package.json").read_text(encoding="utf-8"))
+            self.assertEqual(rated["overall_score"]["value"], 5)
+            self.assertCountEqual(
+                rated["overall_score"]["metadata"]["cap_ids"],
+                ["CAP-missing-neighbor", "CAP-unfair-baseline"],
+            )
+            comparison = rated["overall_score"]["metadata"]["related_work_comparison"]
+            self.assertEqual(comparison["status"], "complete")
+            self.assertGreater(comparison["baseline_counts"]["missing"], 0)
+            self.assertGreater(comparison["baseline_counts"]["privileged"], 0)
+            self.assertTrue(comparison["closest_neighbour_ids"])
+            novelty = json.loads((run_dir / "novelty" / "novelty.json").read_text(encoding="utf-8"))
+            self.assertTrue(novelty)
+            self.assertEqual(novelty[0]["metadata"]["related_work_comparison"]["status"], "complete")
+            self.assertIn("closest_neighbour_ids", novelty[0]["metadata"]["related_work_comparison"])
 
     def test_deny_policy_blocks_live_search(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
