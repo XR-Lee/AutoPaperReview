@@ -8,15 +8,16 @@ the same `module:attribute` string.
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .hashing import digest_excerpt
+from .hashing import digest_excerpt, sha256_bytes
 from .integrity import reporting_is_present
 from .ledger import apply_contribution_audits
-from .migration import load_review_input
+from .migration import load_review_input, migrate_legacy_package
 from .models import (
     Anchor,
     AnchorKind,
@@ -28,6 +29,7 @@ from .models import (
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
+    SarDimension,
     Severity,
     SourceRecord,
 )
@@ -58,6 +60,11 @@ class ReviewResult(BaseModel):
 class ReviewAdapter(Protocol):
     def execute(self, request: ReviewRequest, scratch: Path) -> ReviewResult:
         """Return a schema-valid package. Write raw responses into scratch."""
+
+
+def digest_packet_text(text: str) -> str:
+    """SHA-256 of a prompt packet body. The agent drop must echo these digests."""
+    return sha256_bytes(text.encode("utf-8"))
 
 
 def load_review_adapter(spec: str) -> ReviewAdapter:
@@ -390,4 +397,94 @@ class DeterministicManuscriptAdapter:
             package=package,
             raw_artifact_names=["raw_review.json"],
             metadata={"adapter": "deterministic-manuscript", "issue_count": len(issues)},
+        )
+
+
+def _packet_sha_map(raw: dict[str, Any]) -> dict[str, str] | None:
+    metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    found = metadata.get("packet_sha256") or raw.get("packet_sha256")
+    if not isinstance(found, dict) or not found:
+        return None
+    return {str(key): str(value) for key, value in found.items()}
+
+
+class AgentJudgmentAdapter:
+    """Load a judgment drop written after the prompt packets were read.
+
+    The drop is a legacy review JSON or a canonical ``ReviewPackage``. It must
+    echo ``packet_sha256`` for every packet on the request. Any overall score
+    in the drop is removed so ``rate`` remains the only place a venue bin is
+    assigned. This adapter does not call a model and does not read held-out
+    human scores.
+    """
+
+    def execute(self, request: ReviewRequest, scratch: Path) -> ReviewResult:
+        scratch.mkdir(parents=True, exist_ok=True)
+        if not request.fixture_path:
+            raise ValueError("AgentJudgmentAdapter requires fixture_path to point at the judgment drop")
+        if not request.packets:
+            raise ValueError("AgentJudgmentAdapter requires prompt packets; run the prompt_packet stage first")
+        path = Path(request.fixture_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"judgment drop does not exist: {path}")
+        raw_text = path.read_text(encoding="utf-8")
+        (scratch / "raw_judgment.json").write_text(raw_text, encoding="utf-8")
+        raw = json.loads(raw_text)
+        if not isinstance(raw, dict):
+            raise ValueError("judgment drop must be a JSON object")
+        expected = {route_id: digest_packet_text(text) for route_id, text in request.packets.items()}
+        seen = _packet_sha_map(raw)
+        if seen is None:
+            missing = ", ".join(sorted(expected))
+            raise ValueError(
+                "judgment drop is missing packet_sha256 for the prompt packets "
+                f"({missing}). Read the packets, then echo their digests."
+            )
+        mismatched = [route_id for route_id, digest in expected.items() if seen.get(route_id) != digest]
+        if mismatched:
+            raise ValueError(
+                "judgment drop packet_sha256 does not match the current prompt packets: "
+                + ", ".join(sorted(mismatched))
+            )
+        extra = sorted(set(seen) - set(expected))
+        if extra:
+            raise ValueError("judgment drop names prompt packets that are not in this run: " + ", ".join(extra))
+        stripped_overall = bool(raw.get("overall_score"))
+        if stripped_overall:
+            raw = dict(raw)
+            raw.pop("overall_score", None)
+        if raw.get("schema_version") == "1.0" and isinstance(raw.get("evidence"), list):
+            raw["project_id"] = request.project_id
+            raw["manuscript"] = request.manuscript.model_dump(mode="json")
+            package = ReviewPackage.model_validate(raw)
+        else:
+            package = migrate_legacy_package(raw, manuscript=request.manuscript, project_id=request.project_id)
+        if package.overall_score is not None:
+            package = package.model_copy(update={"overall_score": None})
+        present = {score.dimension for score in package.dimension_scores}
+        missing_dims = [item.value for item in SarDimension if item not in present]
+        if missing_dims:
+            raise ValueError(f"judgment drop is missing dimension scores: {missing_dims}")
+        metadata = dict(package.metadata)
+        metadata["judgment"] = {
+            "adapter": "agent",
+            "packet_sha256": expected,
+            "stripped_overall_score": stripped_overall,
+        }
+        package = package.model_copy(update={"metadata": metadata, "project_id": request.project_id, "manuscript": request.manuscript})
+        if request.routes:
+            known = {route.id: route for route in package.routes}
+            for route in request.routes:
+                known.setdefault(route.id, route)
+            package = package.model_copy(update={"routes": list(known.values())})
+        package = _merge_literature(package, request.literature)
+        package = _merge_ledger(package, request.ledger)
+        return ReviewResult(
+            package=package,
+            raw_artifact_names=["raw_judgment.json"],
+            metadata={
+                "adapter": "agent",
+                "packet_count": len(request.packets),
+                "stripped_overall_score": stripped_overall,
+            },
         )

@@ -93,6 +93,16 @@ Related Work
         self.assertEqual([item["index"] for item in items], [1, 2, 3])
         self.assertIn("toy sketch", str(items[0]["text"]))
 
+    def test_unknown_roman_token_does_not_crash(self) -> None:
+        text = (
+            "Contributions. (vv) this token is not a contribution index and should be skipped entirely. "
+            "(i) We define a synthetic task on an invented benchmark with a clear protocol. "
+            "(ii) We compare against a matched baseline on that same invented benchmark. "
+            "Related Work\n"
+        )
+        items = extract_listed_contributions(text)
+        self.assertEqual([item["index"] for item in items], [1, 2])
+
     def test_capitalized_non_we_item_stays_in_the_list(self) -> None:
         text = """
 Our contributions are threefold: (1) We propose a fixture planner that models a toy signal.

@@ -145,6 +145,71 @@ def command_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_calibrate_eval_list(args: argparse.Namespace) -> int:
+    from .public_calibration import list_venue
+
+    rows = list_venue(args.listing, limit=args.limit)
+    _print_json({"listing": args.listing, "papers": rows})
+    return 0
+
+
+def command_calibrate_eval_fetch(args: argparse.Namespace) -> int:
+    from .public_calibration import fetch_manifest
+
+    statuses = fetch_manifest(
+        Path(args.manifest),
+        Path(args.cache),
+        pdf_fallback=args.pdf_fallback,
+        max_pages=args.max_pages,
+    )
+    _print_json({"status": "success", "papers": statuses})
+    return 0
+
+
+def command_calibrate_eval_prepare(args: argparse.Namespace) -> int:
+    from .public_calibration import prepare_cache
+
+    rows = prepare_cache(Path(args.cache))
+    _print_json({"status": "success", "papers": rows})
+    return 0
+
+
+def command_calibrate_eval_run(args: argparse.Namespace) -> int:
+    from .public_calibration import run_cache
+
+    result = run_cache(
+        Path(args.cache),
+        mode=args.mode,
+        adapter=args.adapter,
+        network_policy=args.network_policy,
+        requires_network=args.requires_network,
+        related_work=args.related_work,
+        base_url=args.base_url,
+        model=args.model_name,
+        api_key_env=args.api_key_env,
+        allow_remote=args.allow_remote,
+    )
+    if result["awaiting_judgment"]:
+        status = "awaiting_judgment"
+        code = 3
+    elif result["errors"]:
+        status = "error"
+        code = 2
+    else:
+        status = "success"
+        code = 0
+    _print_json({"status": status, **result})
+    return code
+
+
+def command_calibrate_eval_report(args: argparse.Namespace) -> int:
+    from .public_calibration import write_report
+
+    metrics = write_report(Path(args.cache), Path(args.output))
+    _print_json({"status": "success", "output": str(Path(args.output).expanduser().resolve()), "metrics": metrics})
+    return 0
+
+
 def command_doctor(args: argparse.Namespace) -> int:
     modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa", "pypdfium2"]
     commands = ["docker", "pandoc", "pdftotext", "promptfoo"]
@@ -172,6 +237,7 @@ def command_doctor(args: argparse.Namespace) -> int:
             "bundled_review_adapters": [
                 "autopaperreview.adapters:DeterministicManuscriptAdapter",
                 "autopaperreview.adapters:FixtureReviewAdapter",
+                "autopaperreview.adapters:AgentJudgmentAdapter",
                 "autopaperreview.model_exec:OpenAICompatibleAdapter",
             ],
             "bundled_visual_inspectors": [
@@ -444,6 +510,46 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", help="inspect optional adapter availability")
     doctor.set_defaults(func=command_doctor)
+
+    calibrate_eval = subparsers.add_parser(
+        "calibrate-eval",
+        help="compare apr-iclr-cap-v1 to public human scores without fitting",
+    )
+    eval_sub = calibrate_eval.add_subparsers(dest="eval_command", required=True)
+
+    eval_list = eval_sub.add_parser("list", help="list public submissions for one ICLR venue listing")
+    eval_list.add_argument("--listing", required=True)
+    eval_list.add_argument("--limit", type=int, default=20)
+    eval_list.set_defaults(func=command_calibrate_eval_list)
+
+    eval_fetch = eval_sub.add_parser("fetch", help="fetch public PDFs and held-out official ratings")
+    eval_fetch.add_argument("--manifest", required=True)
+    eval_fetch.add_argument("--cache", required=True)
+    eval_fetch.add_argument("--pdf-fallback", choices=("none", "arxiv"), default="arxiv")
+    eval_fetch.add_argument("--max-pages", type=int, default=40)
+    eval_fetch.set_defaults(func=command_calibrate_eval_fetch)
+
+    eval_prepare = eval_sub.add_parser("prepare", help="write prompt packets for fetched papers")
+    eval_prepare.add_argument("--cache", required=True)
+    eval_prepare.set_defaults(func=command_calibrate_eval_prepare)
+
+    eval_run = eval_sub.add_parser("run", help="run the judgment adapter and the declared rating")
+    eval_run.add_argument("--cache", required=True)
+    eval_run.add_argument("--mode", choices=("agent", "adapter"), default="agent")
+    eval_run.add_argument("--adapter", help="module:attribute used when --mode adapter")
+    eval_run.add_argument("--base-url", help="OpenAI-compatible chat base URL")
+    eval_run.add_argument("--model", dest="model_name", help="model name sent to that endpoint")
+    eval_run.add_argument("--api-key-env", default="APR_MODEL_API_KEY")
+    eval_run.add_argument("--allow-remote", action="store_true")
+    eval_run.add_argument("--related-work", choices=("off", "agent", "live"), default="off")
+    eval_run.add_argument("--network-policy", choices=("deny", "metadata_only", "allow"), default="deny")
+    eval_run.add_argument("--requires-network", action="store_true")
+    eval_run.set_defaults(func=command_calibrate_eval_run)
+
+    eval_report = eval_sub.add_parser("report", help="write Spearman, MAE, bin agreement, AUC, and spread")
+    eval_report.add_argument("--cache", required=True)
+    eval_report.add_argument("--output", required=True)
+    eval_report.set_defaults(func=command_calibrate_eval_report)
 
     init = subparsers.add_parser("init", help="create a minimal local-first review project")
     init.add_argument("path")

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "rev-a",
+    "forum": "SYNTHETIC-FORUM-001",
+    "tmdate": 10,
+    "signatures": ["ICLR.cc/2024/Conference/Submission7/Reviewer_A"],
+    "invitations": ["ICLR.cc/2024/Conference/Submission7/-/Official_Review"],
+    "content": {"rating": {"value": "8: accept, good paper"}}
+  },
+  {
+    "id": "rev-b",
+    "forum": "SYNTHETIC-FORUM-001",
+    "tmdate": 11,
+    "signatures": ["ICLR.cc/2024/Conference/Submission7/Reviewer_B"],
+    "invitations": ["ICLR.cc/2024/Conference/Submission7/-/Official_Review"],
+    "content": {"rating": {"value": "8: accept, good paper"}}
+  }
+]

@@ -67,6 +67,10 @@ class RelatedWorkSearchParams(ParamsModel):
     bibliography_lookup_limit: int = Field(default=60, ge=1, le=200)
     confirmation_path: str | None = None
     confirmation_adapter: str | None = None
+    confirmation_base_url: str | None = None
+    confirmation_model: str | None = None
+    confirmation_api_key_env: str = "APR_MODEL_API_KEY"
+    confirmation_allow_remote: bool = False
     providers: list[str] = Field(
         default_factory=lambda: ["arxiv", "openalex", "semantic_scholar"]
     )
@@ -198,6 +202,10 @@ class RelatedWorkSearchStage(StageHandler):
                 material["confirmation_sha256"] = sha256_file(path)
         if params.confirmation_adapter:
             material["confirmation_adapter"] = params.confirmation_adapter
+            material["confirmation_base_url"] = params.confirmation_base_url
+            material["confirmation_model"] = params.confirmation_model
+            material["confirmation_api_key_env"] = params.confirmation_api_key_env
+            material["confirmation_allow_remote"] = params.confirmation_allow_remote
         return material
 
     def run(self, context: StageContext) -> StageOutcome:
@@ -232,6 +240,12 @@ class RelatedWorkSearchStage(StageHandler):
             bibliography_lookup_limit=params.bibliography_lookup_limit,
             confirmation_path=confirmation_file if confirmation_file is not None and confirmation_file.is_file() else None,
             confirmation_adapter=params.confirmation_adapter,
+            confirmation_adapter_params={
+                "base_url": params.confirmation_base_url,
+                "model": params.confirmation_model,
+                "api_key_env": params.confirmation_api_key_env,
+                "allow_remote": params.confirmation_allow_remote,
+            },
             confirmation_scratch=context.stage_dir,
             network_policy=context.loaded_config.config.project.network_policy.value,
             cache_dir=context.workspace / ".autopaperreview" / "related_work_cache",

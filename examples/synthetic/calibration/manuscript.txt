@@ -1,0 +1,17 @@
+Prism Sort on the Lattice-7 benchmark
+
+Abstract. Prism Sort reorders color tokens before a linear count classifier. On the invented Lattice-7 benchmark a single item-level split supports a qualified accuracy claim. A secondary sentence says the same number shows generalization to a new lattice, which this experiment does not test.
+
+Task. Lattice-7 is a toy set of 40 short color-token sequences drawn from one lattice. The decision comparison is Prism Sort against an unsorted count baseline on a held-out slice of that same lattice. The paper says a community that already sorts categorical tokens would use a confirmed version of this comparison.
+
+Protocol. Thirty items are used for training and ten for testing. The split is random at item level and is described well enough to repeat. Prism Sort applies a fixed hue order, then a linear model on token counts. The unsorted baseline uses the same counts without the hue order. One ablation removes the hue order. The paper reports a single run and does not report a confidence interval. No second lattice is collected.
+
+Result. The internal table shows higher accuracy for Prism Sort than for the unsorted baseline on the ten test items. The matched comparison supports the qualified claim that hue order helps on this split. The abstract's sentence about unseen lattices is broader than that table.
+
+Related work. The note cites two public count baselines and compares against one of them. The other cited neighbor is described as stronger than the experiment shows.
+
+Release. The split sizes and the hue order are written in the text, so a reader can repeat the toy protocol. No code archive is attached.
+
+Limitations. The authors note the missing uncertainty and the single lattice. The main argument is checkable from the text. The external-looking phrase "unseen lattices" in the abstract is easy to misread as a second-lattice result.
+
+This paragraph exists so a synthetic calibration fixture has enough text to pass the short-document guard. It does not describe a real submission, a real dataset, or a real reviewer score. Lattice-7, Prism Sort, and the hue-order count model are invented for the test.
