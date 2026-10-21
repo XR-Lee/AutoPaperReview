@@ -10,7 +10,13 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+import os
+import random
+
+from tests.confirmation_fakes import FakeConfirmationAdapter, RecordingModelSession
+
 from autopaperreview.bilingual_coverage import require_bilingual_markdown
+from autopaperreview.export_gate import ExportGateParams, export_gate_errors
 from autopaperreview.pipeline import PipelineError, run_pipeline
 from autopaperreview.models import (
     DimensionScore,
@@ -43,7 +49,9 @@ from autopaperreview.related_work import (
     generate_search_queries,
     is_cited,
     issues_from_cap_signals,
+    invoke_confirmation_adapter,
     named_methods_from_manuscript,
+    provider_request_headers,
     parse_experiments,
     load_venue_deadlines,
     manuscript_baseline_excerpt,
@@ -804,6 +812,11 @@ class StageTests(unittest.TestCase):
             named = [query["query"] for query in queries if query["metadata"]["family"] == "named_method"]
             self.assertIn("Ribbon Fuse Estimator", named)
             self.assertTrue(all("Zephyr" not in query["query"] for query in queries))
+            packet = json.loads((stage_dir / "confirmation_packet.json").read_text(encoding="utf-8"))
+            self.assertIn("baselines", packet)
+            self.assertIn("candidates", packet)
+            judgment = json.loads((stage_dir / "judgment.json").read_text(encoding="utf-8"))
+            self.assertEqual(judgment["confirmation"], "confirmed")
             run_dir = workspace / ".runs" / manifest.run_id / "stages"
             rated = json.loads((run_dir / "rate" / "package.json").read_text(encoding="utf-8"))
             self.assertEqual(rated["overall_score"]["value"], 5)
@@ -1122,6 +1135,308 @@ class TieringAndRetrievalTests(unittest.TestCase):
         require_bilingual_markdown(markdown)
         self.assertIn("> ", markdown)
         self.assertIn("Compared baselines", markdown)
+
+    def test_live_search_waits_for_confirmation_instead_of_demoting(self) -> None:
+        seen: list[str] = []
+
+        def transport(url: str) -> HttpResult:
+            seen.append(url)
+            if "export.arxiv.org" in url:
+                return HttpResult(200, _pose_atom(published="2022-06-01T00:00:00Z"))
+            return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+
+        waiting = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=transport,
+            providers=["arxiv"],
+            sleeper=lambda _seconds: None,
+        )
+        self.assertTrue(seen)
+        self.assertEqual(waiting.confirmation, "awaiting_confirmation")
+        self.assertTrue(waiting.confirmation_packet["candidates"])
+        self.assertIn("Scale Oracle", " ".join(waiting.confirmation_packet["baselines"]["privileged"]))
+        provisional = next(item for item in waiting.candidates if item.title.startswith("A Public Baseline"))
+        self.assertEqual(provisional.tier, "must-compare")
+        self.assertTrue(provisional.required)
+        self.assertFalse(provisional.confirmed)
+        self.assertIn("Awaiting", provisional.reason_en)
+        self.assertNotIn("did not confirm", provisional.reason_en)
+        self.assertNotIn("must-compare cap", provisional.reason_en)
+        self.assertEqual(
+            [signal.fatal_class for signal in waiting.cap_signals],
+            ["unfair_baseline"],
+        )
+        package = ReviewPackage(
+            project_id="synthetic-awaiting",
+            manuscript=make_artifact(),
+            metadata={"related_work": waiting.model_dump(mode="json")},
+        )
+        self.assertIn(
+            "awaiting_confirmation",
+            " ".join(
+                export_gate_errors(
+                    package,
+                    ExportGateParams(require_related_work_confirmation=True),
+                )
+            ),
+        )
+        report = "\n".join(render_related_work_section(waiting, ["en", "zh-Hans"]))
+        self.assertIn("awaiting_confirmation", report)
+        require_bilingual_markdown(report)
+
+        clear_retrieval_cache()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "confirmations.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "confirmations": [
+                            {
+                                "external_id": provisional.external_id,
+                                "confirmed": True,
+                                "reason": "Same task and temporal fusion on a sequence-level holdout.",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls_before = len(seen)
+            confirmed = run_related_work_search(
+                MANUSCRIPT,
+                mode="live",
+                allow_network=True,
+                transport=transport,
+                providers=["arxiv"],
+                confirmation_path=path,
+                sleeper=lambda _seconds: None,
+            )
+        self.assertGreater(len(seen), calls_before)
+        self.assertEqual(confirmed.confirmation, "confirmed")
+        kept = next(item for item in confirmed.candidates if item.external_id == provisional.external_id)
+        self.assertTrue(kept.confirmed)
+        self.assertTrue(kept.required)
+        self.assertIn(
+            "missing_closest_neighbor",
+            [signal.fatal_class for signal in confirmed.cap_signals],
+        )
+
+    def test_confirmation_adapter_composes_with_live_retrieval(self) -> None:
+        def transport(url: str) -> HttpResult:
+            if "export.arxiv.org" in url:
+                return HttpResult(200, _pose_atom(published="2022-06-01T00:00:00Z"))
+            return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+
+        FakeConfirmationAdapter.seen.clear()
+        judgment = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=transport,
+            providers=["arxiv"],
+            confirmation_adapter="tests.confirmation_fakes:FakeConfirmationAdapter",
+            sleeper=lambda _seconds: None,
+        )
+        self.assertEqual(judgment.confirmation, "confirmed")
+        self.assertTrue(any(item.confirmed for item in judgment.candidates))
+        self.assertTrue(FakeConfirmationAdapter.seen)
+        self.assertIn("baselines", FakeConfirmationAdapter.seen[0])
+
+    def test_model_adapter_session_reads_the_confirmation_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parsed = invoke_confirmation_adapter(
+                "tests.confirmation_fakes:BareConfirmationAdapter",
+                {
+                    "candidates": [
+                        {
+                            "title": "Ribbon Fuse Estimator",
+                            "external_id": "arxiv:0000.00077",
+                        }
+                    ],
+                    "baselines": {"compared": []},
+                },
+                scratch=Path(temporary),
+                params={"base_url": "http://127.0.0.1:9/v1", "model": "synthetic-judge"},
+            )
+        self.assertEqual(parsed[0].title, "Ribbon Fuse Estimator")
+        self.assertTrue(parsed[0].confirmed)
+        self.assertIn("related_work_confirmation", RecordingModelSession.judgments)
+        self.assertIn("Ribbon Fuse Estimator", RecordingModelSession.prompts[-1])
+
+    def test_named_methods_keep_closest_and_baseline_names_ahead_of_alphabetical_titles(self) -> None:
+        bibliography = "\n".join(
+            f'[{index}] A. Author, "Alpha Note {index:02d}," Journal, 2020.'
+            for index in range(1, 21)
+        )
+        text = (
+            "Title: ZephyrCodename Specimen Tracker\n\n"
+            "Problem\n"
+            "Task: monocular specimen pose estimation\n"
+            "Inputs: monocular RGB frames\n"
+            "Outputs: a 6-DoF pose trajectory\n"
+            "Assumptions: rigid specimen\n"
+            "Setting: offline evaluation with a sequence-level holdout\n"
+            "Technique: temporal fusion\n\n"
+            "Related Work\n"
+            "Closest method: Ribbon Fuse Estimator\n"
+            "Our temporal fusion follows Near Fusion Method.\n"
+            "Often Cited Estimator is popular. Often Cited Estimator is common. "
+            "Often Cited Estimator is known. Often Cited Estimator remains.\n\n"
+            "Experiments\n"
+            "Decision metric: pose error in millimeters\n"
+            "Compared baselines: Flat Image Classifier\n"
+            "Privileged baselines: Scale Oracle | given ground-truth scale\n\n"
+            "References\n"
+            + bibliography
+            + '\n[21] C. Author, "Near Fusion Method," Journal, 2021.\n'
+            + '[22] D. Author, "Often Cited Estimator," Journal, 2021.\n'
+            + '[23] E. Author, "Ribbon Fuse Estimator," Journal, 2021.\n'
+        )
+        limited = named_methods_from_manuscript(text, limit=4)
+        self.assertEqual(
+            limited[:4],
+            [
+                "Ribbon Fuse Estimator",
+                "Flat Image Classifier",
+                "Scale Oracle",
+                "Near Fusion Method",
+            ],
+        )
+        self.assertNotIn("Alpha Note 01", limited)
+        self.assertNotIn("Often Cited Estimator", limited)
+        forced = named_methods_from_manuscript(text, limit=1)
+        self.assertEqual(forced, ["Ribbon Fuse Estimator"])
+
+    def test_candidates_merge_across_provider_ids(self) -> None:
+        shared = "Shared Synthetic Pose Method"
+        arxiv_payload = self._payload(
+            shared,
+            "Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation.",
+            "0000.00991",
+            published="2021-01-01T00:00:00Z",
+        )
+        openalex_payload = json.dumps(
+            {
+                "id": "https://openalex.org/Wshared",
+                "title": shared,
+                "doi": "https://doi.org/10.0000/synthetic.shared.2021",
+                "publication_year": 2021,
+                "publication_date": "2021-01-01",
+                "abstract": "Offline temporal fusion estimates a 6-DoF pose trajectory for monocular specimen pose estimation.",
+            }
+        )
+        later_year = self._payload(shared, "A later version.", "0000.00992", published="2020-01-01T00:00:00Z")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "findings.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "title": shared,
+                                "arxiv_id": "0000.00991",
+                                "query_ids": ["Q-same_problem-1"],
+                                "provider_payload": arxiv_payload,
+                            },
+                            {
+                                "title": shared,
+                                "doi": "10.0000/synthetic.shared.2021",
+                                "openalex_id": "https://openalex.org/Wshared",
+                                "query_ids": ["Q-same_technique-1"],
+                                "provider_payload": openalex_payload,
+                            },
+                            {
+                                "title": shared,
+                                "arxiv_id": "0000.00992",
+                                "query_ids": ["Q-adjacent_tasks-1"],
+                                "provider_payload": later_year,
+                            },
+                        ],
+                        "confirmations": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            judgment = run_related_work_search(MANUSCRIPT, mode="agent", findings_path=path)
+        matched = [item for item in judgment.candidates if item.title == shared]
+        self.assertEqual(len(matched), 2)
+        merged = next(item for item in matched if item.year == 2021)
+        self.assertEqual(merged.external_id, "doi:10.0000/synthetic.shared.2021")
+        self.assertCountEqual(merged.query_ids, ["Q-same_problem-1", "Q-same_technique-1"])
+        self.assertEqual(judgment.confirmation, "confirmed")
+
+    def test_semantic_scholar_backoff_paces_and_keeps_the_api_key_out_of_urls(self) -> None:
+        clock = _Clock()
+        calls: list[str] = []
+        body = json.dumps(
+            {
+                "data": [
+                    {
+                        "paperId": "s2ribbon",
+                        "title": "Ribbon Fuse Estimator",
+                        "year": 2022,
+                        "publicationDate": "2022-03-01",
+                        "abstract": (
+                            "Offline temporal fusion estimates a 6-DoF pose trajectory for "
+                            "monocular specimen pose estimation. Pose error in millimeters is "
+                            "measured on a sequence-level holdout."
+                        ),
+                        "externalIds": {"ArXiv": "0000.00077"},
+                        "url": "https://www.semanticscholar.org/paper/s2ribbon",
+                    }
+                ]
+            }
+        ).encode("utf-8")
+
+        def transport(url: str) -> HttpResult:
+            calls.append(url)
+            if calls.count(url) < 3:
+                return HttpResult(429, b"slow", headers={"Retry-After": "3"})
+            return HttpResult(200, body)
+
+        os.environ["S2_API_KEY"] = "synthetic-key"
+        try:
+            headers = provider_request_headers(
+                "https://api.semanticscholar.org/graph/v1/paper/search?query=pose"
+            )
+            self.assertEqual(headers.get("x-api-key"), "synthetic-key")
+            judgment = run_related_work_search(
+                MANUSCRIPT,
+                mode="live",
+                allow_network=True,
+                transport=transport,
+                providers=["semantic_scholar"],
+                confirm_must_compare=_confirm_must_compare,
+                sleeper=clock.sleep,
+                clock=clock,
+                rng=random.Random(0),
+            )
+        finally:
+            os.environ.pop("S2_API_KEY", None)
+            clear_retrieval_cache()
+        self.assertEqual(clock.delays[0], 3.0)
+        self.assertEqual(clock.delays[1], 3.0)
+        self.assertIn(1.0, clock.delays)
+        self.assertTrue(any(item.title == "Ribbon Fuse Estimator" for item in judgment.candidates))
+        self.assertFalse(any(entry.status == "skipped" for entry in judgment.logs))
+        blob = "\n".join(calls)
+        self.assertNotIn("synthetic-key", blob)
+        self.assertNotIn("synthetic-key", "\n".join(entry.detail for entry in judgment.logs))
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.delays: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.delays.append(seconds)
+        self.now += seconds
 
 
 if __name__ == "__main__":

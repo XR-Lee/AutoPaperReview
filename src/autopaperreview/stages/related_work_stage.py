@@ -63,6 +63,9 @@ class RelatedWorkSearchParams(ParamsModel):
     requires_network: bool = False
     network_scope: str = "metadata"
     max_results_per_query: int = Field(default=5, ge=1, le=25)
+    named_method_limit: int = Field(default=15, ge=1, le=40)
+    confirmation_path: str | None = None
+    confirmation_adapter: str | None = None
     providers: list[str] = Field(
         default_factory=lambda: ["arxiv", "openalex", "semantic_scholar"]
     )
@@ -168,7 +171,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "4"
+    version = "5"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
@@ -184,6 +187,14 @@ class RelatedWorkSearchStage(StageHandler):
             path = context.loaded_config.resolve(params.findings_path)
             if path.is_file():
                 material["findings_sha256"] = sha256_file(path)
+        material["named_method_limit"] = params.named_method_limit
+        if params.confirmation_path:
+            path = context.loaded_config.resolve(params.confirmation_path)
+            material["confirmation_path"] = params.confirmation_path
+            if path.is_file():
+                material["confirmation_sha256"] = sha256_file(path)
+        if params.confirmation_adapter:
+            material["confirmation_adapter"] = params.confirmation_adapter
         return material
 
     def run(self, context: StageContext) -> StageOutcome:
@@ -198,19 +209,41 @@ class RelatedWorkSearchStage(StageHandler):
         except UnicodeDecodeError as exc:
             raise ValueError("related_work_search currently supports text sources only") from exc
         findings = context.loaded_config.resolve(params.findings_path) if params.findings_path else None
-        if findings is not None and not findings.is_file():
+        if params.mode == "agent" and findings is not None and not findings.is_file():
             raise FileNotFoundError(
                 "agent related-work inspector requires a findings drop; "
                 f"set findings_path to an existing file ({findings.name} is missing)"
             )
+        confirmation_file = (
+            context.loaded_config.resolve(params.confirmation_path) if params.confirmation_path else None
+        )
+        adapter_spec = params.confirmation_adapter
+        adapter_params: dict[str, Any] = {}
+        for stage in context.loaded_config.config.stages:
+            if stage.type != "execute_review":
+                continue
+            configured = str(stage.params.get("adapter") or "")
+            if "model_exec" not in configured and not configured.endswith("OpenAICompatibleAdapter"):
+                continue
+            if adapter_spec is None:
+                adapter_spec = configured
+            if adapter_spec == configured:
+                adapter_params = dict(stage.params)
+            break
         judgment = run_related_work_search(
             manuscript,
             venue_key=params.venue,
             mode=params.mode,
-            findings_path=findings,
+            findings_path=findings if params.mode == "agent" or findings is not None else None,
             allow_network=params.requires_network,
             max_results=params.max_results_per_query,
             providers=params.providers,
+            named_method_limit=params.named_method_limit,
+            confirmation_path=confirmation_file if confirmation_file is not None and confirmation_file.is_file() else None,
+            confirmation_adapter=adapter_spec,
+            confirmation_adapter_params=adapter_params,
+            confirmation_scratch=context.stage_dir,
+            network_policy=context.loaded_config.config.project.network_policy.value,
         )
         retrieved_at = datetime.now(timezone.utc)
         snapshots, sources, evidence = _snapshots(judgment, retrieved_at=retrieved_at)
@@ -237,12 +270,14 @@ class RelatedWorkSearchStage(StageHandler):
         )
         queries_path = context.stage_dir / "queries.json"
         candidates_path = context.stage_dir / "candidates.json"
+        packet_path = context.stage_dir / "confirmation_packet.json"
         judgment_path = context.stage_dir / "judgment.json"
         log_path = context.stage_dir / "retrieval_log.json"
         markdown_path = context.stage_dir / "related_work.md"
         package_path = context.stage_dir / "package.json"
         _write_json(queries_path, [query.model_dump(mode="json") for query in judgment.queries])
         _write_json(candidates_path, [item.model_dump(mode="json") for item in judgment.candidates])
+        _write_json(packet_path, judgment.confirmation_packet)
         _write_json(judgment_path, judgment.model_dump(mode="json"))
         _write_json(log_path, [item.model_dump(mode="json") for item in judgment.logs])
         markdown_path.write_text(render_related_work_markdown(judgment), encoding="utf-8")
@@ -251,6 +286,7 @@ class RelatedWorkSearchStage(StageHandler):
             artifacts=[
                 _artifact(queries_path, context, "related_work.queries"),
                 _artifact(candidates_path, context, "related_work.candidates"),
+                _artifact(packet_path, context, "related_work.confirmation_packet"),
                 _artifact(judgment_path, context, "related_work.judgment"),
                 _artifact(log_path, context, "related_work.log"),
                 _artifact(markdown_path, context, "related_work.markdown"),
@@ -258,6 +294,7 @@ class RelatedWorkSearchStage(StageHandler):
             ],
             metadata={
                 "status": judgment.status,
+                "confirmation": judgment.confirmation,
                 "failed_providers": list(judgment.failed_providers),
                 "candidate_count": len(judgment.candidates),
                 "query_count": len(judgment.queries),

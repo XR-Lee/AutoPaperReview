@@ -18,8 +18,11 @@ emits ``unfair_baseline`` when the manuscript baseline anchor resolves. See
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
+import os
+import random
 import re
 import socket
 import time
@@ -78,8 +81,12 @@ MISSING_NEIGHBOR_CEILINGS = {
 MANUSCRIPT_SOURCE_ID = "S-manuscript"
 MANUSCRIPT_BASELINE_EVIDENCE_ID = "E-manuscript-baselines"
 MAX_MUST_COMPARE = 3
+DEFAULT_NAMED_METHOD_LIMIT = 15
 _MAX_429_RETRIES = 2
 _MAX_RETRY_AFTER_SECONDS = 2.0
+_S2_429_RETRIES = 5
+_S2_MAX_RETRY_AFTER_SECONDS = 60.0
+_S2_MIN_INTERVAL = 1.0
 _RETRIEVAL_CACHE: dict[str, "HttpResult"] = {}
 
 INTEGRATION_NOTE = (
@@ -95,7 +102,9 @@ INTEGRATION_NOTE = (
     "failed, a timeout, or no provider) emits no cap and must not lower the score. "
     "status=partial lists the failed providers. It may emit missing_closest_neighbor "
     "only for a confirmed neighbour verified by a provider that succeeded, and it still "
-    "emits unfair_baseline when the manuscript baseline anchor resolves. A failed provider "
+    "emits unfair_baseline when the manuscript baseline anchor resolves. Live retrieval and "
+    "confirmation compose. With no confirmation, status stays awaiting_confirmation and the "
+    "retrieval cap does not fire. A failed provider "
     "never creates or strengthens a retrieval cap. rate_venue() remains the only writer of OverallScore. "
     "Agent mode follows AgentFindingsInspector: the host writes a JSON drop after it "
     "runs the search, and a candidate is kept only when its provider payload parses to "
@@ -163,6 +172,23 @@ _HEADING_CONNECTORS = frozenset(
     {"and", "of", "the", "for", "in", "on", "with", "to", "a", "an", "vs", "via"}
 )
 _METHOD_LABELS = frozenset({"closest method", "named method", "named methods", "method"})
+_CLOSEST_LABELS = frozenset(
+    {
+        "closest method",
+        "closest methods",
+        "closest work",
+        "closest prior",
+        "most related",
+        "most related method",
+        "most related work",
+        "most similar",
+        "most similar method",
+    }
+)
+_CLOSEST_PHRASE = re.compile(
+    r"\b(?:closest method|closest work|closest prior|most related(?: method| work)?|most similar(?: method)?)\b",
+    re.I,
+)
 _NON_METHOD_ZH = {
     "survey": "综述",
     "review": "综述",
@@ -199,6 +225,7 @@ _LABEL_KEYS = {
 DateRelation = Literal["prior", "concurrent", "unknown"]
 CandidateTier = Literal["must-compare", "should-discuss", "optional"]
 SearchStatus = Literal["complete", "partial", "degraded", "not_run"]
+ConfirmationStatus = Literal["confirmed", "awaiting_confirmation", "not_required"]
 LogStatus = Literal[
     "ok",
     "offline",
@@ -336,6 +363,8 @@ class RelatedWorkJudgment(Strict):
     decision_metric: str | None = None
     status: SearchStatus
     failed_providers: list[str] = Field(default_factory=list)
+    confirmation: ConfirmationStatus = "not_required"
+    confirmation_packet: dict[str, Any] = Field(default_factory=dict)
     integration: str = INTEGRATION_NOTE
 
 
@@ -534,34 +563,117 @@ def query_is_public(query: str, allow: set[str]) -> bool:
     return bool(tokens) and all(token in allow for token in tokens)
 
 
-def named_methods_from_manuscript(manuscript: str) -> list[str]:
-    """Method names the manuscript itself uses in baselines, related work, and references.
+def _sentence_spans(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [part.strip() for part in parts if part.strip()]
 
-    Each name is returned alone, sorted, and capped. The submission title is omitted.
+
+def _remember_name(
+    records: dict[str, dict[str, Any]],
+    name: str,
+    *,
+    title: str,
+    explicit: bool = False,
+    in_experiments: bool = False,
+    distance: int | None = None,
+) -> None:
+    normalized = _normalize_title(name)
+    if len(normalized.split()) < 2 or (title and normalized == title):
+        return
+    row = records.get(normalized)
+    if row is None:
+        row = {
+            "name": " ".join(name.split()),
+            "explicit": False,
+            "in_experiments": False,
+            "distance": None,
+        }
+        records[normalized] = row
+    if explicit:
+        row["explicit"] = True
+    if in_experiments:
+        row["in_experiments"] = True
+    if distance is not None and (row["distance"] is None or distance < row["distance"]):
+        row["distance"] = distance
+
+
+def named_methods_from_manuscript(
+    manuscript: str,
+    *,
+    limit: int = DEFAULT_NAMED_METHOD_LIMIT,
+) -> list[str]:
+    """Method names the manuscript itself uses, highest priority first.
+
+    Explicit closest or most-related methods are always included. Baselines and
+    experiment-table names come next, then related-work sentences nearest the
+    paper's own method, then names mentioned more often. The submission title
+    is omitted. ``limit`` caps the rest; it does not drop an explicit closest method.
     """
-    names: list[str] = []
+    if limit < 1:
+        raise ValueError("named method limit must be at least 1")
+    title = _normalize_title(manuscript_title(manuscript))
+    records: dict[str, dict[str, Any]] = {}
     experiments = parse_experiments(manuscript)
     for item in [*experiments.compared, *experiments.privileged, *experiments.different_task]:
-        names.append(_baseline_name(item))
+        _remember_name(records, _baseline_name(item), title=title, in_experiments=True)
     related = _section(manuscript, "Related Work") or _section(manuscript, "Prior Work")
     for line in related.splitlines():
-        match = _LABEL.match(line.strip())
-        if match and match.group(1).strip().lower() in _METHOD_LABELS:
-            names.extend(_split_items(match.group(2)))
+        labeled = _LABEL.match(line.strip())
+        if not labeled:
+            continue
+        label = labeled.group(1).strip().lower()
+        if label not in _METHOD_LABELS and label not in _CLOSEST_LABELS:
+            continue
+        for piece in _split_items(labeled.group(2)):
+            _remember_name(records, piece, title=title, explicit=label in _CLOSEST_LABELS)
     for entry in parse_bibliography(manuscript):
         if entry.title:
-            names.append(entry.title)
-    title = _normalize_title(manuscript_title(manuscript))
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for name in names:
-        normalized = _normalize_title(name)
-        if len(normalized.split()) < 2 or normalized in seen or (title and normalized == title):
-            continue
-        seen.add(normalized)
-        cleaned.append(" ".join(name.split()))
-    cleaned.sort(key=_normalize_title)
-    return cleaned[:8]
+            _remember_name(records, entry.title, title=title)
+    technique = _normalize_title(_labeled_fields(_section(manuscript, "Problem")).get("technique", ""))
+    sentences = _sentence_spans(related)
+    own_indexes = [
+        index
+        for index, sentence in enumerate(sentences)
+        if re.search(r"\b(?:our|we)\b", sentence, re.I)
+        or (technique and technique in _normalize_title(sentence))
+    ]
+    introduced_pattern = re.compile(
+        r"(?:closest method|closest work|most related(?: method| work)?|most similar(?: method)?)"
+        r"\s*(?:is|:)\s+([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*){0,6})"
+    )
+    for index, sentence in enumerate(sentences):
+        distance = min((abs(index - own) for own in own_indexes), default=index)
+        explicit_sentence = _CLOSEST_PHRASE.search(sentence) is not None
+        introduced = introduced_pattern.search(sentence)
+        if introduced:
+            _remember_name(records, introduced.group(1), title=title, explicit=True, distance=distance)
+        normalized_sentence = _normalize_title(sentence)
+        for normalized, row in list(records.items()):
+            if normalized in normalized_sentence:
+                _remember_name(
+                    records,
+                    row["name"],
+                    title=title,
+                    explicit=explicit_sentence,
+                    distance=distance,
+                )
+    lowered = manuscript.lower()
+    ranked = []
+    for normalized, row in records.items():
+        frequency = lowered.count(normalized)
+        ranked.append((row, frequency))
+    ranked.sort(
+        key=lambda item: (
+            0 if item[0]["explicit"] else 1,
+            0 if item[0]["in_experiments"] else 1,
+            item[0]["distance"] if item[0]["distance"] is not None else 10**9,
+            -item[1],
+            _normalize_title(item[0]["name"]),
+        )
+    )
+    forced = [row["name"] for row, _frequency in ranked if row["explicit"]]
+    rest = [row["name"] for row, _frequency in ranked if not row["explicit"]]
+    return (forced + rest)[: max(limit, len(forced))]
 
 
 def generate_search_queries(
@@ -1539,6 +1651,7 @@ def related_work_comparison(judgment: RelatedWorkJudgment | dict[str, Any] | Non
         },
         "closest_neighbours": neighbours,
         "failed_providers": list(record.failed_providers),
+        "confirmation": record.confirmation,
     }
 
 
@@ -1961,18 +2074,31 @@ def load_agent_findings(path: Path) -> tuple[list[RawHit], list[RetrievalLogEntr
     return hits, logs
 
 
+def provider_request_headers(url: str) -> dict[str, str]:
+    """Headers for one metadata request. The Semantic Scholar key stays out of the URL and the logs."""
+    headers = {"User-Agent": "AutoPaperReview/related-work (metadata)"}
+    host = urllib.parse.urlparse(url).netloc
+    if host == "api.semanticscholar.org":
+        key = os.environ.get("S2_API_KEY", "").strip()
+        if key:
+            headers["x-api-key"] = key
+    return headers
+
+
 def urllib_transport(url: str, timeout: float = 20.0) -> HttpResult:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "AutoPaperReview/related-work (metadata)"},
-        method="GET",
-    )
+    request = urllib.request.Request(url, headers=provider_request_headers(url), method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return HttpResult(status=getattr(response, "status", 200), body=response.read())
+            response_headers = {key.lower(): value for key, value in response.headers.items()}
+            return HttpResult(
+                status=getattr(response, "status", 200),
+                body=response.read(),
+                headers=response_headers,
+            )
     except urllib.error.HTTPError as exc:
         body = exc.read() if exc.fp else b""
-        return HttpResult(status=exc.code, body=body)
+        response_headers = {key.lower(): value for key, value in (exc.headers.items() if exc.headers else [])}
+        return HttpResult(status=exc.code, body=body, headers=response_headers)
     except urllib.error.URLError as exc:
         reason = exc.reason
         if isinstance(reason, (TimeoutError, socket.timeout)):
@@ -2014,17 +2140,42 @@ def clear_retrieval_cache() -> None:
 
 
 def _query_cache_key(provider: str, query: str) -> str:
-    return hashlib.sha256(f"{provider}\n{query}".encode("utf-8")).hexdigest()
+    # Record that a key was present without storing the key itself.
+    auth = "\nauth" if provider == "semantic_scholar" and os.environ.get("S2_API_KEY", "").strip() else ""
+    return hashlib.sha256(f"{provider}\n{query}{auth}".encode("utf-8")).hexdigest()
 
 
-def _retry_after_seconds(result: HttpResult) -> float:
+def _retry_after_seconds(result: HttpResult, *, cap: float) -> float:
     raw = result.headers.get("retry-after", "").strip()
     if not raw:
         return 0.0
     try:
-        return min(max(float(raw), 0.0), _MAX_RETRY_AFTER_SECONDS)
+        return min(max(float(raw), 0.0), cap)
     except ValueError:
         return 0.0
+
+
+def _rate_limit_delay(provider: str, attempt: int, result: HttpResult, rng: random.Random) -> float:
+    """Semantic Scholar waits with exponential backoff and jitter, and honours Retry-After."""
+    if provider == "semantic_scholar":
+        exponential = float(min(2**attempt, 32))
+        jitter = rng.uniform(0, exponential * 0.25)
+        retry_after = _retry_after_seconds(result, cap=_S2_MAX_RETRY_AFTER_SECONDS)
+        return min(max(exponential + jitter, retry_after), _S2_MAX_RETRY_AFTER_SECONDS)
+    return _retry_after_seconds(result, cap=_MAX_RETRY_AFTER_SECONDS)
+
+
+def _pace_semantic_scholar(
+    last: list[float | None],
+    sleeper: Callable[[float], None],
+    clock: Callable[[], float],
+) -> None:
+    now = clock()
+    if last[0] is not None:
+        wait = _S2_MIN_INTERVAL - (now - last[0])
+        if wait > 0:
+            sleeper(wait)
+    last[0] = clock()
 
 
 def guarded_get(
@@ -2050,6 +2201,9 @@ def _fetch_provider(
     transport: Transport,
     limit: int,
     sleeper: Callable[[float], None],
+    rng: random.Random,
+    clock: Callable[[], float],
+    s2_last: list[float | None],
 ) -> tuple[HttpResult | None, bool, RetrievalLogEntry | None]:
     """Fetch one query. HTTP 429 retries and does not abort the provider."""
     key = _query_cache_key(provider, query.query)
@@ -2058,7 +2212,10 @@ def _fetch_provider(
         return cached, True, None
     url = _search_url(provider, query.query, limit)
     result: HttpResult | None = None
-    for attempt in range(_MAX_429_RETRIES + 1):
+    retries = _S2_429_RETRIES if provider == "semantic_scholar" else _MAX_429_RETRIES
+    for attempt in range(retries + 1):
+        if provider == "semantic_scholar":
+            _pace_semantic_scholar(s2_last, sleeper, clock)
         try:
             result = guarded_get(url, manuscript=manuscript, allow=allow, transport=transport, named=named)
         except RetrievalFailure as exc:
@@ -2069,9 +2226,9 @@ def _fetch_provider(
             return None, False, _log(provider, "dropped", str(exc), query.id)
         if result.status != 429:
             break
-        if attempt == _MAX_429_RETRIES:
+        if attempt == retries:
             break
-        delay = _retry_after_seconds(result)
+        delay = _rate_limit_delay(provider, attempt, result, rng)
         if delay > 0:
             sleeper(delay)
     if result is not None and result.status == 200:
@@ -2089,12 +2246,17 @@ def live_search(
     limit: int,
     named: set[str] | None = None,
     sleeper: Callable[[float], None] | None = None,
+    rng: random.Random | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> tuple[list[RawHit], list[RetrievalLogEntry]]:
     hits: list[RawHit] = []
     logs: list[RetrievalLogEntry] = []
     blocked: set[str] = set()
     named_queries = named or set()
     pause = sleeper or time.sleep
+    entropy = rng or random.Random()
+    now = clock or time.monotonic
+    s2_last: list[float | None] = [None]
     for provider in providers:
         for query in queries:
             if provider in blocked:
@@ -2109,6 +2271,9 @@ def live_search(
                 transport=transport,
                 limit=limit,
                 sleeper=pause,
+                rng=entropy,
+                clock=now,
+                s2_last=s2_last,
             )
             if failure is not None:
                 logs.append(failure)
@@ -2121,7 +2286,7 @@ def live_search(
                     _log(
                         provider,
                         "rate_limited",
-                        f"HTTP 429 after {_MAX_429_RETRIES} retries; continuing with later queries",
+                        f"HTTP 429 after {_S2_429_RETRIES if provider == 'semantic_scholar' else _MAX_429_RETRIES} retries; continuing with later queries",
                         query.id,
                     )
                 )
@@ -2150,24 +2315,72 @@ def live_search(
     return hits, logs
 
 
+def _id_values(hit: RawHit) -> set[tuple[str, str]]:
+    values: set[tuple[str, str]] = set()
+    if hit.arxiv_id:
+        values.add(("arxiv", norm_arxiv(hit.arxiv_id)))
+    if hit.doi:
+        values.add(("doi", norm_doi(hit.doi)))
+    if hit.openalex_id:
+        values.add(("openalex", hit.openalex_id.rsplit("/", 1)[-1]))
+    if hit.s2_id:
+        values.add(("s2", hit.s2_id.strip()))
+    return values
+
+
+def _same_work(left: RawHit, right: RawHit) -> bool:
+    """One paper can arrive with a DOI from one provider and an arXiv id from another."""
+    if _id_values(left) & _id_values(right):
+        return True
+    left_title = _normalize_title(left.title)
+    right_title = _normalize_title(right.title)
+    return bool(left_title) and left_title == right_title and left.year is not None and left.year == right.year
+
+
+def _merge_hit(kept: RawHit, extra: RawHit) -> None:
+    for query_id in extra.query_ids:
+        if query_id not in kept.query_ids:
+            kept.query_ids.append(query_id)
+    if not kept.arxiv_id and extra.arxiv_id:
+        kept.arxiv_id = extra.arxiv_id
+    if not kept.doi and extra.doi:
+        kept.doi = extra.doi
+    if not kept.openalex_id and extra.openalex_id:
+        kept.openalex_id = extra.openalex_id
+    if not kept.s2_id and extra.s2_id:
+        kept.s2_id = extra.s2_id
+    if len(extra.summary or "") > len(kept.summary or ""):
+        kept.summary = extra.summary
+    if not kept.venue and extra.venue:
+        kept.venue = extra.venue
+    if kept.year is None and extra.year is not None:
+        kept.year = extra.year
+    if not kept.published and extra.published:
+        kept.published = extra.published
+    if kept.doi and "doi.org" not in kept.link and extra.doi:
+        kept.link = extra.link
+    elif not kept.link and extra.link:
+        kept.link = extra.link
+
+
 def _dedupe(hits: Sequence[RawHit]) -> list[RawHit]:
-    merged: dict[str, RawHit] = {}
-    order: list[str] = []
+    groups: list[RawHit] = []
     for hit in hits:
-        key = hit.external_id()
-        if not key or not hit.title.strip() or not hit.link:
+        if not hit.title.strip() or not hit.link or not hit.external_id():
             continue
-        existing = merged.get(key)
-        if existing is None:
-            merged[key] = hit
-            order.append(key)
+        match = next((existing for existing in groups if _same_work(existing, hit)), None)
+        if match is None:
+            groups.append(hit)
             continue
-        for query_id in hit.query_ids:
-            if query_id not in existing.query_ids:
-                existing.query_ids.append(query_id)
-        if not existing.summary and hit.summary:
-            existing.summary = hit.summary
-    return [merged[key] for key in order]
+        _merge_hit(match, hit)
+    groups.sort(
+        key=lambda hit: (
+            _normalize_title(hit.title),
+            hit.year if hit.year is not None else 0,
+            hit.external_id(),
+        )
+    )
+    return groups
 
 
 _TIER_RANK = {"must-compare": 0, "should-discuss": 1, "optional": 2}
@@ -2203,17 +2416,154 @@ def _status_from(
 
 def load_confirmations(path: Path) -> list[MustCompareConfirmation]:
     """Read judging-agent confirmations from an agent findings drop."""
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    supplied, items = confirmation_file_state(path)
+    if not supplied:
         return []
-    items = raw.get("confirmations", [])
+    return items
+
+
+def confirmation_file_state(path: Path) -> tuple[bool, list[MustCompareConfirmation]]:
+    """Return whether the file supplies a confirmation list, and that list."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or "confirmations" not in raw:
+        return False, []
+    items = raw["confirmations"]
     if not isinstance(items, list):
         raise ValueError("confirmations must be a list")
     confirmations: list[MustCompareConfirmation] = []
     for item in items:
         if isinstance(item, dict):
             confirmations.append(MustCompareConfirmation.model_validate(item))
-    return confirmations
+    return True, confirmations
+
+
+def build_confirmation_packet(
+    candidates: Sequence[RelatedCandidate],
+    experiments: ExperimentRecord,
+) -> dict[str, Any]:
+    """Provisional must-compare candidates plus the manuscript baselines, for the judging agent."""
+    rows = [
+        {
+            "id": item.id,
+            "title": item.title,
+            "external_id": item.external_id,
+            "year": item.year,
+            "venue": item.venue,
+            "link": item.link,
+            "summary": item.summary,
+            "relevance": item.relevance,
+            "date_relation": item.date_relation,
+            "cited": item.cited,
+            "provider": item.provider,
+        }
+        for item in candidates
+        if item.required and item.tier == "must-compare"
+    ]
+    return {
+        "candidates": rows,
+        "baselines": {
+            "decision_metric": experiments.decision_metric,
+            "compared": list(experiments.compared),
+            "privileged": list(experiments.privileged),
+            "different_task": list(experiments.different_task),
+        },
+    }
+
+
+def parse_confirmation_payload(payload: Any) -> list[MustCompareConfirmation]:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("confirmations", [])
+    else:
+        raise ValueError("confirmation adapter must return a list or an object with confirmations")
+    if not isinstance(items, list):
+        raise ValueError("confirmations must be a list")
+    return [MustCompareConfirmation.model_validate(item) for item in items if isinstance(item, dict)]
+
+
+def _confirm_with_model_session(
+    session_cls: type,
+    packet: dict[str, Any],
+    *,
+    scratch: Path,
+    params: dict[str, Any],
+    network_policy: str,
+) -> list[MustCompareConfirmation]:
+    """Ask the OpenAI-compatible adapter from the model-execution stage, when that module is installed."""
+    base_url = str(params.get("base_url") or "").strip()
+    model = str(params.get("model") or "").strip()
+    if not base_url or not model:
+        raise ValueError("OpenAI-compatible confirmation requires base_url and model")
+    session = session_cls(
+        base_url=base_url,
+        model=model,
+        api_key_env=str(params.get("api_key_env") or "APR_MODEL_API_KEY"),
+        allow_remote=bool(params.get("allow_remote")),
+        network_policy=str(params.get("network_policy") or network_policy),
+        timeout_seconds=float(params.get("timeout_seconds") or 60),
+        temperature=float(params.get("temperature") or 0),
+        json_object=True,
+        scratch=scratch,
+        stage_signature=str(params.get("stage_signature") or "related-work-confirmation"),
+    )
+    prompt = (
+        "Confirm which candidates are must-compare for this manuscript. "
+        "Return one JSON object and no other text, shaped as "
+        '{"confirmations":[{"external_id":"","title":"","confirmed":true,"reason":"one line"}]}. '
+        "confirmed is false when the paper is a survey, a different task, or only shares an input modality. "
+        "The reason is one line.\n\n"
+        + json.dumps(packet, ensure_ascii=False)
+    )
+    messages = [
+        {"role": "system", "content": "Return one JSON object and no other text."},
+        {"role": "user", "content": prompt},
+    ]
+    text = session._exchange("related_work_confirmation", messages, attempt=1)
+    parsed = json.loads(text)
+    if hasattr(session, "write_index"):
+        session.write_index()
+    return parse_confirmation_payload(parsed)
+
+
+def invoke_confirmation_adapter(
+    spec: str,
+    packet: dict[str, Any],
+    *,
+    scratch: Path,
+    params: dict[str, Any] | None = None,
+    network_policy: str = "deny",
+) -> list[MustCompareConfirmation]:
+    """Call a judging adapter. A ``confirm_related_work`` method wins; otherwise use the model session."""
+    module_name, separator, attribute = spec.partition(":")
+    if not separator or not attribute:
+        raise ValueError("confirmation adapter must be a module:attribute reference")
+    module = importlib.import_module(module_name)
+    obj = getattr(module, attribute)
+    instance = obj() if isinstance(obj, type) else obj
+    if hasattr(instance, "confirm_related_work"):
+        return parse_confirmation_payload(instance.confirm_related_work(packet))
+    session_cls = getattr(module, "ModelSession", None)
+    if session_cls is not None and hasattr(session_cls, "_exchange"):
+        return _confirm_with_model_session(
+            session_cls,
+            packet,
+            scratch=scratch,
+            params=params or {},
+            network_policy=network_policy,
+        )
+    raise TypeError(
+        f"confirmation adapter {spec} must provide confirm_related_work() "
+        "or be the OpenAI-compatible model adapter"
+    )
+
+
+def _mark_awaiting(candidates: list[RelatedCandidate]) -> None:
+    for item in candidates:
+        if not item.required or item.tier != "must-compare":
+            continue
+        item.reason_en += " Awaiting judging-agent confirmation. The retrieval cap cannot cite it yet."
+        item.reason_zh += "等待判断模型确认。检索上限还不能引用它。"
 
 
 def run_related_work_search(
@@ -2229,12 +2579,22 @@ def run_related_work_search(
     deadlines: VenueDeadlines | None = None,
     confirm_must_compare: MustCompareHook | None = None,
     sleeper: Callable[[float], None] | None = None,
+    rng: random.Random | None = None,
+    clock: Callable[[], float] | None = None,
+    named_method_limit: int = DEFAULT_NAMED_METHOD_LIMIT,
+    confirmation_path: Path | None = None,
+    confirmation_adapter: str | None = None,
+    confirmation_adapter_params: dict[str, Any] | None = None,
+    confirmation_scratch: Path | None = None,
+    network_policy: str = "deny",
 ) -> RelatedWorkJudgment:
     if mode not in {"agent", "live", "off"}:
         raise ValueError("mode must be agent, live, or off")
     profile = deadlines or load_venue_deadlines(venue_key)
     formulation = derive_formulation(manuscript)
-    method_names = named_methods_from_manuscript(manuscript) if formulation.complete else []
+    method_names = (
+        named_methods_from_manuscript(manuscript, limit=named_method_limit) if formulation.complete else []
+    )
     queries = generate_search_queries(formulation, method_names)
     allow = allow_tokens(formulation)
     named = {
@@ -2298,6 +2658,8 @@ def run_related_work_search(
                 limit=max_results,
                 named=named,
                 sleeper=sleeper,
+                rng=rng,
+                clock=clock,
             )
             hits.extend(found)
             logs.extend(live_logs)
@@ -2329,9 +2691,37 @@ def run_related_work_search(
         )
         for index, hit in enumerate(ranked, start=1)
     ]
-    confirmations = load_confirmations(findings_path) if findings_path is not None and mode == "agent" else []
-    candidates = _apply_confirmations(candidates, confirmations, confirm_must_compare)
-    candidates = _limit_must_compare(candidates)
+    packet = build_confirmation_packet(candidates, experiments)
+    confirmations: list[MustCompareConfirmation] = []
+    supplied = confirm_must_compare is not None
+    for path in (confirmation_path, findings_path):
+        if path is None or not path.is_file():
+            continue
+        file_supplied, file_items = confirmation_file_state(path)
+        if file_supplied:
+            supplied = True
+            confirmations.extend(file_items)
+    if confirmation_adapter and packet["candidates"] and not supplied:
+        scratch = confirmation_scratch or Path(".")
+        confirmations.extend(
+            invoke_confirmation_adapter(
+                confirmation_adapter,
+                packet,
+                scratch=scratch,
+                params=confirmation_adapter_params,
+                network_policy=network_policy,
+            )
+        )
+        supplied = True
+    if supplied:
+        candidates = _apply_confirmations(candidates, confirmations, confirm_must_compare)
+        candidates = _limit_must_compare(candidates)
+        confirmation: ConfirmationStatus = "confirmed"
+    elif packet["candidates"]:
+        _mark_awaiting(candidates)
+        confirmation = "awaiting_confirmation"
+    else:
+        confirmation = "not_required"
     status = _status_from(
         mode,
         logs,
@@ -2340,9 +2730,15 @@ def run_related_work_search(
     )
     _successful, failed_providers = _provider_sets(logs)
     gaps = compare_experiments(candidates, experiments) if formulation.complete else []
-    if status == "not_run":
+    if status == "not_run" or confirmation == "awaiting_confirmation":
         gaps = [gap for gap in gaps if gap.kind != "missing_baseline"]
-    advice = build_clause_advice(gaps=gaps, candidates=candidates, status=status)
+    advice_candidates = candidates
+    if confirmation == "awaiting_confirmation":
+        advice_candidates = [
+            item.model_copy(update={"required": False}) if item.required and not item.confirmed else item
+            for item in candidates
+        ]
+    advice = build_clause_advice(gaps=gaps, candidates=advice_candidates, status=status)
     signals = build_cap_signals(gaps=gaps, status=status, candidates=candidates, logs=logs)
     effective = min((signal.venue_cap for signal in signals), default=None)
     weakness_en, weakness_zh, rebuttal_en, rebuttal_zh = _suggested_text(
@@ -2370,6 +2766,8 @@ def run_related_work_search(
         decision_metric=experiments.decision_metric,
         status=status,
         failed_providers=failed_providers,
+        confirmation=confirmation,
+        confirmation_packet=packet,
     )
 
 
@@ -2420,6 +2818,12 @@ def render_related_work_section(judgment: RelatedWorkJudgment | dict[str, Any], 
         failed = ", ".join(record.failed_providers) if record.failed_providers else "none recorded"
         search_en += f" Failed providers: {failed}. The search may be incomplete."
         search_zh += f"失败的数据源：{failed}。检索可能不完整。"
+    if record.confirmation == "awaiting_confirmation":
+        search_en += (
+            " Confirmation: awaiting_confirmation. "
+            "The retrieval cap waits until the judging agent confirms each must-compare paper."
+        )
+        search_zh += "确认状态：awaiting_confirmation。检索上限要等判断模型逐条确认必须比较的论文之后才生效。"
     query_rows = [(query.id, f"{query.perspective.value}: {query.query}") for query in record.queries]
 
     def subsection(title_en: str, title_zh: str, en: str, zh: str) -> None:

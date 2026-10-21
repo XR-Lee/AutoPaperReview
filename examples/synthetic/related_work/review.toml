@@ -66,3 +66,4 @@ depends_on = ["rate"]
 bilingual = true
 require_first_read_on_major = true
 require_quote_on_major = true
+require_related_work_confirmation = true

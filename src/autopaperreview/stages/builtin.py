@@ -903,6 +903,7 @@ class ReportParams(ParamsModel):
     require_fatal_class_on_critical: bool = False
     require_decision_relevant_on_major: bool = False
     require_page_image_on_visual: bool = False
+    require_related_work_confirmation: bool = False
 
     @field_validator("languages")
     @classmethod
@@ -917,7 +918,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "10"
+    version = "11"
     params_model = ReportParams
 
     def _package(self, context: StageContext) -> ReviewPackage:
