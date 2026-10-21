@@ -27,6 +27,7 @@ from autopaperreview.public_calibration import (
     write_report,
 )
 from autopaperreview.rating import WEIGHTS
+from autopaperreview.rubrics import COEFFICIENT_SET
 from tests.support import make_artifact
 
 FIXTURE = Path(__file__).resolve().parents[1] / "examples" / "synthetic" / "calibration"
@@ -79,7 +80,7 @@ class MetricTests(unittest.TestCase):
         metrics = summarize(rows)
         self.assertEqual(before, dict(WEIGHTS))
         self.assertFalse(metrics["fitted"])
-        self.assertEqual(metrics["coefficient_set"], "apr-iclr-cap-v1")
+        self.assertEqual(metrics["coefficient_set"], COEFFICIENT_SET)
         self.assertAlmostEqual(metrics["spearman"], 1.0)
         self.assertAlmostEqual(metrics["kendall"], 1.0)
         self.assertEqual(metrics["confusion"]["counts"]["6"]["8"], 1)
@@ -87,7 +88,8 @@ class MetricTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["mae"], 0.5)
         self.assertAlmostEqual(metrics["signed_error"], 0.5)
         self.assertAlmostEqual(metrics["bin_agreement"], 0.5)
-        self.assertAlmostEqual(metrics["snap_bin_agreement"], 1.0)
+        # Human mean 7 snaps to 6, so it does not match the synthetic bin 8.
+        self.assertAlmostEqual(metrics["snap_bin_agreement"], 0.5)
         self.assertAlmostEqual(metrics["accept_reject_auc"], 1.0)
         self.assertEqual(metrics["unique_bins"], [3, 8])
         self.assertTrue(metrics["clustered"])
@@ -190,7 +192,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(missing["scored"][0]["our_bin"], 6)
             self.assertEqual(missing["errors"], [])
             score = json.loads((project / "our_score.json").read_text(encoding="utf-8"))
-            self.assertEqual(score["coefficient_set"], "apr-iclr-cap-v1")
+            self.assertEqual(score["coefficient_set"], COEFFICIENT_SET)
             self.assertNotIn("human", score)
 
             metrics = write_report(cache, report)
@@ -204,7 +206,7 @@ class EndToEndTests(unittest.TestCase):
             package = ReviewPackage.model_validate_json(
                 next((project / ".runs").glob("*/stages/rate/package.json")).read_text(encoding="utf-8")
             )
-            self.assertEqual(package.overall_score.coefficient_set, "apr-iclr-cap-v1")
+            self.assertEqual(package.overall_score.coefficient_set, COEFFICIENT_SET)
             self.assertEqual(package.overall_score.value, 6)
 
             awaiting_dir = cache / "papers" / "SYNTHETIC-FORUM-001" / "project"

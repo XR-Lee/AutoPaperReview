@@ -1,4 +1,4 @@
-"""Report-only comparison of ``apr-iclr-cap-v1`` to public human scores.
+"""Report-only comparison of the declared ICLR formula to public human scores.
 
 The tool fetches public OpenReview manuscripts and official ratings, runs the
 local pipeline, and writes agreement metrics. It does not fit weights, caps,

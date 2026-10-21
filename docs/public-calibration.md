@@ -1,6 +1,6 @@
 # Public calibration eval
 
-`apr-iclr-cap-v1` is a declared formula. This command measures how far that formula sits from public human scores. It does not fit weights, caps, or bins, and it does not write the metrics back into the rating code.
+`apr-iclr-cap-v2` is a declared formula. The venue bin is the largest of 1/3/5/6/8/10 that does not exceed the capped raw score. This command measures how far that formula sits from public human scores. It does not fit weights, caps, or bins, and it does not write the metrics back into the rating code.
 
 The comparison is not a claim about any hosted reviewer's published correlation.
 
@@ -103,7 +103,9 @@ The tool requests the public PDF. If that route answers with a browser check, `-
 
 Inside a stratum the walk alternates years and round-robins primary areas, taking at most 4 papers from one area before relaxing that cap. Each area-year group is sorted by forum id and shuffled with `Random(seed:stratum:area:year)`. After the PDFs are in, a second shuffle (`Random(seed:split:stratum)`) holds out 40 percent inside each stratum. The tuning split is not chosen from model scores.
 
-The script writes the manifest, the split, the PDFs, and the ratings under the cache directory only. The direct notes route is not required. Search pages the public listings. When the venue PDF route asks for a browser check, the script uses the arXiv title fallback.
+The script writes the manifest, the split, the PDFs, and the ratings under the cache directory only. The direct notes route is not required. Search pages the public listings. When the venue PDF route asks for a browser check, the script uses the arXiv title fallback. Listing fetches honour `Retry-After` on HTTP 429 and cap the backoff at 8 seconds. PDF downloads use a 45-second socket timeout.
+
+Rejected submissions are often absent from arXiv, so a stratum can stay short after the first PDF walk. `--extend-rejected N` scores N further rejected submissions that are not in the scored pool yet. The shuffle is `Random(f"{seed}:extend-rejected")`, and `fill_to_surplus` is off for that pass so the extra papers are actually fetched. The run that filled every quota used two extra passes, `--extend-rejected 280` and then `--extend-rejected 220`, each followed by materialize. Those counts are part of the selection procedure. They were not chosen from model scores.
 
 ```bash
 PYTHONPATH=src python3 scripts/select_public_calibration.py --cache workdir/calibration-bench

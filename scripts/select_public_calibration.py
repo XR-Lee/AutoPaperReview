@@ -119,8 +119,13 @@ class SearchClient:
                 body = exc.read()
                 last_error = exc
                 if exc.code == 429 or exc.code >= 500:
-                    time.sleep(delay)
-                    delay = min(delay * 2, 60)
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    pause = delay
+                    if retry_after and retry_after.isdigit():
+                        pause = min(30.0, float(retry_after))
+                    print(f"openreview {exc.code} sleeping {pause:.0f}s", file=sys.stderr)
+                    time.sleep(pause)
+                    delay = min(delay * 2, 8)
                     continue
                 if exc.code == 403 or b"ChallengeRequired" in body:
                     raise ChallengeRequired("OpenReview asked for a browser check on this route") from exc
@@ -297,7 +302,7 @@ def review_schedule(stubs: list[dict[str, Any]], *, seed: int) -> list[dict[str,
 
 
 def _ratings_for(stub: dict[str, Any]) -> tuple[str, list[int], list[dict[str, Any]]]:
-    client = SearchClient(min_interval=0.0)
+    client = SearchClient(min_interval=0.4)
     invitation = f"{stub['group']}/Submission{stub['number']}/-/Official_Review"
     notes: list[dict[str, Any]] = []
     for term in ("rating", "the"):
@@ -320,6 +325,7 @@ def score_schedule(
     schedule: list[dict[str, Any]],
     *,
     workers: int,
+    fill_to_surplus: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Fetch official ratings until every stratum has a PDF-failure surplus."""
     scored_path = cache / "pool" / "scored.json"
@@ -343,7 +349,7 @@ def score_schedule(
                 counts[name] += 1
         return all(counts[name] >= targets[name] for name in targets)
 
-    if pending and not _filled(scored):
+    if pending and not (fill_to_surplus and _filled(scored)):
         batch: list[dict[str, Any]] = []
         for stub in pending:
             batch.append(stub)
@@ -353,9 +359,9 @@ def score_schedule(
             _write_json(scored_path, scored)
             _print_strata(scored)
             batch = []
-            if _filled(scored):
+            if fill_to_surplus and _filled(scored):
                 break
-        if batch and not _filled(scored):
+        if batch and not (fill_to_surplus and _filled(scored)):
             _score_batch(batch, scored, notes_dir, workers)
             _write_json(scored_path, scored)
             _print_strata(scored)
@@ -466,6 +472,9 @@ def _strata_filled(scored: dict[str, dict[str, Any]]) -> bool:
 
 def materialize(cache: Path, scored: dict[str, dict[str, Any]], *, seed: int) -> dict[str, Any]:
     """Walk the stratified order and keep a paper when its text extracts."""
+    import socket
+
+    socket.setdefaulttimeout(45)
     selection = select_benchmark(candidates_from_scored(scored), seed=seed)
     order: list[Candidate] = []
     for name, _low, _high, _quota in _stratum_table():
@@ -565,6 +574,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--phase", choices=("all", "pool", "materialize"), default="all")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument(
+        "--extend-rejected",
+        type=int,
+        default=0,
+        help="score this many additional rejected submissions past the surplus stop",
+    )
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
     cache.mkdir(parents=True, exist_ok=True)
@@ -588,6 +603,18 @@ def main(argv: list[str] | None = None) -> int:
             rng.shuffle(extra)
             print(f"extending review sample by {len(extra)}", file=sys.stderr)
             score_schedule(cache, extra, workers=args.workers)
+    if args.extend_rejected:
+        stubs = collect_stubs(cache, SearchClient())
+        scored_now = _read_json(cache / "pool" / "scored.json")
+        rejected = [
+            stub
+            for stub in stubs
+            if stub["kind"] == "rejected" and stub["forum_id"] not in scored_now
+        ]
+        rng = random.Random(f"{args.seed}:extend-rejected")
+        rng.shuffle(rejected)
+        print(f"scoring {args.extend_rejected} more rejected submissions", file=sys.stderr)
+        score_schedule(cache, rejected[: args.extend_rejected], workers=args.workers, fill_to_surplus=False)
     if args.phase in {"all", "materialize"}:
         scored = _read_json(cache / "pool" / "scored.json")
         materialize(cache, scored, seed=args.seed)

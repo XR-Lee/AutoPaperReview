@@ -86,10 +86,10 @@ Clause advice, aligned with `sar_bands_v1` once that rubric is on the branch tha
 | Neighbors are present, but the comparison is unfair or off-task | `pw-6`, `es-4` |
 | Privileged input or a different task | `es-4` and `unfair_baseline` |
 
-Cap signals use coefficient set `apr-iclr-cap-v1` and do not themselves write a score:
+Cap signals use coefficient set `apr-iclr-cap-v2` and do not themselves write a score:
 
 - `unfair_baseline`: venue cap **5**, `experimental_soundness` ceiling 4. The search emits a blocking, decision-relevant issue with that `fatal_class`. `active_caps()` already applies the cap. A verified candidate is not required. Privileged inputs such as ground-truth scale, or a baseline that solves a different task, are enough when they are in the manuscript's own experiment lines.
-- `missing_closest_neighbor`: venue cap **6**, `prior_work_contextualization` ceiling 2, `originality` ceiling 4. `FatalClass.missing_closest_neighbor` is on `apr-iclr-cap-v1`, so this flaw does not share the cap-5 bin rule with `unfair_baseline`.
+- `missing_closest_neighbor`: venue cap **6**, `prior_work_contextualization` ceiling 2, `originality` ceiling 4. `FatalClass.missing_closest_neighbor` is on `apr-iclr-cap-v2`, so this flaw does not share the cap-5 bin rule with `unfair_baseline`.
 
 Cap 6 is the next ICLR bin above the unfair-baseline cap. `preview_venue_bin` is only a separation check. `rate_venue()` is the only writer of `OverallScore`. When both caps are active, the effective cap is the minimum (5).
 
