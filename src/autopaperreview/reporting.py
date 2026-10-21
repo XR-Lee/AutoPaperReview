@@ -27,6 +27,7 @@ from .readability import (
     intent_heading,
     issue_quote,
 )
+from .related_work import render_related_work_section
 from .status_notes import ClassifiedNote, StatusNote, classify_status_note
 
 
@@ -68,6 +69,7 @@ SECTION_ZH = {
     "Investigation Agenda": "核查议程",
     "Integrity": "完整性核验",
     "Novelty": "新颖性",
+    "Related Work": "相关工作",
     "Evidence Catalog": "证据目录",
     "Appendix": "附录",
     "Format and Visual Checks": "版式与视觉检查",
@@ -511,6 +513,13 @@ def _render_audit(package: ReviewPackage, languages: Sequence[str]) -> list[str]
     return lines
 
 
+def _render_related_work(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    raw = package.metadata.get("related_work")
+    if not raw:
+        return []
+    return render_related_work_section(raw, languages)
+
+
 def _heading(title: str, languages: Sequence[str]) -> str:
     chinese = SECTION_ZH.get(title)
     if len(languages) == 1 or not chinese:
@@ -799,6 +808,8 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
                 lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
 
+    lines.extend(_render_related_work(package, [language]))
+
     if package.evidence:
         lines.extend(["## Appendix", ""])
         lines.extend(_render_evidence_catalog(package))
@@ -994,6 +1005,8 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             if excerpt:
                 lines.append(f"  Excerpt: {excerpt}")
         lines.append("")
+
+    lines.extend(_render_related_work(package, languages))
 
     if package.evidence:
         lines.extend([_heading("Appendix", languages), ""])

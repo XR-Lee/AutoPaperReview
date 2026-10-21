@@ -708,6 +708,20 @@ class ConsensusStage(StageHandler):
                 seen_risks.add(key)
                 residual_risks.append(risk)
 
+        metadata = {
+            **first.metadata,
+            "consensus_rule": "exact-normalized-v1",
+            "input_package_count": len(packages),
+        }
+        related_payloads = [
+            package.metadata["related_work"]
+            for package in packages
+            if package.metadata.get("related_work")
+        ]
+        if len({hash_json(item) for item in related_payloads}) > 1:
+            raise ValueError("conflicting related_work judgments")
+        if related_payloads:
+            metadata["related_work"] = related_payloads[0]
         output = ReviewPackage(
             project_id=first.project_id,
             manuscript=context.manifest.source,
@@ -733,11 +747,7 @@ class ConsensusStage(StageHandler):
             cap_exemptions=list(exemption_by_id.values()),
             visual_findings=list(visual_by_id.values()),
             format_checks=list(format_by_id.values()),
-            metadata={
-                **first.metadata,
-                "consensus_rule": "exact-normalized-v1",
-                "input_package_count": len(packages),
-            },
+            metadata=metadata,
         )
         output = apply_contribution_audits(output)
         output_path = context.stage_dir / "consensus.json"
@@ -1344,6 +1354,8 @@ class ExecuteReviewStage(StageHandler):
         )
 
 
+from .related_work_stage import RelatedWorkSearchStage
+
 BUILTIN_STAGE_HANDLERS = (
     IngestStage,
     CommandStage,
@@ -1357,5 +1369,6 @@ BUILTIN_STAGE_HANDLERS = (
     NoveltyStage,
     ExecuteReviewStage,
     ConsensusStage,
+    RelatedWorkSearchStage,
     ReportStage,
 )

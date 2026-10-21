@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added `related_work_search` (pending PR #12). Before novelty or prior-work scores, the stage derives the task, inputs, outputs, assumptions, and setting, then builds keyword queries for the same problem, the same technique, alternative formulations, standard baselines, and adjacent tasks. Manuscript text is not sent to a provider.
+- Live retrieval uses the arXiv API, OpenAlex, and Semantic Scholar, and logs offline or rate-limited providers without inventing papers. Agent mode reads a findings drop and keeps a candidate only when the provider payload resolves the same id and title.
+- Candidates record venue, year, link, a one-line summary, whether the bibliography cites them, and whether they are prior, concurrent, or undated relative to the venue submission deadline. Tiers are must-compare, should-discuss, and optional.
+- Experiment comparison flags missing must-compare baselines, privileged inputs such as ground-truth scale, and baselines that solve a different task. Clause advice and cap signals follow `apr-iclr-cap-v1` (`unfair_baseline` at 5, `missing_closest_neighbor` at 6) so those flaws do not collapse to one bin. The stage does not write an overall score.
+- Reports gain a bilingual Related Work section, and the stage writes `related_work.md` with suggested weakness and rebuttal sentences.
+- Venue deadline sidecars: ICLR 2027 abstract 2026-09-18 and submission 2026-09-25; AAAI-27 abstract 2026-07-21 and submission 2026-07-28. See [related-work search](docs/related-work-search.md).
 - Added a public-repo confidentiality policy ([CONFIDENTIALITY.md](CONFIDENTIALITY.md), [AGENTS.md](AGENTS.md)) and a tracked-file check that rejects review work directories, document and image files outside an allowlist, submission-id patterns, and SHA-256 digests of blocked strings.
 - Replaced contribution-list fixtures with synthetic sentences.
 

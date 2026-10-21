@@ -1,0 +1,12 @@
+{
+  "id": "aaai-2027-main-technical",
+  "venue": "AAAI",
+  "year": 2027,
+  "profile_key": "aaai2027",
+  "source": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+  "abstract_deadline": "2026-07-21",
+  "submission_deadline": "2026-07-28",
+  "deadline_timezone": "Anywhere on Earth",
+  "pinned": "2026-10-21",
+  "notes": "AAAI-27 main technical track timetable: abstracts due 2026-07-21 AOE and full papers due 2026-07-28 AOE. Concurrent-work checks use submission_deadline (the full-paper deadline). Format-check keys belong on the visual profile and are not duplicated in this sidecar."
+}

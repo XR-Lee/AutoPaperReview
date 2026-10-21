@@ -19,6 +19,7 @@ Rules:
 - Distinguish abstract-only snapshots from full-text summaries. Do not treat a search snippet as final evidence.
 - Figure-backed claims (qualitative examples, trade-off plots, robot photos, architecture cartoons) require PDF page inspection. A caption restated from manuscript.txt is not evidence that the figure was read.
 - Listed contributions are the audit units. Score claims_supported, originality, and prior_work_contextualization per contribution, not as a single paper-level paragraph.
+- Score prior_work_contextualization and originality only after the related-work search. Do not score those clauses from the bibliography alone. Use pw-2 when a verified must-compare neighbor is missing, es-4 and unfair_baseline when a baseline has privileged inputs or solves a different task, and do not treat post-deadline papers as required.
 - Return schema-valid ReviewClaim, DimensionScore, RelatedWorkQuery, and ReviewIssue records. Do not return free-form prose as the only result.
 
 ## Anchored bands and fatal classes

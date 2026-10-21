@@ -1049,7 +1049,11 @@
         "baselines",
         "same_problem",
         "related_techniques",
-        "agenda"
+        "agenda",
+        "same_technique",
+        "alternative_formulation",
+        "standard_baselines",
+        "adjacent_tasks"
       ],
       "title": "QueryPerspective",
       "type": "string"

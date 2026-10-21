@@ -68,6 +68,7 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `LedgerClaim` / `AgendaQuestion` | Manuscript-only claim–evidence–risk ledger and investigation agenda. |
 | `IntegrityRecord` | Artifact-aware reference, results, and reproducibility checks. |
 | `NoveltyAssessment` | Matched-setting novelty tag. Overlap evidence requires the same task, dataset, and metric. |
+| Venue deadline profile | Abstract and submission deadlines used to flag post-deadline papers as concurrent. Sidecar JSON under `profiles/*.deadlines.json`, merged onto a format profile when one exists. |
 | `ReviewClaim` | SAR-shaped summary/strength/weakness/question/comment text that must cite evidence IDs. |
 | `StageRecord` | Stage signature, status, attempt number, outputs, timestamps, metadata, and error. |
 | `RunManifest` | Source/config identity, immutable configuration-snapshot artifact, framework version, policy, stages, and run lifecycle. |
@@ -116,6 +117,7 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `workspace_inspect` | Read-only inventory of declared workspace paths. Refuses path escape. |
 | `integrity` | Reference, results, and reproducibility records from snapshots and workspace files. |
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
+| `related_work_search` | Pending PR #12. Derives the problem formulation, builds keyword-only queries across five families, and keeps a paper only when a provider payload resolves its id and title. Compares must-compare work with the experiments and records clause and cap signals for later rating. Writes `related_work.md`. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, plus one same-problem and one related-technique query per listed contribution. Optionally attaches a snapshot fixture or a declared retriever. Live retrieval requires a network declaration. |
 | `render_pages` | Optional `visual` extra. Rasterizes each PDF page to a hashed PNG and a manifest. Fails closed when a visual route is enabled and the sibling PDF is missing. |

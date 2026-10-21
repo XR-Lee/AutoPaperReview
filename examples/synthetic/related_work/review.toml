@@ -1,0 +1,32 @@
+schema_version = 1
+
+[project]
+id = "synthetic-related-work"
+title = "Synthetic related-work search"
+source = "manuscript.txt"
+run_root = ".runs"
+default_language = "en"
+network_policy = "deny"
+copy_source = false
+
+[[stages]]
+id = "ingest"
+type = "ingest"
+
+[[stages]]
+id = "related_work"
+type = "related_work_search"
+depends_on = ["ingest"]
+[stages.params]
+venue = "iclr2027"
+mode = "agent"
+findings_path = "findings.json"
+requires_network = false
+network_scope = "metadata"
+
+[[stages]]
+id = "report"
+type = "report"
+depends_on = ["related_work"]
+[stages.params]
+bilingual = true

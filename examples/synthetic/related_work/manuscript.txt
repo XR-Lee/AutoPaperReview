@@ -1,0 +1,31 @@
+Title: ZephyrCodename Specimen Tracker
+
+Abstract
+We introduce ZephyrCodename, a tracker that reports 95 percent pose accuracy on the private ZephyrBench split. This abstract sentence must stay on the manuscript.
+
+Problem
+Task: monocular specimen pose estimation
+Inputs: monocular RGB frames
+Outputs: a 6-DoF pose trajectory
+Assumptions: rigid specimen; known camera intrinsics
+Setting: offline evaluation with a sequence-level holdout and pose error in millimeters
+Technique: temporal fusion
+Extra modality: depth
+Sub-problem: single-frame pose estimation
+Adjacent tasks: object tracking; camera localization
+
+Contributions
+(1) We define a sequence-level holdout for monocular specimen pose so that frames from one specimen do not leak into training.
+(2) We add a temporal fusion module on top of a public single-frame pose estimator.
+(3) We report pose error in millimeters on the holdout split.
+
+Experiments
+Decision metric: pose error in millimeters
+Compared baselines: Flat Image Classifier
+Privileged baselines: Scale Oracle | given ground-truth scale
+Different-task baselines: Flat Image Classifier | solves image classification rather than pose error
+The Scale Oracle baseline is given ground-truth scale.
+
+References
+[1] A. Public, "A Public Baseline for Synthetic Pose Estimation," Synthetic Vision Workshop, 2022. doi:10.0000/synthetic.pose.2022
+[2] B. Neighbor, "Depth Aware Pose Estimator," arXiv:0000.00002, 2023.

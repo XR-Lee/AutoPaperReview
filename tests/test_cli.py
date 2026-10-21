@@ -67,6 +67,7 @@ class CliTests(unittest.TestCase):
                 "novelty",
                 "prompt_packet",
                 "rate",
+                "related_work_search",
                 "render_pages",
                 "report",
                 "visual_inspect",

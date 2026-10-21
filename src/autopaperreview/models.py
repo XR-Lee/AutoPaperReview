@@ -101,6 +101,10 @@ class QueryPerspective(str, Enum):
     same_problem = "same_problem"
     related_techniques = "related_techniques"
     agenda = "agenda"
+    same_technique = "same_technique"
+    alternative_formulation = "alternative_formulation"
+    standard_baselines = "standard_baselines"
+    adjacent_tasks = "adjacent_tasks"
 
 
 class AnchorKind(str, Enum):
