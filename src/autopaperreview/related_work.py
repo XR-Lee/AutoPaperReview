@@ -8,8 +8,10 @@ Cap numbers follow ``apr-iclr-cap-v1``. ``unfair_baseline`` is venue cap 5
 with an experimental-soundness ceiling of 4. ``missing_closest_neighbor`` is
 venue cap 6 with a prior-work ceiling of 2 and an originality ceiling of 4.
 This module does not write ``OverallScore``. It emits blocking issues that
-``rate_venue()`` reads through ``active_caps()``. A degraded search emits no
-cap. See ``docs/related-work-search.md``.
+``rate_venue()`` reads through ``active_caps()``. A degraded search, including
+a search where every provider failed, emits no cap. A partial outage can emit
+``missing_closest_neighbor`` only from a provider that succeeded. See
+``docs/related-work-search.md``.
 """
 
 from __future__ import annotations
@@ -77,11 +79,17 @@ INTEGRATION_NOTE = (
     "experimental_soundness ceiling of 4 (clause es-4). "
     "fatal_class missing_closest_neighbor uses venue cap 6, "
     "prior_work_contextualization ceiling 2 (pw-2), and originality ceiling 4 (or-4). "
-    "Only a verified candidate dated on or before the venue deadline can support a cap. "
-    "Concurrent work is discussion only. status=degraded emits no cap and must not lower "
-    "the score. rate_venue() remains the only writer of OverallScore. Agent mode follows "
-    "AgentFindingsInspector: the host writes a JSON drop after it runs the search, and a "
-    "candidate is kept only when its provider payload parses to the same id and title."
+    "Only a verified candidate dated on or before the venue deadline can support "
+    "missing_closest_neighbor. unfair_baseline may cap at 5 from the manuscript's own "
+    "experiment lines without a verified candidate, and it always cites the manuscript "
+    "baseline anchor. Concurrent work is discussion only. status=degraded (every provider "
+    "failed, a timeout, or no provider) emits no cap and must not lower the score. "
+    "status=partial lists the failed providers and may emit missing_closest_neighbor "
+    "only for a neighbour verified by a provider that succeeded. A failed provider never "
+    "creates or strengthens a cap. rate_venue() remains the only writer of OverallScore. "
+    "Agent mode follows AgentFindingsInspector: the host writes a JSON drop after it "
+    "runs the search, and a candidate is kept only when its provider payload parses to "
+    "the same id and title."
 )
 
 _STOP = frozenset(
@@ -144,7 +152,7 @@ _LABEL_KEYS = {
 
 DateRelation = Literal["prior", "concurrent", "unknown"]
 CandidateTier = Literal["must-compare", "should-discuss", "optional"]
-SearchStatus = Literal["complete", "degraded", "not_run"]
+SearchStatus = Literal["complete", "partial", "degraded", "not_run"]
 LogStatus = Literal[
     "ok",
     "offline",
@@ -214,6 +222,7 @@ class RelatedCandidate(Strict):
     tier: CandidateTier
     reason_en: str
     reason_zh: str
+    provider: str = ""
     query_ids: list[str] = Field(default_factory=list)
 
 
@@ -265,6 +274,7 @@ class RelatedWorkJudgment(Strict):
     submission_deadline: str
     decision_metric: str | None = None
     status: SearchStatus
+    failed_providers: list[str] = Field(default_factory=list)
     integration: str = INTEGRATION_NOTE
 
 
@@ -681,6 +691,7 @@ def build_candidate(
         tier=tier,
         reason_en=reason_en,
         reason_zh=reason_zh,
+        provider=hit.provider,
         query_ids=list(dict.fromkeys(hit.query_ids)),
     )
 
@@ -838,6 +849,47 @@ def _eligible_cap_candidate(candidate: RelatedCandidate) -> bool:
     return bool(candidate.external_id) and candidate.date_relation == "prior" and candidate.required
 
 
+def _provider_sets(logs: Sequence[RetrievalLogEntry]) -> tuple[list[str], list[str]]:
+    """Providers that logged a success, and providers that logged a failure.
+
+    ``agent`` and ``local`` are not external providers. A provider that returned
+    records and later failed is in both lists: the verified records can support
+    a cap, and the provider is still reported as failed.
+    """
+    successful: list[str] = []
+    failed: list[str] = []
+    for entry in logs:
+        if entry.provider in {"local", "agent"}:
+            continue
+        if entry.status == "ok":
+            if entry.provider not in successful:
+                successful.append(entry.provider)
+        elif entry.status in _DEGRADED_LOGS and entry.provider not in failed:
+            failed.append(entry.provider)
+    return successful, failed
+
+
+def _missing_neighbor_allowed(
+    candidate: RelatedCandidate,
+    *,
+    status: SearchStatus,
+    successful_providers: set[str],
+) -> bool:
+    if not _eligible_cap_candidate(candidate):
+        return False
+    if status == "complete":
+        return True
+    if status != "partial":
+        return False
+    return bool(candidate.provider) and candidate.provider in successful_providers
+
+
+def manuscript_anchor_resolves(excerpt: str) -> bool:
+    """A manuscript cap anchor is a non-empty quote of the paper's own lines."""
+    text = excerpt.strip()
+    return bool(text) and not text.startswith("No labeled baseline")
+
+
 def _cap_evidence_ids(candidate_ids: Sequence[str]) -> list[str]:
     return [
         MANUSCRIPT_BASELINE_EVIDENCE_ID,
@@ -850,10 +902,18 @@ def build_cap_signals(
     gaps: Sequence[BaselineGap],
     status: SearchStatus,
     candidates: Sequence[RelatedCandidate] = (),
+    logs: Sequence[RetrievalLogEntry] = (),
 ) -> list[CapSignal]:
-    """Emit caps only after a completed search. Degraded and not-run emit none."""
-    if status != "complete":
+    """Emit caps from a complete search, or a missing-neighbor cap from a partial one.
+
+    ``unfair_baseline`` is manuscript evidence and still requires every provider
+    to have succeeded. A failed provider never adds that stronger cap.
+    ``missing_closest_neighbor`` on a partial search cites only a candidate
+    verified by a provider that logged success.
+    """
+    if status not in {"complete", "partial"}:
         return []
+    successful = set(_provider_sets(logs)[0])
     by_id = {item.id: item for item in candidates}
     signals: list[CapSignal] = []
     missing_ids: list[str] = []
@@ -861,7 +921,11 @@ def build_cap_signals(
         if gap.kind != "missing_baseline" or not gap.candidate_id:
             continue
         candidate = by_id.get(gap.candidate_id)
-        if candidate is None or not _eligible_cap_candidate(candidate):
+        if candidate is None or not _missing_neighbor_allowed(
+            candidate,
+            status=status,
+            successful_providers=successful,
+        ):
             continue
         missing_ids.append(candidate.id)
     unfair = [gap for gap in gaps if gap.kind in {"privileged_baseline", "different_task"}]
@@ -885,7 +949,7 @@ def build_cap_signals(
                 evidence_ids=_cap_evidence_ids(missing_ids),
             )
         )
-    if unfair:
+    if unfair and status == "complete":
         matched: list[str] = []
         for gap in unfair:
             for candidate in candidates:
@@ -971,14 +1035,63 @@ def manuscript_baseline_records(
     return source, evidence
 
 
+def related_work_cap_applies(judgment: RelatedWorkJudgment, issue: ReviewIssue) -> bool:
+    """Whether ``rate`` should keep a related-work cap for this search status.
+
+    A failed provider cannot create or strengthen a cap. On a partial search the
+    only cap that applies is ``missing_closest_neighbor``, and every cited
+    candidate must have been verified by a provider that logged success.
+    """
+    if issue.metadata.get("source") != "related_work_search":
+        return True
+    if issue.fatal_class == FatalClass.unfair_baseline:
+        if judgment.status != "complete":
+            return False
+        if MANUSCRIPT_BASELINE_EVIDENCE_ID not in issue.evidence_ids:
+            return False
+        excerpt = issue.anchor.excerpt if issue.anchor is not None else ""
+        return manuscript_anchor_resolves(excerpt or "")
+    if judgment.status == "complete":
+        return True
+    if judgment.status != "partial":
+        return False
+    if issue.fatal_class != FatalClass.missing_closest_neighbor:
+        return False
+    candidate_ids = issue.metadata.get("candidate_ids") or []
+    if not isinstance(candidate_ids, list) or not candidate_ids:
+        return False
+    successful = set(_provider_sets(judgment.logs)[0])
+    by_id = {item.id: item for item in judgment.candidates}
+    for candidate_id in candidate_ids:
+        if not isinstance(candidate_id, str):
+            return False
+        candidate = by_id.get(candidate_id)
+        if candidate is None or not _missing_neighbor_allowed(
+            candidate,
+            status="partial",
+            successful_providers=successful,
+        ):
+            return False
+    return True
+
+
 def issues_from_cap_signals(
     judgment: RelatedWorkJudgment,
     *,
     anchor_excerpt: str,
 ) -> list[ReviewIssue]:
-    """Blocking issues for active_caps(). Empty unless the search completed."""
-    if judgment.status != "complete":
+    """Blocking issues for active_caps().
+
+    A complete search may emit both caps. A partial search may emit only
+    ``missing_closest_neighbor``. Degraded and not-run emit none.
+    ``unfair_baseline`` always requires a resolvable manuscript anchor and
+    never requires a verified candidate.
+    """
+    if judgment.status not in {"complete", "partial"}:
         return []
+    if not manuscript_anchor_resolves(anchor_excerpt):
+        return []
+    successful = set(_provider_sets(judgment.logs)[0])
     by_id = {item.id: item for item in judgment.candidates}
     anchor = Anchor(
         kind=AnchorKind.quote,
@@ -987,11 +1100,26 @@ def issues_from_cap_signals(
     )
     issues: list[ReviewIssue] = []
     for signal in judgment.cap_signals:
-        cited = [
-            by_id[candidate_id]
-            for candidate_id in signal.candidate_ids
-            if candidate_id in by_id and _eligible_cap_candidate(by_id[candidate_id])
-        ]
+        if signal.fatal_class == "unfair_baseline":
+            if judgment.status != "complete":
+                continue
+            if MANUSCRIPT_BASELINE_EVIDENCE_ID not in signal.evidence_ids:
+                continue
+        cited: list[RelatedCandidate] = []
+        for candidate_id in signal.candidate_ids:
+            candidate = by_id.get(candidate_id)
+            if candidate is None:
+                continue
+            if signal.fatal_class == "missing_closest_neighbor":
+                if not _missing_neighbor_allowed(
+                    candidate,
+                    status=judgment.status,
+                    successful_providers=successful,
+                ):
+                    continue
+            elif not _eligible_cap_candidate(candidate):
+                continue
+            cited.append(candidate)
         if signal.fatal_class == "missing_closest_neighbor" and not cited:
             continue
         evidence_ids = [MANUSCRIPT_BASELINE_EVIDENCE_ID]
@@ -1058,6 +1186,7 @@ def issues_from_cap_signals(
                     "venue_cap": signal.venue_cap,
                     "candidate_ids": [item.id for item in cited],
                     "candidate_external_ids": external_ids,
+                    "candidate_providers": [item.provider for item in cited],
                     "manuscript_anchor": MANUSCRIPT_BASELINE_EVIDENCE_ID,
                     "clause_ids": dict(signal.clause_ids),
                 },
@@ -1095,6 +1224,7 @@ def related_work_comparison(judgment: RelatedWorkJudgment | dict[str, Any] | Non
             "different_task": [gap.title for gap in record.gaps if gap.kind == "different_task"],
         },
         "closest_neighbours": neighbours,
+        "failed_providers": list(record.failed_providers),
     }
 
 
@@ -1661,10 +1791,21 @@ def _status_from(
     *,
     providers_available: bool = True,
 ) -> SearchStatus:
+    """Complete, partial, degraded, or not run.
+
+    Partial means at least one provider logged success and at least one logged
+    a failure. Every provider failing, or no provider being available, stays
+    degraded and must not produce a cap.
+    """
     if not searched:
         return "not_run"
     if not providers_available:
         return "degraded"
+    successful, failed = _provider_sets(logs)
+    if failed and not successful:
+        return "degraded"
+    if failed and successful:
+        return "partial"
     if any(entry.status in _DEGRADED_LOGS for entry in logs):
         return "degraded"
     return "complete" if mode in {"agent", "live"} else "not_run"
@@ -1771,11 +1912,12 @@ def run_related_work_search(
         searched and formulation.complete,
         providers_available=providers_available,
     )
+    _successful, failed_providers = _provider_sets(logs)
     gaps = compare_experiments(candidates, experiments) if formulation.complete else []
     if status == "not_run":
         gaps = [gap for gap in gaps if gap.kind != "missing_baseline"]
     advice = build_clause_advice(gaps=gaps, candidates=candidates, status=status)
-    signals = build_cap_signals(gaps=gaps, status=status, candidates=candidates)
+    signals = build_cap_signals(gaps=gaps, status=status, candidates=candidates, logs=logs)
     effective = min((signal.venue_cap for signal in signals), default=None)
     weakness_en, weakness_zh, rebuttal_en, rebuttal_zh = _suggested_text(
         formulation=formulation,
@@ -1801,6 +1943,7 @@ def run_related_work_search(
         submission_deadline=profile.submission_deadline.isoformat(),
         decision_metric=experiments.decision_metric,
         status=status,
+        failed_providers=failed_providers,
     )
 
 
@@ -1847,6 +1990,10 @@ def render_related_work_section(judgment: RelatedWorkJudgment | dict[str, Any], 
         f"检索式只用通用主题词。稿件正文没有发给外部服务。"
         f"投稿截止日：{record.submission_deadline}（{record.venue_profile}）。状态：{record.status}。"
     )
+    if record.status == "partial":
+        failed = ", ".join(record.failed_providers) if record.failed_providers else "none recorded"
+        search_en += f" Failed providers: {failed}. The search may be incomplete."
+        search_zh += f"失败的数据源：{failed}。检索可能不完整。"
     query_rows = [(query.id, f"{query.perspective.value}: {query.query}") for query in record.queries]
 
     def subsection(title_en: str, title_zh: str, en: str, zh: str) -> None:

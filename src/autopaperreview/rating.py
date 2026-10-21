@@ -141,24 +141,33 @@ def active_caps(package: ReviewPackage) -> list[ActiveCap]:
     return _drop_incomplete_related_work_caps(package, caps)
 
 
-def _related_work_status(package: ReviewPackage) -> str | None:
-    raw = package.metadata.get("related_work")
-    if not isinstance(raw, dict):
-        return None
-    status = raw.get("status")
-    return status if isinstance(status, str) else None
-
-
 def _drop_incomplete_related_work_caps(package: ReviewPackage, caps: list[ActiveCap]) -> list[ActiveCap]:
-    """A failed, timed-out, or unavailable search must not lower the score."""
-    if _related_work_status(package) == "complete":
-        return caps
+    """A failed provider must not create or strengthen a related-work cap.
+
+    ``complete`` keeps caps the search emitted. ``partial`` keeps only
+    ``missing_closest_neighbor`` verified by a provider that succeeded.
+    ``degraded`` and ``not_run`` drop every related-work cap.
+    """
     if "related_work" not in package.metadata:
         return caps
+    from pydantic import ValidationError
+
+    from .related_work import RelatedWorkJudgment, related_work_cap_applies
+
+    raw = package.metadata.get("related_work")
+    try:
+        judgment = RelatedWorkJudgment.model_validate(raw)
+    except ValidationError:
+        blocked = {
+            issue.id
+            for issue in package.issues
+            if issue.metadata.get("source") == "related_work_search"
+        }
+        return [cap for cap in caps if cap.record_id not in blocked]
     blocked = {
         issue.id
         for issue in package.issues
-        if issue.metadata.get("source") == "related_work_search"
+        if issue.metadata.get("source") == "related_work_search" and not related_work_cap_applies(judgment, issue)
     }
     return [cap for cap in caps if cap.record_id not in blocked]
 
@@ -256,6 +265,7 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
             if comparison is None
             else {
                 "status": comparison["status"],
+                "failed_providers": list(comparison.get("failed_providers") or []),
                 "baseline_counts": {
                     name: len(values) for name, values in comparison["baselines"].items()
                 },

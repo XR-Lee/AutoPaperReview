@@ -125,6 +125,7 @@ def _snapshots(
                 "date_relation": candidate.date_relation,
                 "required": candidate.required,
                 "external_id": candidate.external_id,
+                "provider": candidate.provider,
                 "venue": candidate.venue,
                 "year": candidate.year,
             },
@@ -167,7 +168,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "2"
+    version = "3"
     params_model = RelatedWorkSearchParams
 
     def _params(self, context: StageContext) -> RelatedWorkSearchParams:
@@ -257,6 +258,7 @@ class RelatedWorkSearchStage(StageHandler):
             ],
             metadata={
                 "status": judgment.status,
+                "failed_providers": list(judgment.failed_providers),
                 "candidate_count": len(judgment.candidates),
                 "query_count": len(judgment.queries),
                 "effective_venue_cap": judgment.effective_venue_cap,

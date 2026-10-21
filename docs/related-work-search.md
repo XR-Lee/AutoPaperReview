@@ -34,7 +34,7 @@ Public titles are not copied out of the manuscript. The host may search those ti
 
 ## Retrieval
 
-`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 or 503 stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. Other providers still run. A failed search, a timeout, or zero available providers sets `status=degraded`, invents no papers, and does not apply a cap.
+`mode = "live"` calls the arXiv API, OpenAlex, and Semantic Scholar for metadata only. It requires `requires_network = true` and a project network policy of `metadata_only` or `allow`. HTTP 429 or 503 stops that provider and is logged as `rate_limited`. A connection error is logged as `offline`. A read that exceeds the timeout is logged as `timeout`. Other providers still run. If every provider fails, or none are available, `status=degraded`, the search invents no papers, and it does not apply a cap. If at least one provider returns records and another fails, `status=partial`. The judgment lists `failed_providers`, and the report says the search may be incomplete.
 
 `mode = "agent"` is the host-in-the-loop path, shaped like `AgentFindingsInspector`: the host runs the queries, then drops `findings.json`. A candidate is kept only when `provider_payload` parses as arXiv Atom, OpenAlex, Semantic Scholar, or Crossref JSON and the parsed id and title match the drop. A title with no payload, or a payload whose title differs, is dropped and logged.
 
@@ -63,23 +63,24 @@ Clause advice, aligned with `sar_bands_v1` once that rubric is on the branch tha
 
 Cap signals use coefficient set `apr-iclr-cap-v1` and do not themselves write a score:
 
-- `unfair_baseline`: venue cap **5**, `experimental_soundness` ceiling 4. The search emits a blocking, decision-relevant issue with that `fatal_class`. `active_caps()` already applies the cap.
+- `unfair_baseline`: venue cap **5**, `experimental_soundness` ceiling 4. The search emits a blocking, decision-relevant issue with that `fatal_class`. `active_caps()` already applies the cap. A verified candidate is not required. Privileged inputs such as ground-truth scale, or a baseline that solves a different task, are enough when they are in the manuscript's own experiment lines.
 - `missing_closest_neighbor`: venue cap **6**, `prior_work_contextualization` ceiling 2, `originality` ceiling 4. `FatalClass.missing_closest_neighbor` is on `apr-iclr-cap-v1`, so this flaw does not share the cap-5 bin rule with `unfair_baseline`.
 
 Cap 6 is the next ICLR bin above the unfair-baseline cap. `preview_venue_bin` is only a separation check. `rate_venue()` is the only writer of `OverallScore`. When both caps are active, the effective cap is the minimum (5).
 
-A cap is emitted only when the search status is `complete` and the supporting candidate is verified and dated on or before the venue submission deadline. Concurrent work (after the deadline) and an undated record stay in the discussion. They do not become required baselines and they do not cite a cap.
+`missing_closest_neighbor` requires a verified candidate dated on or before the venue submission deadline. Concurrent work (after the deadline) and an undated record stay in the discussion. They do not become required baselines and they do not cite a cap.
 
-Each cap issue cites two evidence records:
+`unfair_baseline` is emitted on a completed search and always cites the manuscript anchor `E-manuscript-baselines`, a quote of the paper's own Experiments and References lines. That anchor has to resolve: the issue's evidence id is that record, and the quote is the paper's baseline text rather than an empty or unlabeled placeholder. It also cites a verified prior candidate when the baseline name matches one. A missing-neighbor cap cites the same manuscript anchor plus each verified prior candidate (external id, venue, year, and date relation), and it is dropped if it has no verified prior candidate.
 
-- the verified candidate, including its external id, venue, year, and date relation
-- the manuscript anchor `E-manuscript-baselines`, a quote of the paper's own Experiments and References lines
+### Partial outage
 
-`unfair_baseline` always cites that manuscript anchor. It also cites a verified prior candidate when the baseline name matches one. A missing-neighbor cap is dropped if it has no verified prior candidate.
+`status=partial` means at least one provider logged success and at least one logged `offline`, `rate_limited`, `http_error`, or `timeout`. `failed_providers` lists the providers that failed. The Related Work section says the search may be incomplete, in English and in Simplified Chinese.
+
+A partial search may emit `missing_closest_neighbor` (cap 6) when a provider that succeeded verified a must-compare paper dated on or before the deadline and that paper is absent from the baselines. It does not emit `unfair_baseline`. A provider that only failed contributes no candidate and cannot lower the venue cap further. `rate` drops a related-work cap on a partial package unless it is that missing-neighbor cap and every cited candidate was verified by a successful provider.
 
 ### Degraded search
 
-A provider failure, HTTP 429 or 503, a timeout, or zero providers available sets `status=degraded`. The judgment still records whatever was verified, and the report can discuss it. `build_cap_signals` returns no signals, the stage writes no fatal issues, and `rate` ignores any related-work cap whose search status is not `complete`. The score does not drop because the search failed.
+If every requested provider fails, a provider times out before returning records, or zero providers are available, `status=degraded`. The judgment can still discuss manuscript baseline lines, and it lists whichever providers failed. `build_cap_signals` returns no signals, the stage writes no fatal issues, and `rate` ignores any related-work cap. The score does not drop because the search failed. A failed provider never creates or strengthens a cap by itself.
 
 ### Scoring order
 

@@ -23,11 +23,15 @@ from autopaperreview.models import (
 from autopaperreview.rating import rate_venue
 from autopaperreview.related_work import (
     MANUSCRIPT_BASELINE_EVIDENCE_ID,
+    BaselineGap,
     CapSignal,
     HttpResult,
+    RelatedCandidate,
     RetrievalFailure,
+    RetrievalLogEntry,
     allow_tokens,
     assert_outbound_safe,
+    build_cap_signals,
     classify_date,
     derive_formulation,
     evidence_id_for_candidate,
@@ -38,6 +42,7 @@ from autopaperreview.related_work import (
     manuscript_baseline_records,
     parse_bibliography,
     preview_venue_bin,
+    render_related_work_section,
     run_related_work_search,
 )
 from tests.support import make_artifact
@@ -227,7 +232,7 @@ class AgentAndLiveTests(unittest.TestCase):
         self.assertTrue(judgment.rebuttal_zh)
         self.assertEqual(judgment.status, "complete")
 
-    def test_live_search_degrades_and_never_sends_manuscript_text(self) -> None:
+    def test_partial_outage_caps_a_verified_neighbor_and_never_sends_manuscript_text(self) -> None:
         seen: list[str] = []
         atom = textwrap.dedent(
             """\
@@ -268,11 +273,34 @@ class AgentAndLiveTests(unittest.TestCase):
         warning = "\n".join(logs.output)
         self.assertIn("rate_limited", warning)
         self.assertIn("offline", warning)
-        self.assertEqual(judgment.status, "degraded")
-        self.assertEqual(judgment.cap_signals, [])
-        self.assertIsNone(judgment.effective_venue_cap)
-        self.assertTrue(any(item.title.startswith("A Public Baseline") for item in judgment.candidates))
+        self.assertEqual(judgment.status, "partial")
+        self.assertEqual(judgment.failed_providers, ["openalex", "semantic_scholar"])
+        self.assertNotIn("arxiv", judgment.failed_providers)
+        verified = next(item for item in judgment.candidates if item.title.startswith("A Public Baseline"))
+        self.assertEqual(verified.provider, "arxiv")
+        self.assertTrue(verified.required)
+        self.assertEqual(verified.date_relation, "prior")
+        classes = {signal.fatal_class: signal for signal in judgment.cap_signals}
+        self.assertEqual(set(classes), {"missing_closest_neighbor"})
+        missing = classes["missing_closest_neighbor"]
+        self.assertEqual(missing.venue_cap, 6)
+        self.assertEqual(missing.candidate_ids, [verified.id])
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, missing.evidence_ids)
+        self.assertIn(evidence_id_for_candidate(verified.id), missing.evidence_ids)
+        self.assertEqual(judgment.effective_venue_cap, 6)
         self.assertTrue(any(item.cited for item in judgment.candidates))
+        report = "\n".join(render_related_work_section(judgment, ["en", "zh-Hans"]))
+        self.assertIn("Status: partial.", report)
+        self.assertIn("Failed providers: openalex, semantic_scholar.", report)
+        self.assertIn("The search may be incomplete.", report)
+        self.assertIn("失败的数据源：openalex, semantic_scholar。", report)
+        self.assertIn("检索可能不完整。", report)
+        issues = issues_from_cap_signals(
+            judgment,
+            anchor_excerpt=manuscript_baseline_excerpt(MANUSCRIPT),
+        )
+        self.assertEqual([issue.fatal_class for issue in issues], [FatalClass.missing_closest_neighbor])
+        self.assertEqual(issues[0].metadata["candidate_providers"], ["arxiv"])
 
     def test_timeout_and_zero_providers_emit_no_cap(self) -> None:
         def timeout(url: str) -> HttpResult:
@@ -286,9 +314,12 @@ class AgentAndLiveTests(unittest.TestCase):
             providers=["arxiv"],
         )
         self.assertEqual(timed.status, "degraded")
+        self.assertEqual(timed.failed_providers, ["arxiv"])
         self.assertEqual(timed.cap_signals, [])
         self.assertIsNone(timed.effective_venue_cap)
         self.assertTrue(any(entry.status == "timeout" for entry in timed.logs))
+        timed_report = "\n".join(render_related_work_section(timed, ["en"]))
+        self.assertNotIn("may be incomplete", timed_report)
 
         def unused(url: str) -> HttpResult:
             raise AssertionError(url)
@@ -301,6 +332,7 @@ class AgentAndLiveTests(unittest.TestCase):
             providers=[],
         )
         self.assertEqual(empty.status, "degraded")
+        self.assertEqual(empty.failed_providers, [])
         self.assertEqual(empty.cap_signals, [])
         self.assertTrue(any("zero providers" in entry.detail for entry in empty.logs))
 
@@ -412,8 +444,14 @@ class CapWiringTests(unittest.TestCase):
         by_class = {issue.fatal_class: issue for issue in issues}
         self.assertEqual(set(by_class), {FatalClass.missing_closest_neighbor, FatalClass.unfair_baseline})
         missing = by_class[FatalClass.missing_closest_neighbor]
+        unfair = by_class[FatalClass.unfair_baseline]
         self.assertTrue(missing.decision_relevant)
         self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, missing.evidence_ids)
+        self.assertEqual(unfair.metadata["manuscript_anchor"], MANUSCRIPT_BASELINE_EVIDENCE_ID)
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, unfair.evidence_ids)
+        self.assertIsNotNone(unfair.anchor)
+        self.assertIn("ground-truth scale", (unfair.anchor.excerpt or "").lower())
+        self.assertIn("Scale Oracle", unfair.anchor.excerpt or "")
         self.assertGreaterEqual(len(missing.evidence_ids), 2)
         self.assertIsNotNone(missing.anchor)
         self.assertIn("Compared baselines", missing.anchor.excerpt or "")
@@ -468,6 +506,218 @@ class CapWiringTests(unittest.TestCase):
         self.assertEqual(scored.value, 8)
         self.assertEqual(scored.metadata["cap_ids"], [])
         self.assertEqual(scored.metadata["related_work_comparison"]["status"], "degraded")
+        self.assertEqual(scored.metadata["related_work_comparison"]["failed_providers"], ["arxiv", "openalex"])
+
+    def test_unfair_baseline_cites_a_manuscript_anchor_without_a_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            findings = Path(temporary) / "findings.json"
+            findings.write_text('{"candidates": []}\n', encoding="utf-8")
+            judgment = run_related_work_search(
+                MANUSCRIPT,
+                mode="agent",
+                findings_path=findings,
+                allow_network=False,
+            )
+        self.assertEqual(judgment.status, "complete")
+        self.assertEqual(judgment.candidates, [])
+        self.assertEqual(judgment.failed_providers, [])
+        self.assertEqual([signal.fatal_class for signal in judgment.cap_signals], ["unfair_baseline"])
+        signal = judgment.cap_signals[0]
+        self.assertEqual(signal.venue_cap, 5)
+        self.assertEqual(signal.candidate_ids, [])
+        self.assertEqual(signal.evidence_ids, [MANUSCRIPT_BASELINE_EVIDENCE_ID])
+        excerpt = manuscript_baseline_excerpt(MANUSCRIPT)
+        self.assertIn("ground-truth scale", excerpt.lower())
+        self.assertIn("Scale Oracle", excerpt)
+        self.assertIn("image classification", excerpt.lower())
+        issues = issues_from_cap_signals(judgment, anchor_excerpt=excerpt)
+        self.assertEqual(len(issues), 1)
+        issue = issues[0]
+        self.assertEqual(issue.fatal_class, FatalClass.unfair_baseline)
+        self.assertEqual(issue.evidence_ids, [MANUSCRIPT_BASELINE_EVIDENCE_ID])
+        self.assertEqual(issue.metadata["candidate_ids"], [])
+        self.assertEqual(issue.metadata["manuscript_anchor"], MANUSCRIPT_BASELINE_EVIDENCE_ID)
+        self.assertIsNotNone(issue.anchor)
+        self.assertEqual(issue.anchor.display, "Experiments / References")
+        self.assertEqual(issue.anchor.excerpt, excerpt)
+        self.assertEqual(issues_from_cap_signals(judgment, anchor_excerpt=""), [])
+        self.assertEqual(
+            issues_from_cap_signals(
+                judgment,
+                anchor_excerpt="No labeled baseline or related-work lines were found.",
+            ),
+            [],
+        )
+        unanchored = judgment.model_copy(
+            update={
+                "cap_signals": [signal.model_copy(update={"evidence_ids": []})],
+            }
+        )
+        self.assertEqual(issues_from_cap_signals(unanchored, anchor_excerpt=excerpt), [])
+        source, evidence = manuscript_baseline_records(
+            MANUSCRIPT,
+            sha256=None,
+            locator="manuscript.txt",
+        )
+        self.assertEqual(evidence.id, MANUSCRIPT_BASELINE_EVIDENCE_ID)
+        self.assertEqual(evidence.source_id, source.id)
+        self.assertIsNotNone(evidence.anchor)
+        self.assertEqual(evidence.anchor.excerpt, excerpt)
+        self.assertIn("Scale Oracle", evidence.excerpt or "")
+        package = self._scored_package(judgment, issues)
+        resolved = next(item for item in package.evidence if item.id == MANUSCRIPT_BASELINE_EVIDENCE_ID)
+        self.assertEqual(resolved.anchor.excerpt, issue.anchor.excerpt)
+        self.assertEqual(resolved.metadata["role"], "manuscript_baselines")
+        self.assertIn("ground-truth scale", (resolved.anchor.excerpt or "").lower())
+        scored = rate_venue(package)
+        self.assertEqual(scored.value, 5)
+        self.assertEqual(scored.metadata["cap_ids"], ["CAP-unfair-baseline"])
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, scored.evidence_ids)
+        self.assertFalse(any(item.startswith("E-RW-") for item in scored.evidence_ids))
+        self.assertEqual(scored.metadata["bands_after_ceiling"]["experimental_soundness"], 4.0)
+
+    def test_partial_search_caps_only_a_verified_missing_neighbor(self) -> None:
+        def transport(url: str) -> HttpResult:
+            if "export.arxiv.org" in url:
+                return HttpResult(200, _pose_atom(published="2022-06-01T00:00:00Z"))
+            raise RetrievalFailure("offline", "name resolution failed")
+
+        judgment = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=transport,
+            providers=["arxiv", "openalex"],
+        )
+        self.assertEqual(judgment.status, "partial")
+        self.assertEqual(judgment.failed_providers, ["openalex"])
+        issues = issues_from_cap_signals(
+            judgment,
+            anchor_excerpt=manuscript_baseline_excerpt(MANUSCRIPT),
+        )
+        self.assertEqual([issue.fatal_class for issue in issues], [FatalClass.missing_closest_neighbor])
+        package = self._scored_package(judgment, issues)
+        from tests.test_rating import _fatal
+
+        injected = _fatal("CAP-injected-unfair", FatalClass.unfair_baseline)
+        injected.metadata = {"source": "related_work_search", "candidate_ids": []}
+        package.issues.append(injected)
+        scored = rate_venue(package)
+        self.assertEqual(scored.value, 6)
+        self.assertEqual(scored.metadata["cap_ids"], ["CAP-missing-neighbor"])
+        self.assertEqual(scored.metadata["related_work_comparison"]["status"], "partial")
+        self.assertEqual(scored.metadata["related_work_comparison"]["failed_providers"], ["openalex"])
+        self.assertEqual(scored.metadata["bands_after_ceiling"]["originality"], 4.0)
+        self.assertEqual(scored.metadata["bands_after_ceiling"]["experimental_soundness"], 8.0)
+
+    def test_partial_success_without_a_prior_neighbor_emits_no_cap(self) -> None:
+        def empty(url: str) -> HttpResult:
+            if "export.arxiv.org" in url:
+                return HttpResult(200, b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'></feed>")
+            return HttpResult(429, b"slow down")
+
+        quiet = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=empty,
+            providers=["arxiv", "openalex"],
+        )
+        self.assertEqual(quiet.status, "partial")
+        self.assertEqual(quiet.failed_providers, ["openalex"])
+        self.assertEqual(quiet.candidates, [])
+        self.assertEqual(quiet.cap_signals, [])
+        self.assertEqual(
+            issues_from_cap_signals(quiet, anchor_excerpt=manuscript_baseline_excerpt(MANUSCRIPT)),
+            [],
+        )
+
+        def concurrent(url: str) -> HttpResult:
+            if "export.arxiv.org" in url:
+                return HttpResult(200, _pose_atom(published="2026-10-02T00:00:00Z", title="Concurrent Pose Note"))
+            raise RetrievalFailure("timeout", "timed out")
+
+        later = run_related_work_search(
+            MANUSCRIPT,
+            mode="live",
+            allow_network=True,
+            transport=concurrent,
+            providers=["semantic_scholar", "arxiv"],
+        )
+        self.assertEqual(later.status, "partial")
+        self.assertEqual(later.failed_providers, ["semantic_scholar"])
+        self.assertTrue(later.candidates)
+        self.assertTrue(all(item.date_relation == "concurrent" for item in later.candidates))
+        self.assertEqual(later.cap_signals, [])
+        self.assertIsNone(later.effective_venue_cap)
+
+    def test_a_failed_provider_cannot_create_or_strengthen_a_cap(self) -> None:
+        candidate = RelatedCandidate(
+            id="C1",
+            title="A Public Baseline for Synthetic Pose Estimation",
+            link="https://doi.org/10.0000/synthetic.pose.2022",
+            external_id="doi:10.0000/synthetic.pose.2022",
+            summary="Synthetic prior baseline.",
+            cited=True,
+            published="2022-06-01",
+            date_relation="prior",
+            required=True,
+            tier="must-compare",
+            reason_en="Same task.",
+            reason_zh="任务相同。",
+            provider="openalex",
+        )
+        missing = BaselineGap(
+            candidate_id="C1",
+            title=candidate.title,
+            kind="missing_baseline",
+            detail_en="Missing from the baselines.",
+            detail_zh="没有进入基线。",
+        )
+        privileged = BaselineGap(
+            candidate_id=None,
+            title="Scale Oracle",
+            kind="privileged_baseline",
+            detail_en="Privileged.",
+            detail_zh="特权。",
+        )
+        logs = [
+            RetrievalLogEntry(provider="arxiv", query_id="Q1", status="ok", detail="1 records"),
+            RetrievalLogEntry(provider="openalex", query_id="Q1", status="rate_limited", detail="HTTP 429"),
+        ]
+        blocked = build_cap_signals(
+            gaps=[missing, privileged],
+            status="partial",
+            candidates=[candidate],
+            logs=logs,
+        )
+        self.assertEqual(blocked, [])
+        allowed = build_cap_signals(
+            gaps=[missing, privileged],
+            status="partial",
+            candidates=[candidate.model_copy(update={"provider": "arxiv"})],
+            logs=logs,
+        )
+        self.assertEqual([signal.fatal_class for signal in allowed], ["missing_closest_neighbor"])
+        self.assertEqual(allowed[0].venue_cap, 6)
+        self.assertEqual(allowed[0].candidate_ids, ["C1"])
+        self.assertIn(MANUSCRIPT_BASELINE_EVIDENCE_ID, allowed[0].evidence_ids)
+
+
+def _pose_atom(*, published: str, title: str = "A Public Baseline for Synthetic Pose Estimation") -> bytes:
+    return textwrap.dedent(
+        f"""\
+        <?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>http://arxiv.org/abs/0000.00001v1</id>
+            <published>{published}</published>
+            <title>{title}</title>
+            <summary>A standard baseline and benchmark for single-frame pose estimation. It estimates a 6-DoF pose trajectory from monocular RGB frames.</summary>
+          </entry>
+        </feed>
+        """
+    ).encode("utf-8")
 
 
 class StageTests(unittest.TestCase):
@@ -504,6 +754,9 @@ class StageTests(unittest.TestCase):
             )
             comparison = rated["overall_score"]["metadata"]["related_work_comparison"]
             self.assertEqual(comparison["status"], "complete")
+            self.assertEqual(comparison["failed_providers"], [])
+            self.assertNotIn("may be incomplete", report)
+            self.assertNotIn("检索可能不完整", report)
             self.assertGreater(comparison["baseline_counts"]["missing"], 0)
             self.assertGreater(comparison["baseline_counts"]["privileged"], 0)
             self.assertTrue(comparison["closest_neighbour_ids"])
