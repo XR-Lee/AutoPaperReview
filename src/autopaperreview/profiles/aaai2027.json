@@ -1,0 +1,21 @@
+{
+  "id": "aaai-2027-main-technical",
+  "source": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+  "style_reference": "AAAI-27 author kit (aaai2027.sty): US Letter, two-column, 0.75in side margins, 0.75in top margin after page 1, 1.25in bottom margin.",
+  "pinned": "2026-10-20",
+  "max_content_pages": 7,
+  "max_total_pages": 9,
+  "page_limit_fatal": true,
+  "page_width_pt": 612,
+  "page_height_pt": 792,
+  "page_size_tolerance_pt": 3,
+  "min_margin_pt": 52,
+  "header_band_pt": 36,
+  "footer_band_pt": 56,
+  "template_markers": ["aaai", "anonymous submission"],
+  "anonymous": true,
+  "anonymity_metadata_fatal": true,
+  "min_page_image_px": 400,
+  "render_dpi": 150,
+  "notes": "AAAI-27 main technical track: at most 7 pages of non-reference content, and pages 8-9 are reserved for references, so the PDF has at most 9 pages. The content-page count stops at the first References heading, matching the ICLR checker. Over-length is a format desk-reject. The author-kit side margin is 0.75in (54pt). The checker uses a 52pt floor so glyph sidebearings within 2pt of that edge are not failures, and it does not model the larger 1.25in first-page top and bottom margins. The bottom 56pt band is excluded so the style file's anonymity notice is not scored as body ink. Review copies from aaai2027.sty print 'Anonymous submission' instead of author names. A non-empty PDF Author field or an email address on page 1 fails closed. This profile is not a fitted review score."
+}

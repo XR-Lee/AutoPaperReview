@@ -222,13 +222,14 @@ def format_check_pdf(
         content_pages, references_at = _content_page_count(document, profile)
         limit = int(profile["max_content_pages"])
         over = content_pages > limit
+        page_limit_fatal = bool(profile.get("page_limit_fatal", True))
         where = f"references heading on page {references_at}" if references_at else "no references heading"
         checks.append(
             FormatCheck(
                 id="FMT-pages",
                 check="content_page_limit",
                 passed=not over,
-                fatal_class=FatalClass.format_desk_reject if over else None,
+                fatal_class=FatalClass.format_desk_reject if over and page_limit_fatal else None,
                 page=content_pages,
                 detail=_localized(
                     f"Main-text pages before references: {content_pages} (limit {limit}; {where}).",
@@ -236,6 +237,23 @@ def format_check_pdf(
                 ),
             )
         )
+        max_total = profile.get("max_total_pages")
+        if max_total is not None:
+            total_pages = len(document)
+            total_over = total_pages > int(max_total)
+            checks.append(
+                FormatCheck(
+                    id="FMT-total-pages",
+                    check="total_page_limit",
+                    passed=not total_over,
+                    fatal_class=FatalClass.format_desk_reject if total_over and page_limit_fatal else None,
+                    page=total_pages,
+                    detail=_localized(
+                        f"PDF page count: {total_pages} (limit {int(max_total)}).",
+                        f"PDF 总页数：{total_pages}（上限 {int(max_total)}）。",
+                    ),
+                )
+            )
         width = float(profile["page_width_pt"])
         height = float(profile["page_height_pt"])
         tolerance = float(profile["page_size_tolerance_pt"])
@@ -266,12 +284,13 @@ def format_check_pdf(
         meta = document.get_metadata_dict() or {}
         author = str(meta.get("Author") or "").strip()
         author_bad = author.casefold() not in _ANON_AUTHORS
+        metadata_fatal = bool(profile.get("anonymity_metadata_fatal", True))
         checks.append(
             FormatCheck(
                 id="FMT-author-meta",
                 check="anonymity_metadata",
                 passed=not author_bad,
-                fatal_class=FatalClass.format_desk_reject if author_bad else None,
+                fatal_class=FatalClass.format_desk_reject if author_bad and metadata_fatal else None,
                 detail=_localized(
                     "PDF Author metadata is empty or anonymous."
                     if not author_bad
@@ -295,17 +314,22 @@ def format_check_pdf(
                 ),
             )
         )
-        template_ok = "iclr" in first_text.casefold()
+        markers = [str(item).casefold() for item in profile.get("template_markers", ["iclr"])]
+        folded = first_text.casefold()
+        template_ok = any(marker and marker in folded for marker in markers)
+        marker_label = ", ".join(markers) if markers else "none"
         checks.append(
             FormatCheck(
                 id="FMT-template",
                 check="venue_template_marker",
                 passed=template_ok,
                 detail=_localized(
-                    "Page 1 names the ICLR template."
+                    f"Page 1 names a venue template marker ({marker_label})."
                     if template_ok
-                    else "Page 1 does not name ICLR.",
-                    "第 1 页写明了 ICLR 模板。" if template_ok else "第 1 页没有写明 ICLR。",
+                    else f"Page 1 does not name a venue template marker ({marker_label}).",
+                    f"第 1 页写明了会场模板标记（{marker_label}）。"
+                    if template_ok
+                    else f"第 1 页没有写明会场模板标记（{marker_label}）。",
                 ),
             )
         )

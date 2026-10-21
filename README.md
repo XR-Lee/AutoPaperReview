@@ -2,7 +2,7 @@
 
 AutoPaperReview is a local-first, evidence-traceable harness for repeatable scholarly manuscript review. It separates durable review data and execution records from replaceable parsers, model providers, literature services, workflow engines, and journal platforms.
 
-Version: `0.1.7`
+Version: `0.1.8`
 
 ## Code harness, not a prompt-only skill
 
@@ -26,7 +26,7 @@ The core deliberately does not call a model or parse PDF/DOCX by itself. A model
 - Listed contributions: the 3–4 author-numbered items are extracted, retrieved against, and audited one by one for evidence completeness. A single paper-level novelty paragraph is not sufficient.
 - First-read review writing: issues can carry a `FirstReadNote` (what the paper said, a quote, why it matters). Prompt packets prepend a shared writing contract. Reports lead with a how-to-read note and inline quotes so a first-time reader can follow the argument without already knowing the paper.
 - Declared ICLR rating (`rate`, coefficient set `apr-iclr-cap-v1`): seven anchored bands (`sar_bands_v1`, scores 2/4/6/8/10), fatal-flaw caps, and a snap-down onto 1/3/5/6/8/10. The gate is `min(claims, soundness)`. Caps and exemptions are stored on the score. This is not a fitted regression. `calibrate` orders several packages and requires `same_bin_justified` when two neighbors share a bin.
-- Visual and format review (`pip install 'autopaperreview[visual]'`): `render_pages` writes hashed page PNGs, `format_check` applies the pinned ICLR 2027 profile, and `visual_inspect` accepts an adapter whose findings cite the page-image hash and a non-caption locator. The primary adapter is `AgentFindingsInspector` (a JSON drop after the pages were opened). `HostedVisionInspector` can POST page images only when the network policy is `allow` and an API key is set; a missing key sends nothing. Findings move the rating only through fatal classes or clause ceilings. `init` mounts `visual_qa_v1` as route M9.
+- Visual and format review (`pip install 'autopaperreview[visual]'`): `render_pages` writes hashed page PNGs, `format_check` applies a pinned venue profile (`iclr2027` or `aaai2027`), and `visual_inspect` accepts an adapter whose findings cite the page-image hash and a non-caption locator. The primary adapter is `AgentFindingsInspector` (a JSON drop after the pages were opened). `HostedVisionInspector` can POST page images only when the network policy is `allow` and an API key is set; a missing key sends nothing. Findings move the rating only through fatal classes or clause ceilings. `init` mounts `visual_qa_v1` as route M9.
 
 See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work, and [first-read review writing](docs/first-read-review.md) for the ICLR / ARR / Reviewer2 / Conventional Comments strategy this slice implements. This repository does not claim Stanford's ICLR Spearman numbers.
 
