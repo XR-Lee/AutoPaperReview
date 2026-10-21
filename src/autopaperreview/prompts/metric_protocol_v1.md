@@ -6,4 +6,4 @@ First-read writing: define the named metric and the paper's split or protocol in
 
 Construct minimal counterexamples when possible. Separate a mathematical definition failure from an implementation suspicion. Return schema-valid review issues with reproducible repair requirements.
 
-Dimension bands use `sar_bands_v2`. List supporting and opposing manuscript excerpts, then what would move the band up one step and down one step, before choosing a clause. A missing interval or a single seed is experimental-soundness band 4 when the paper also lacks an ablation that moves the decision metric and lacks a copied external number. Band 6 requires that ablation or copied number, plus a named band-8 gap that is still missing. A band 6 without those two observables is rejected.
+Dimension bands use `sar_bands_v2`. List supporting and opposing manuscript excerpts, then what would move the band up one step and down one step, before choosing a clause. The clause sentences are unchanged. Band 6 is rejected unless support cites a band-6 observable and opposition cites a missing band-8 observable.

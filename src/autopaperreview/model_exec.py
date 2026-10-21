@@ -294,8 +294,8 @@ _SCHEMA_HINTS = {
     ),
     "dimensions": (
         '{"dimensions":[{"dimension":"experimental_soundness",'
-        '"supporting":[{"excerpt":"exact substring","location":"Section 4","observable":"single_seed_no_interval"}],'
-        '"opposing":[{"excerpt":"a different exact substring","location":"Table 2","observable":"ablation_moves_decision_metric"}],'
+        '"supporting":[{"excerpt":"exact substring","location":"Section 4","observable":"named_confound"}],'
+        '"opposing":[{"excerpt":"a different exact substring","location":"Table 2","observable":"ablations_present"}],'
         '"move_up":"what observable result would make the next higher band true",'
         '"move_down":"what observable result would make the next lower band true",'
         '"clause_id":"es-4","rationale":"why this clause and not the neighbors"}]} '

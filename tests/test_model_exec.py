@@ -106,18 +106,18 @@ def _dimensions(excerpts: dict[str, str] | None = None) -> str:
     overrides = excerpts or {}
     support_observable = {
         "or-4": "module_swap",
-        "im-4": "toy_or_marginal",
+        "im-4": "too_small_to_change_practice",
         "cs-4": "proxy_or_different_question",
-        "es-4": "single_seed_no_interval",
+        "es-4": "named_confound",
         "wc-4": "lead_display_broken",
         "cv-4": "release_only_promised",
         "pw-4": "named_not_in_table",
     }
     oppose_observable = {
-        "or-4": "combination_ablation_hurts",
-        "im-4": "reader_would_rerun",
+        "or-4": "existing_pieces_combined",
+        "im-4": "community_would_use",
         "cs-4": "qualified_main_claim",
-        "es-4": "ablation_moves_decision_metric",
+        "es-4": "ablations_present",
         "wc-4": "one_display_easy_to_misread",
         "cv-4": "repeat_recipe_in_text",
         "pw-4": "neighbor_wrong_setting",

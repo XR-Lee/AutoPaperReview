@@ -69,7 +69,7 @@
           {
             "excerpt": "One ablation removes the hue order.",
             "location": "Protocol",
-            "observable": "combination_ablation_hurts"
+            "observable": "existing_pieces_combined"
           }
         ],
         "opposing": [
@@ -103,7 +103,7 @@
           {
             "excerpt": "The paper says a community that already sorts categorical tokens would use a confirmed version of this comparison.",
             "location": "Task",
-            "observable": "reader_would_rerun"
+            "observable": "community_would_use"
           }
         ],
         "opposing": [
@@ -171,14 +171,14 @@
           {
             "excerpt": "The internal table shows higher accuracy for Prism Sort than for the unsorted baseline on the ten test items.",
             "location": "Result",
-            "observable": "ablation_moves_decision_metric"
+            "observable": "ablations_present"
           }
         ],
         "opposing": [
           {
             "excerpt": "The paper reports a single run and does not report a confidence interval.",
             "location": "Protocol",
-            "observable": "interval_or_multiseed"
+            "observable": "uncertainty_reported"
           }
         ],
         "move_up": "Reporting an interval or a second seed on that accuracy gap would move soundness up to band 8.",

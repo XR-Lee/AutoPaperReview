@@ -18,10 +18,10 @@ def _item(excerpt: str, observable: str) -> dict[str, str]:
 
 
 class BandCaseTests(unittest.TestCase):
-    def test_soundness_band_4_does_not_swallow_a_moving_ablation(self) -> None:
-        english = CLAUSES["es-4"][2]
-        self.assertIn("no ablation removes the claimed piece", english)
-        self.assertIn("no external number is copied", english)
+    def test_soundness_band_6_still_covers_missing_uncertainty(self) -> None:
+        self.assertIn("uncertainty is missing", CLAUSES["es-6"][2])
+        self.assertIn("confound", CLAUSES["es-4"][2])
+        self.assertNotIn("single seed", CLAUSES["es-4"][2])
 
     def test_band_without_evidence_is_rejected(self) -> None:
         errors = band_case_errors(
@@ -39,8 +39,8 @@ class BandCaseTests(unittest.TestCase):
         errors = band_case_errors(
             dimension="experimental_soundness",
             score=6,
-            supporting=[_item(SOURCE[:60], "ablation_moves_decision_metric")],
-            opposing=[_item(SOURCE[61:], "single_seed_no_interval")],
+            supporting=[_item(SOURCE[:60], "ablations_present")],
+            opposing=[_item(SOURCE[61:], "named_confound")],
             move_up="An interval or a second seed on the decision metric would make band 8 true.",
             move_down="If the ablation did not remove the claimed term, the band would be 4.",
             source_text=SOURCE,
@@ -51,8 +51,8 @@ class BandCaseTests(unittest.TestCase):
         errors = band_case_errors(
             dimension="experimental_soundness",
             score=6,
-            supporting=[_item("The ablation removes the hue term and accuracy falls from 0.8 to 0.5.", "ablation_moves_decision_metric")],
-            opposing=[_item("The table reports one seed and no interval.", "interval_or_multiseed")],
+            supporting=[_item("The ablation removes the hue term and accuracy falls from 0.8 to 0.5.", "ablations_present")],
+            opposing=[_item("The table reports one seed and no interval.", "uncertainty_reported")],
             move_up="Rerunning the baselines with an interval would make the band-8 conditions true.",
             move_down="If that ablation left the claimed term in place, the score would fall to band 4.",
             source_text=SOURCE,
@@ -63,8 +63,8 @@ class BandCaseTests(unittest.TestCase):
         errors = band_case_errors(
             dimension="experimental_soundness",
             score=4,
-            supporting=[_item("The table reports one seed and no interval.", "single_seed_no_interval")],
-            opposing=[_item("The ablation removes the hue term and accuracy falls from 0.8 to 0.5.", "ablation_moves_decision_metric")],
+            supporting=[_item("The table reports one seed and no interval.", "named_confound")],
+            opposing=[_item("The ablation removes the hue term and accuracy falls from 0.8 to 0.5.", "ablations_present")],
             move_up="Showing that this ablation moves the decision metric would raise the band to 6.",
             move_down="A leak that creates the headline number would drop the band to 2.",
             source_text=SOURCE,
