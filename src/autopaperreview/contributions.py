@@ -50,6 +50,28 @@ def _looks_like_claim(text: str) -> bool:
     return lowered.startswith(("we ", "this ", "our ", "a ", "an ", "the ", "it "))
 
 
+def _accept_numbered_body(body: str) -> bool:
+    """Keep a numbered contribution even when it does not start with 'We'.
+
+    Author lists often continue with a capitalized noun phrase
+    ('Additional synthetic supervision is designed ...'). Those sentences are claims.
+    Short or mostly-uppercase fragments stay excluded so equation numbers and
+    headings inside the same window are not promoted to contributions.
+    """
+    if _looks_like_claim(body) or (body[:1].islower() if body else False):
+        return True
+    if re.match(r"^(a|an|the|our|we|this|support)\b", body, re.I):
+        return True
+    words = re.findall(r"[A-Za-z][A-Za-z'-]+", body)
+    if len(words) < 8:
+        return False
+    letters = [ch for ch in body if ch.isalpha()]
+    if not letters:
+        return False
+    upper_ratio = sum(ch.isupper() for ch in letters) / len(letters)
+    return upper_ratio <= 0.6
+
+
 def _extract_from_stream(text: str) -> list[dict[str, object]]:
     header = _HEADER.search(text)
     if not header:
@@ -82,10 +104,8 @@ def _extract_from_stream(text: str) -> list[dict[str, object]]:
             body = _TRAILING_HEADING.sub("", body).strip()
             if len(body) < 24:
                 continue
-            if not _looks_like_claim(body) and not body[:1].islower():
-                # bullet fragments often start with "a practical..."
-                if not re.match(r"^(a|an|the|our|we|this|support|an)\b", body, re.I):
-                    continue
+            if not _accept_numbered_body(body):
+                continue
             found[index] = body[:600]
         items = []
         expected = 1
