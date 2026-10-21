@@ -101,7 +101,7 @@ autopaperreview doctor     Inspect optional adapter availability
 2. Every released claim must bind to an immutable manuscript or external-source snapshot.
 3. Model prompts and responses are versioned artifacts, not hidden application state.
 4. Semantic deduplication never happens silently. The v0.1 consensus stage performs only explicit-key or exact normalized grouping.
-5. Manuscript text is local by default. Metadata-only or full-text network use requires an explicit policy change.
+5. Manuscript text is local by default. Metadata-only or full-text network use requires an explicit policy change. Real manuscripts, reviews, and page renders are never committed; see [Confidentiality](CONFIDENTIALITY.md).
 6. Third-party objects are converted immediately into canonical AutoPaperReview models.
 
 The built-in network policy validates declared requirements but is not an operating-system network sandbox. Stage plugins and commands are trusted local code; use containers or another sandbox when executing untrusted integrations.

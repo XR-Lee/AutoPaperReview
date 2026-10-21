@@ -8,6 +8,22 @@
 - Network access must be declared in configuration and tested under `deny`, `metadata_only`, and `allow` policies where applicable.
 - Never place manuscript text, author identities, credentials, or full prompts in telemetry attributes.
 
+## Confidentiality
+
+This repository is public. Do not commit manuscripts, reviews, page renders, submission or forum ids, or sentences taken from a paper. Keep those files in a gitignored `workdir/`, `reviews/`, `papers/`, or `uploads/` directory. The policy is [CONFIDENTIALITY.md](CONFIDENTIALITY.md). Agents must follow [AGENTS.md](AGENTS.md).
+
+Before opening a pull request:
+
+```bash
+python3 scripts/check_confidentiality.py
+```
+
+Optional git hook (requires the `pre-commit` tool locally):
+
+```bash
+pre-commit install
+```
+
 ## Checks
 
 ```bash

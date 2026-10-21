@@ -1,0 +1,4 @@
+# Repo-relative paths that may be binary documents or images.
+# An allowlisted path still fails if it sits under a review work directory
+# or matches the pattern / hash denylist. Leave this file empty unless a
+# specific non-manuscript asset is required.

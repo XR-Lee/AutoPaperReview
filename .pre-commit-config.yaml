@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: confidentiality
+        name: confidentiality
+        entry: python3 scripts/check_confidentiality.py
+        language: system
+        pass_filenames: false
+        always_run: true
