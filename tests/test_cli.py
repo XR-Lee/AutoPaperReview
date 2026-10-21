@@ -25,6 +25,7 @@ class CliTests(unittest.TestCase):
                 "review-issue.schema.json",
                 "review-package.schema.json",
                 "run-manifest.schema.json",
+                "batch-calibration.schema.json",
             }
             self.assertEqual(set(payload["schemas"]), expected)
             self.assertEqual({path.name for path in output_dir.iterdir()}, expected)
@@ -53,9 +54,11 @@ class CliTests(unittest.TestCase):
             payload["stage_types"],
             [
                 "agenda",
+                "calibrate_batch",
                 "command",
                 "consensus",
                 "execute_review",
+                "format_check",
                 "import_issues",
                 "ingest",
                 "integrity",
@@ -63,7 +66,10 @@ class CliTests(unittest.TestCase):
                 "literature_grounding",
                 "novelty",
                 "prompt_packet",
+                "rate",
+                "render_pages",
                 "report",
+                "visual_inspect",
                 "workspace_inspect",
             ],
         )
@@ -77,12 +83,13 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             payload = json.loads(stdout.getvalue())
-            self.assertEqual(len(payload["templates"]), 9)
+            self.assertEqual(len(payload["templates"]), 10)
             self.assertIn("closed_book_v1.md", payload["templates"])
             self.assertIn("sar_grounded_review_v1.md", payload["templates"])
             self.assertIn("figure_grounded_v1.md", payload["templates"])
             self.assertIn("contribution_audit_v1.md", payload["templates"])
             self.assertIn("first_read_v1.md", payload["templates"])
+            self.assertIn("sar_bands_v1.md", payload["templates"])
             self.assertTrue((output_dir / "visual_qa_v1.md").is_file())
             self.assertTrue((output_dir / "figure_grounded_v1.md").is_file())
             self.assertTrue((output_dir / "first_read_v1.md").is_file())

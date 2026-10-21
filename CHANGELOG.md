@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.7 - 2026-10-19
+
+- Added a declared ICLR rating, `apr-iclr-cap-v1`. `rate` snaps seven dimension scores onto 1/3/5/6/8/10 after a `min(claims, soundness)` gate. It is not a fitted regression and it does not call a model.
+- Fatal classes cap that bin: invalid protocol, leakage, and wrong metric at 3; unfair baseline and unsupported headline claim at 5; anonymity or page-limit break at 1. A cap is active only when the issue is decision-relevant and blocking, or when a format/visual record says so. Exemptions are records and cannot cite excluded evidence as their basis.
+- Dimension scores may carry `rubric_id` and `clause_id` from `sar_bands_v1` (bands 2/4/6/8/10). The export gate can require them.
+- Added `calibrate_batch` and `autopaperreview calibrate`. Same-bin neighbors require `same_bin_justified`. Different active caps cannot share a bin.
+- Added optional page rendering (`render_pages`, extra `visual` / pypdfium2), a pinned ICLR 2027 format checklist (`format_check`), and a visual-adapter contract (`visual_inspect`) whose findings must carry the page-image hash and a visible mark that is not the caption. Those findings affect the rating only through fatal classes or clause ceilings.
+- `init` mounts `visual_qa_v1` as route M9. Reports and the PDF footer show the declared formula when `rate` has run, and still say that no overall score was assigned otherwise.
+- Schema stays `1.0`. New fields are optional, so existing packages still load.
+- `visual_inspect` now has two adapters. `AgentFindingsInspector` checks a JSON drop written after every rendered page was opened (page-image hash, bbox, visible mark, severity, fatal class or clause). `HostedVisionInspector` can POST a page PNG to a declared endpoint only when `network_policy = allow` and `APR_VISION_API_KEY` is set. A missing key does not crash import; the status is `key_absent` and no pixels are sent.
+
 ## 0.1.6 - 2026-09-06
 
 - Evidence citations such as `[E2, E3]` are Markdown (and PDF) hyperlinks into the Evidence Index. Each id is independently clickable.

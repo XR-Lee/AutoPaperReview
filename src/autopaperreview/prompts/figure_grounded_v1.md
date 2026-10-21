@@ -11,6 +11,7 @@ For each Figure N / Table N graphic:
 Rules:
 
 - A finding that only restates the caption is not evidence that the figure was read. Cite at least one visible mark that is not in the caption.
+- Bind the finding to a rendered page image: `page_image_sha256` from `render_pages` and a `bbox`. A caption string without that hash is not inspection.
 - Location must be `Figure N, page P` or `Table N, page P`.
 - Do not infer scientific facts that are not visible on the page (no imagined error bars, no imagined robot metrics).
 - Do not skip qualitative teaser photos, method cartoons, or "illustration" panels: those are often the only support for a deployment or capability claim.

@@ -16,7 +16,7 @@ from . import __version__
 from .artifacts import artifact_from_path
 from .config import HarnessConfig, load_config
 from .migration import load_review_input
-from .models import ReviewIssue, ReviewPackage, RunManifest
+from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
     default_registry,
@@ -86,6 +86,7 @@ def command_schema(args: argparse.Namespace) -> int:
         "review-package.schema.json": ReviewPackage.model_json_schema(),
         "run-manifest.schema.json": RunManifest.model_json_schema(),
         "harness-config.schema.json": HarnessConfig.model_json_schema(),
+        "batch-calibration.schema.json": BatchCalibration.model_json_schema(),
     }
     for filename, schema in schemas.items():
         (output_dir / filename).write_text(
@@ -145,7 +146,7 @@ def command_migrate(args: argparse.Namespace) -> int:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa"]
+    modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa", "pypdfium2"]
     commands = ["docker", "pandoc", "pdftotext", "promptfoo"]
     optional_modules = {}
     for name in modules:
@@ -268,6 +269,13 @@ kind = "prompt"
 prompt = "prompts/first_read_v1.md"
 prompt_version = "1.0"
 
+[[routes]]
+id = "M9"
+name = "Layout and format visual QA"
+kind = "visual"
+prompt = "prompts/visual_qa_v1.md"
+prompt_version = "1.1"
+
 [[stages]]
 id = "ingest"
 type = "ingest"
@@ -337,6 +345,54 @@ require_quote_on_major = true
     return 0
 
 
+def command_calibrate(args: argparse.Namespace) -> int:
+    import tomllib
+
+    from .rating import TieNote, calibrate_packages
+
+    batch_path = Path(args.batch).expanduser().resolve()
+    payload = tomllib.loads(batch_path.read_text(encoding="utf-8"))
+    root = batch_path.parent
+    packages = []
+    for item in payload.get("packages", []):
+        path = (root / str(item["path"])).resolve()
+        packages.append(ReviewPackage.model_validate_json(path.read_text(encoding="utf-8")))
+    ties = [
+        TieNote(
+            str(item["left_project_id"]),
+            str(item["right_project_id"]),
+            str(item.get("axis") or "unspecified"),
+            str(item["same_bin_justified"]),
+        )
+        for item in payload.get("ties", [])
+    ]
+    batch = calibrate_packages(packages, ties)
+    output = Path(args.output).expanduser().resolve() if args.output else root / "batch_calibration.json"
+    output.write_text(
+        json.dumps(batch.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _print_json(
+        {
+            "status": "success",
+            "output": str(output),
+            "order": batch.order,
+            "pairs": [
+                {
+                    "left": pair.left_project_id,
+                    "right": pair.right_project_id,
+                    "left_value": pair.left_value,
+                    "right_value": pair.right_value,
+                    "decision_gap": pair.decision_gap,
+                    "axis": pair.axis,
+                }
+                for pair in batch.pairs
+            ],
+        }
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autopaperreview")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -373,6 +429,11 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--source", required=True)
     migrate.add_argument("--project-id", required=True)
     migrate.set_defaults(func=command_migrate)
+
+    calibrate = subparsers.add_parser("calibrate", help="order rated packages and require same-bin reasons")
+    calibrate.add_argument("batch", help="TOML file listing package paths and tie notes")
+    calibrate.add_argument("--output", help="where to write batch_calibration.json")
+    calibrate.set_defaults(func=command_calibrate)
 
     doctor = subparsers.add_parser("doctor", help="inspect optional adapter availability")
     doctor.set_defaults(func=command_doctor)

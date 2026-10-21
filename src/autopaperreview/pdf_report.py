@@ -517,7 +517,7 @@ def _is_lang_token(kind: str, text: str) -> bool:
     return kind == "langline" or (kind == "bullet" and _LANG_PREFIX_RE.match(text) is not None)
 
 
-def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
+def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str | None = None) -> None:
     """Write a linked PDF. Requires the optional reportlab extra."""
     from .bilingual_coverage import require_bilingual_markdown
 
@@ -1028,7 +1028,8 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
         canvas.line(0, A4[1], 0, 0)
         canvas.setFillColor(muted)
         canvas.setFont(body_font, 8)
-        canvas.drawString(left, 11 * mm, "AutoPaperReview  ·  evidence-linked review  ·  no overall score")
+        note = footer_note or "AutoPaperReview  ·  evidence-linked review  ·  no overall score"
+        canvas.drawString(left, 11 * mm, note)
         canvas.drawRightString(A4[0] - right, 11 * mm, str(doc.page))
         if doc.page == 1:
             canvas.showOutline()

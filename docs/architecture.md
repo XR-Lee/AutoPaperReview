@@ -19,7 +19,7 @@ This document describes the implemented `0.1.x` architecture. Planned additions 
 - A general agent framework.
 - An operating-system network sandbox. The network policy validates declared requirements; adapters and command stages still run as trusted local code.
 - Semantic clustering or adjudication by an LLM.
-- Native PDF/DOCX layout extraction, literature retrieval, journal submission, or model-provider clients.
+- A general PDF/DOCX layout parser, literature retrieval, journal submission, or model-provider clients. Page PNGs and the ICLR format checklist are a narrow optional stage, not a parser.
 - A stable plugin ABI beyond the documented Python entry-point and stage-handler surface.
 
 ## System boundary
@@ -61,8 +61,8 @@ The v0.1 models are strict Pydantic models with unknown fields rejected.
 | `ReviewIssue` | The current canonical issue record, including localized prose, severity, confidence, references, consensus metadata, and an optional `FirstReadNote` (restated claim, quote, explanation) for a reader seeing the paper for the first time. |
 | `ReviewPackage` | A validated collection of manuscript, route, source, evidence, issue, strength, acceptance-gate, optional SAR-shaped claim/score, query, and snapshot records. |
 | `DimensionScore` | One of the seven SAR dimensions, a 1–10 value, rationale, and required evidence IDs. |
-| `VenueConclusion` | Conference or journal decision (accept/reject/revision/not-a-fit) read from the seven scores. No overall number. |
-| `OverallScore` | Optional overall score with required method/provenance. Absent by default; never an implicit LLM 0–10. |
+| `VenueConclusion` | Conference or journal decision label. It is not computed from the seven scores. |
+| `OverallScore` | Optional overall score with required method/provenance. Absent until `rate` writes `declared_formula` / `apr-iclr-cap-v1`. Never an implicit LLM 0–10 and never a fitted regression. |
 | `RelatedWorkQuery` / `RetrievedSourceSnapshot` | Multi-perspective search queries and retrieved source snapshots (query IDs, excerpt, arXiv ID, date, abstract vs full-text, optional task/dataset/metric). |
 | `Anchor` | Typed locator (display, text offset, quote, PDF region, DOCX paragraph, external snapshot) with optional excerpt hash. |
 | `LedgerClaim` / `AgendaQuestion` | Manuscript-only claim–evidence–risk ledger and investigation agenda. |
@@ -118,7 +118,12 @@ The run ID is derived from project ID, source hash, and configuration hash. It i
 | `novelty` | Matched-setting novelty tags. A snapshot is not overlap evidence unless task, dataset, and metric match. |
 | `consensus` | Groups by explicit `consensus_key` or exact normalized category/title/location, then selects one representative record. |
 | `literature_grounding` | Generates multi-perspective, multi-specificity related-work queries from local text and optional agenda questions, plus one same-problem and one related-technique query per listed contribution. Optionally attaches a snapshot fixture or a declared retriever. Live retrieval requires a network declaration. |
-| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Reports open with a first-read how-to-read note and inline quotes. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package, including optional first-read/quote and figure-citation budgets. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations, then refuses export if the package or Markdown still has unpaired English or Chinese prose. |
+| `render_pages` | Optional `visual` extra. Rasterizes each PDF page to a hashed PNG and a manifest. Fails closed when a visual route is enabled and the sibling PDF is missing. |
+| `format_check` | Deterministic ICLR 2027 checklist from `profiles/iclr2027.json`: 9-page main text, US Letter, margin floor, anonymity metadata and page-1 email, template marker, font embedding, raster size, blank caption pages. Desk-reject classes set `format_desk_reject`. Other failures set a `writing_clarity` clause ceiling. |
+| `visual_inspect` | Adapter contract. `AgentFindingsInspector` reads a findings drop produced after the pages were opened. `HostedVisionInspector` POSTs page PNGs only under `network_policy = allow` with an optional API key; a missing key sends nothing. Findings carry the page-image hash, a bbox, a non-caption visible mark, and an optional severity, fatal class, or clause. |
+| `rate` | Pure function. Anchored bands, fatal-flaw caps, and snap-down onto 1/3/5/6/8/10 under `apr-iclr-cap-v1`. Records `cap_ids` and the weighted/gate terms. Does not call a model. |
+| `calibrate_batch` | Orders several packages by that formula. Neighbors in the same bin need `same_bin_justified`. Different active caps cannot share a bin. |
+| `report` | Emits canonical JSON, Markdown with SAR-shaped sections when present, and a small summary. Reports open with a first-read how-to-read note and inline quotes. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Copies `review_report.md` next to `review.toml`. With the optional `pdf` extra, also writes `review_report.pdf` with the same internal links. Optional export-gate budgets refuse an unauditable package, including optional first-read/quote and figure-citation budgets. `bilingual = true` or `languages = ["en", "zh-Hans"]` writes both languages into one Markdown file after filling missing translations, then refuses export if the package or Markdown still has unpaired English or Chinese prose. A declared formula replaces the "no overall score" sentence and the PDF footer. |
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 

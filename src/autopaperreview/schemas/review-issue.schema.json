@@ -190,6 +190,19 @@
       "title": "CommentIntent",
       "type": "string"
     },
+    "FatalClass": {
+      "description": "Hard venue cap. Active only for a blocking decision-relevant issue, or a format/visual record.",
+      "enum": [
+        "invalid_protocol",
+        "leakage",
+        "wrong_metric",
+        "unfair_baseline",
+        "unsupported_claim",
+        "format_desk_reject"
+      ],
+      "title": "FatalClass",
+      "type": "string"
+    },
     "FirstReadNote": {
       "additionalProperties": false,
       "description": "Self-contained argument for a reader who is seeing the paper for the first time.",
@@ -326,6 +339,11 @@
       "$ref": "#/$defs/ReviewDecision",
       "default": "open"
     },
+    "decision_relevant": {
+      "default": false,
+      "title": "Decision Relevant",
+      "type": "boolean"
+    },
     "evidence": {
       "$ref": "#/$defs/LocalizedText"
     },
@@ -335,6 +353,17 @@
       },
       "title": "Evidence Ids",
       "type": "array"
+    },
+    "fatal_class": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FatalClass"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "first_read": {
       "anyOf": [
