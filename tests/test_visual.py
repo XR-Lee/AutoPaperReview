@@ -34,6 +34,82 @@ class FormatProfileTests(unittest.TestCase):
         self.assertTrue(profile["anonymous"])
         self.assertIn("2027", profile["source"])
 
+    def test_aaai_profile_pins_seven_content_pages_and_nine_total(self) -> None:
+        profile = load_profile("aaai2027")
+        self.assertEqual(profile["max_content_pages"], 7)
+        self.assertEqual(profile["max_total_pages"], 9)
+        self.assertEqual(profile["page_width_pt"], 612)
+        self.assertEqual(profile["page_height_pt"], 792)
+        self.assertEqual(profile["min_margin_pt"], 52)
+        self.assertGreaterEqual(profile["footer_band_pt"], 54)
+        self.assertIn("anonymous submission", profile["template_markers"])
+        self.assertIn("aaai.org", profile["source"])
+        self.assertTrue(profile["page_limit_fatal"])
+
+    def test_aaai_template_marker_is_not_the_iclr_string(self) -> None:
+        try:
+            import reportlab  # noqa: F401
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest("visual and pdf extras are required")
+        with self._temporary() as directory:
+            pdf = directory / "manuscript.pdf"
+            _pdf(pdf, [("Anonymous submission", 72, 700), ("References", 72, 700)])
+            manifest = render_pdf_pages(pdf, directory / "pages", dpi=72)
+            checks = {
+                item.id: item
+                for item in format_check_pdf(
+                    pdf, manifest, load_profile("aaai2027"), page_dir=directory / "pages"
+                )
+            }
+            self.assertTrue(checks["FMT-template"].passed)
+            self.assertTrue(checks["FMT-pages"].passed)
+            self.assertIn("FMT-total-pages", checks)
+            self.assertTrue(checks["FMT-total-pages"].passed)
+
+    def test_aaai_overlong_pdf_is_a_desk_reject(self) -> None:
+        try:
+            import reportlab  # noqa: F401
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest("visual and pdf extras are required")
+        with self._temporary() as directory:
+            pdf = directory / "manuscript.pdf"
+            _pdf(pdf, [("Anonymous submission", 72, 400)] * 8 + [("References", 72, 700)] * 2)
+            manifest = render_pdf_pages(pdf, directory / "pages", dpi=72)
+            checks = {
+                item.id: item
+                for item in format_check_pdf(
+                    pdf, manifest, load_profile("aaai2027"), page_dir=directory / "pages"
+                )
+            }
+            self.assertFalse(checks["FMT-pages"].passed)
+            self.assertEqual(checks["FMT-pages"].fatal_class.value, "format_desk_reject")
+            self.assertFalse(checks["FMT-total-pages"].passed)
+            self.assertEqual(checks["FMT-total-pages"].fatal_class.value, "format_desk_reject")
+
+    def test_aaai_anonymity_notice_is_not_a_margin_failure(self) -> None:
+        try:
+            import reportlab  # noqa: F401
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest("visual and pdf extras are required")
+        with self._temporary() as directory:
+            pdf = directory / "manuscript.pdf"
+            _pdf(
+                pdf,
+                [("Anonymous submission body", 72, 400), ("anonymized submission for review", 72, 48)],
+            )
+            manifest = render_pdf_pages(pdf, directory / "pages", dpi=72)
+            checks = {
+                item.id: item
+                for item in format_check_pdf(
+                    pdf, manifest, load_profile("aaai2027"), page_dir=directory / "pages"
+                )
+            }
+            self.assertTrue(checks["FMT-margin"].passed)
+            self.assertTrue(checks["FMT-template"].passed)
+
     def test_over_long_main_text_is_a_desk_reject(self) -> None:
         try:
             import reportlab  # noqa: F401

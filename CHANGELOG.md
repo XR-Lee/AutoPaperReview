@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 - 2026-10-20
+
+- Added a pinned AAAI-27 main-track format profile (`profiles/aaai2027.json`): 7 content pages, 9 pages total, US Letter, and the anonymous-submission template marker. `format_check` reads `template_markers`, `max_total_pages`, `page_limit_fatal`, and `anonymity_metadata_fatal` from the profile. The ICLR 2027 profile is unchanged.
+
 ## 0.1.7 - 2026-10-19
 
 - Added a declared ICLR rating, `apr-iclr-cap-v1`. `rate` snaps seven dimension scores onto 1/3/5/6/8/10 after a `min(claims, soundness)` gate. It is not a fitted regression and it does not call a model.
