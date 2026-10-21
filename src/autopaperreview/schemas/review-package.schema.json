@@ -537,6 +537,7 @@
         "leakage",
         "wrong_metric",
         "unfair_baseline",
+        "missing_closest_neighbor",
         "unsupported_claim",
         "format_desk_reject"
       ],
@@ -1049,7 +1050,11 @@
         "baselines",
         "same_problem",
         "related_techniques",
-        "agenda"
+        "agenda",
+        "same_technique",
+        "alternative_formulation",
+        "standard_baselines",
+        "adjacent_tasks"
       ],
       "title": "QueryPerspective",
       "type": "string"

@@ -1,0 +1,12 @@
+{
+  "id": "iclr-2027-submission",
+  "venue": "ICLR",
+  "year": 2027,
+  "profile_key": "iclr2027",
+  "source": "https://iclr.cc/Conferences/2027/Dates",
+  "abstract_deadline": "2026-09-18",
+  "submission_deadline": "2026-09-25",
+  "deadline_timezone": "Anywhere on Earth",
+  "pinned": "2026-10-21",
+  "notes": "Abstract deadline 2026-09-18 AOE and paper deadline 2026-09-25 AOE, from the ICLR 2027 dates page. Concurrent-work checks use submission_deadline. Format-check keys (page size, margins, anonymity) belong on the visual profile and are not duplicated in this sidecar."
+}

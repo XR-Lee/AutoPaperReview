@@ -240,7 +240,7 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
                 path = loaded.resolve(str(raw))
                 if not path.exists():
                     errors.append(f"stage {stage.id} inspect path does not exist: {path}")
-        if stage.type in {"command", "literature_grounding", "execute_review"} and stage.params.get(
+        if stage.type in {"command", "literature_grounding", "execute_review", "related_work_search"} and stage.params.get(
             "requires_network"
         ):
             scope = str(stage.params.get("network_scope", "fulltext" if stage.type == "command" else "metadata"))

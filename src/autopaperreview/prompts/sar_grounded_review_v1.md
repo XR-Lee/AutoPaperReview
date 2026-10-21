@@ -19,6 +19,7 @@ Rules:
 - Distinguish abstract-only snapshots from full-text summaries. Do not treat a search snippet as final evidence.
 - Figure-backed claims (qualitative examples, trade-off plots, robot photos, architecture cartoons) require PDF page inspection. A caption restated from manuscript.txt is not evidence that the figure was read.
 - Listed contributions are the audit units. Score claims_supported, originality, and prior_work_contextualization per contribution, not as a single paper-level paragraph.
+- Score prior_work_contextualization and originality only after the related-work search. Do not score those clauses from the bibliography alone. Use pw-2 when a confirmed must-compare neighbor is missing, es-4 and unfair_baseline when a baseline has privileged inputs or solves a different task, and do not treat post-deadline papers as required. Must-compare needs both task overlap and technique or setting overlap. Surveys, reviews, datasets, benchmarks, and generators are discussion only. Confirm each must-compare item with a one-line reason before a retrieval cap cites it. If no confirmation is available, report awaiting_confirmation and do not demote those neighbours into discussion-only. A failed provider never creates or strengthens a retrieval cap. If every provider failed, do not cap. On a partial search, missing_closest_neighbor may still apply when a provider that succeeded verified a confirmed pre-deadline neighbor that is absent from the baselines. unfair_baseline still applies on that partial search when it quotes the manuscript's own experiment lines. Resolve a cited bibliography entry by its title, arXiv id, or DOI, and keep the judging agent's confirmation or rejection reason verbatim.
 - Return schema-valid ReviewClaim, DimensionScore, RelatedWorkQuery, and ReviewIssue records. Do not return free-form prose as the only result.
 
 ## Anchored bands and fatal classes
@@ -29,6 +30,7 @@ On any blocking, decision-relevant issue set `decision_relevant` true and `fatal
 
 - `invalid_protocol`, `leakage`, `wrong_metric` — the formula caps the ICLR bin at 3
 - `unfair_baseline`, `unsupported_claim` — the formula caps the ICLR bin at 5
+- `missing_closest_neighbor` — a verified pre-deadline neighbor is absent from the baselines; the formula caps the ICLR bin at 6
 - `format_desk_reject` — anonymity or page-limit break; the formula caps the ICLR bin at 1
 
 You propose the class. You do not choose the ICLR 1/3/5/6/8/10 bin. The `rate` stage computes it from the bands and the caps. Do not put that bin in `recommendation` as if it were a separate score.
