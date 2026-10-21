@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import subprocess
 from pathlib import Path
 
 # Link text cannot contain brackets, so `[[E2](#record-e2), [E3](#record-e3)]`
@@ -55,28 +56,66 @@ _SECTION_ACCENT = {
     "Editorial": "#78716c",
 }
 
-_FONT_CANDIDATES = (
-    (
-        ("/System/Library/Fonts/STHeiti Light.ttc", 1),
-        ("/System/Library/Fonts/STHeiti Medium.ttc", 1),
-    ),
-    (
-        ("/System/Library/Fonts/Supplemental/Songti.ttc", 6),
-        ("/System/Library/Fonts/Supplemental/Songti.ttc", 2),
-    ),
-    (
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 0),
-    ),
-    (
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-    ),
-    (
-        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 0),
-    ),
+# Embedded CJK faces, most specific first. Noto/Source Han SC collections keep
+# Simplified Chinese at subfont 2 (JP, KR, SC, TC, HK). A single-file face uses 0.
+_PREFERRED_CJK_FILES = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSerifCJKsc-Regular.otf",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
+    "/usr/share/fonts/opentype/source-han-sans/SourceHanSans-Regular.ttc",
+    "/usr/share/fonts/opentype/source-han/SourceHanSansSC-Regular.otf",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
 )
+_CJK_NAME_RANK = (
+    "notosanscjksc",
+    "notoserifcjksc",
+    "sourcehansanssc",
+    "notosanscjk",
+    "notoserifcjk",
+    "sourcehansans",
+    "sourcehan",
+    "notosanssc",
+    "wqymicrohei",
+    "wenquanyi",
+    "wqy",
+    "droidsansfallback",
+    "stheiti",
+    "songti",
+)
+_CJK_PDF_MARKERS = (
+    "notosanscjk",
+    "notoserifcjk",
+    "notosanssc",
+    "sourcehan",
+    "stsong",
+    "wenquanyi",
+    "wqy",
+    "droidsansfallback",
+    "stheiti",
+    "songti",
+    "aprcjk",
+)
+
+
+class _FontChoice:
+    latin = "Helvetica"
+    latin_bold = "Helvetica-Bold"
+    cjk = "Helvetica"
+    cjk_bold = "Helvetica-Bold"
+    source = ""
+
+
+_FONTS = _FontChoice()
+_FONTS_READY = False
 
 
 def reportlab_available() -> bool:
@@ -87,30 +126,211 @@ def reportlab_available() -> bool:
     return True
 
 
-def _register_fonts() -> tuple[str, str]:
+def _font_rank(path: Path) -> int:
+    key = re.sub(r"[^a-z0-9]+", "", f"{path.parent.name}{path.name}".lower())
+    if "emoji" in key:
+        return len(_CJK_NAME_RANK) + 1
+    for index, hint in enumerate(_CJK_NAME_RANK):
+        if hint in key:
+            return index
+    return len(_CJK_NAME_RANK)
+
+
+def _subfont_index(path: Path) -> int:
+    name = path.name.lower()
+    if path.suffix.lower() in {".ttf", ".otf"}:
+        return 0
+    if any(tag in name for tag in ("sc", "hans", "simplified")):
+        return 0
+    if "cjk" in name or "sourcehan" in name:
+        return 2
+    return 0
+
+
+def _bold_sibling(path: Path) -> Path:
+    name = path.name
+    for regular, bold in (("Regular", "Bold"), ("regular", "bold")):
+        if regular in name:
+            candidate = path.with_name(name.replace(regular, bold, 1))
+            if candidate.is_file():
+                return candidate
+    return path
+
+
+def _discovered_cjk_files() -> list[Path]:
+    found: list[Path] = []
+    seen: set[str] = set()
+    for raw in _PREFERRED_CJK_FILES:
+        path = Path(raw)
+        if path.is_file() and str(path) not in seen:
+            seen.add(str(path))
+            found.append(path)
+    try:
+        listed = subprocess.check_output(
+            ["fc-list", ":lang=zh", "file"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        listed = ""
+    for line in listed.splitlines():
+        raw = line.split(":", 1)[0].strip()
+        path = Path(raw)
+        if path.suffix.lower() not in {".ttf", ".otf", ".ttc", ".otc"}:
+            continue
+        if path.is_file() and str(path) not in seen:
+            seen.add(str(path))
+            found.append(path)
+    found.sort(key=lambda item: (_font_rank(item), str(item)))
+    return found
+
+
+def _register_ttf_pair(regular: Path, bold: Path) -> bool:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    for (reg_path, reg_idx), (bold_path, bold_idx) in _FONT_CANDIDATES:
-        if not Path(reg_path).is_file():
+    index = _subfont_index(regular)
+    bold_index = _subfont_index(bold)
+    try:
+        pdfmetrics.registerFont(TTFont("APRCjk", str(regular), subfontIndex=index))
+        pdfmetrics.registerFont(TTFont("APRCjkBold", str(bold), subfontIndex=bold_index))
+        pdfmetrics.registerFontFamily(
+            "APRCjk",
+            normal="APRCjk",
+            bold="APRCjkBold",
+            italic="APRCjk",
+            boldItalic="APRCjkBold",
+        )
+        pdfmetrics.registerFontFamily(
+            "APRCjkBold",
+            normal="APRCjkBold",
+            bold="APRCjkBold",
+            italic="APRCjkBold",
+            boldItalic="APRCjkBold",
+        )
+    except Exception:
+        return False
+    _FONTS.cjk = "APRCjk"
+    _FONTS.cjk_bold = "APRCjkBold"
+    _FONTS.source = regular.name
+    return True
+
+
+def _register_cid_fallback() -> bool:
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    except Exception:
+        return False
+    _FONTS.cjk = "STSong-Light"
+    _FONTS.cjk_bold = "STSong-Light"
+    _FONTS.source = "STSong-Light"
+    return True
+
+
+def _register_fonts() -> _FontChoice:
+    """Latin text stays on Helvetica. zh-Hans uses an embedded CJK face."""
+    global _FONTS_READY
+    if _FONTS_READY:
+        return _FONTS
+    for regular in _discovered_cjk_files():
+        if _register_ttf_pair(regular, _bold_sibling(regular)):
+            _FONTS_READY = True
+            return _FONTS
+    _register_cid_fallback()
+    _FONTS_READY = True
+    return _FONTS
+
+
+def _needs_cjk_font(char: str) -> bool:
+    code = ord(char)
+    if (
+        0x2E80 <= code <= 0x2EFF
+        or 0x3000 <= code <= 0x303F
+        or 0x3400 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0xFF00 <= code <= 0xFFEF
+        or 0x20000 <= code <= 0x2A6DF
+    ):
+        return True
+    try:
+        char.encode("cp1252")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def _wrap_runs(text: str, face: str) -> str:
+    if not text or face in {"", "Helvetica", "Helvetica-Bold"}:
+        return text
+    parts: list[str] = []
+    buffer: list[str] = []
+    cjk = False
+
+    def flush() -> None:
+        if not buffer:
+            return
+        chunk = "".join(buffer)
+        buffer.clear()
+        if cjk:
+            parts.append(f'<font face="{face}">{chunk}</font>')
+        else:
+            parts.append(chunk)
+
+    for char in text:
+        want = _needs_cjk_font(char)
+        if buffer and want != cjk:
+            flush()
+        cjk = want
+        buffer.append(char)
+    flush()
+    return "".join(parts)
+
+
+_TAG_SPLIT = re.compile(r"(<[^>]+>)")
+
+
+def _fontify_markup(markup: str, *, bold: bool) -> str:
+    """Wrap zh-Hans and non-WinAnsi symbols in the CJK face. Latin stays put."""
+    fonts = _register_fonts()
+    face = fonts.cjk_bold if bold else fonts.cjk
+    if face in {"", "Helvetica", "Helvetica-Bold"}:
+        return markup
+    bold_depth = 1 if bold else 0
+    parts: list[str] = []
+    for piece in _TAG_SPLIT.split(markup):
+        if piece.startswith("<"):
+            lowered = piece.lower()
+            if lowered in {"<b>", "<b/>"} or lowered.startswith("<b "):
+                bold_depth += 1
+            elif lowered.startswith("</b"):
+                bold_depth = max(0, bold_depth - 1)
+            parts.append(piece)
             continue
-        try:
-            pdfmetrics.registerFont(TTFont("APRBody", reg_path, subfontIndex=reg_idx))
-            if Path(bold_path).is_file():
-                pdfmetrics.registerFont(TTFont("APRBold", bold_path, subfontIndex=bold_idx))
-            else:
-                pdfmetrics.registerFont(TTFont("APRBold", reg_path, subfontIndex=reg_idx))
-            pdfmetrics.registerFontFamily(
-                "APRBody",
-                normal="APRBody",
-                bold="APRBold",
-                italic="APRBody",
-                boldItalic="APRBold",
-            )
-        except Exception:
-            continue
-        return "APRBody", "APRBold"
-    return "Helvetica", "Helvetica-Bold"
+        active = fonts.cjk_bold if bold_depth else fonts.cjk
+        parts.append(_wrap_runs(piece, active))
+    return "".join(parts)
+
+
+def _fontify_plain(text: str, *, bold: bool) -> str:
+    return _fontify_markup(html.escape(text), bold=bold)
+
+
+def pdf_base_fonts(path: Path) -> list[str]:
+    """BaseFont names from a written PDF, without a poppler dependency."""
+    data = Path(path).read_bytes()
+    names = re.findall(rb"/BaseFont\s*/([^\s\[\]<>/]+)", data)
+    return [name.decode("latin1", "replace") for name in names]
+
+
+def pdf_has_cjk_font(path: Path) -> bool:
+    for name in pdf_base_fonts(path):
+        folded = name.lower()
+        if any(marker in folded for marker in _CJK_PDF_MARKERS):
+            return True
+    return False
 
 
 def _destination(name: str):
@@ -144,7 +364,7 @@ def _peek_issue_title(tokens: list[tuple[str, str, int]], start: int, heading: s
     return title
 
 
-def _markup(text: str) -> tuple[list[str], str]:
+def _markup(text: str, *, bold: bool = False) -> tuple[list[str], str]:
     dests = _HTML_ID.findall(text)
     stripped = _HTML_ID.sub("", text)
     stripped = (
@@ -178,12 +398,15 @@ def _markup(text: str) -> tuple[list[str], str]:
             return f"<b>{match.group(1)}</b>"
         return f'<font color="#57534e">{match.group(2)}</font>'
 
-    return dests, _INLINE.sub(code_or_bold, escaped)
+    return dests, _fontify_markup(_INLINE.sub(code_or_bold, escaped), bold=bold)
 
 
 def _chip_html(language: str) -> str:
     label, color = _LANGS.get(language, (language, "#57534e"))
-    return f'<font color="{color}" size="8"><b>{html.escape(label)}</b></font>'
+    return _fontify_markup(
+        f'<font color="{color}" size="8"><b>{html.escape(label)}</b></font>',
+        bold=False,
+    )
 
 
 def _score_color(score: float) -> str:
@@ -205,7 +428,10 @@ def _status_legend_markup(text: str) -> tuple[list[str], str] | None:
     color = _STATUS_COLOR.get(code, "#57534e")
     badge = f'<font color="{color}" size="9"><b>{html.escape(code)}</b></font>'
     if zh:
-        badge += f'&nbsp;<font color="#57534e" size="9">{html.escape(zh)}</font>'
+        badge += (
+            '&nbsp;<font color="#57534e" size="9">'
+            f"{_fontify_markup(html.escape(zh), bold=False)}</font>"
+        )
     return dests, badge + "&nbsp;&nbsp;" + rest_html
 
 
@@ -291,7 +517,7 @@ def _is_lang_token(kind: str, text: str) -> bool:
     return kind == "langline" or (kind == "bullet" and _LANG_PREFIX_RE.match(text) is not None)
 
 
-def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
+def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str | None = None) -> None:
     """Write a linked PDF. Requires the optional reportlab extra."""
     from .bilingual_coverage import require_bilingual_markdown
 
@@ -317,7 +543,8 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
     if not reportlab_available():
         raise RuntimeError("reportlab is not installed; pip install 'autopaperreview[pdf]'")
 
-    body_font, bold_font = _register_fonts()
+    fonts = _register_fonts()
+    body_font, bold_font = fonts.latin, fonts.latin_bold
     ink = HexColor("#1c1917")
     muted = HexColor("#78716c")
     rule = HexColor("#e7e5e4")
@@ -426,7 +653,10 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             if not entry:
                 return
             level, text, key = entry
-            self.notify("TOCEntry", (level, text, self.page, key))
+            self.notify(
+                "TOCEntry",
+                (level, _fontify_plain(text, bold=level == 0), self.page, key),
+            )
             try:
                 self.canv.addOutlineEntry(text[:120], key, level=level, closed=level >= 1)
             except Exception:
@@ -485,7 +715,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             if kind == "bullet":
                 cell.extend(flow(_bullet_markup(text), styles["sub"] if indent >= 2 else styles["card"]))
             elif _KICKER_RE.match(text):
-                cell.extend(flow(_markup(text), styles["kicker"]))
+                cell.extend(flow(_markup(text, bold=True), styles["kicker"]))
             else:
                 cell.extend(flow(_markup(text), styles["card"]))
             cursor += 1
@@ -548,9 +778,9 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             kind, project = heading.split(": ", 1)
         else:
             kind, project = heading, ""
-        story.extend(flow(_markup(kind), styles["title"]))
+            story.extend(flow(_markup(kind, bold=True), styles["title"]))
         if project:
-            story.extend(flow(_markup(project), styles["project"]))
+            story.extend(flow(_markup(project, bold=True), styles["project"]))
         index += 1
         meta: dict[str, str] = {}
         while index < len(tokens) and tokens[index][0] in {"bullet", "blank"}:
@@ -579,7 +809,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
         if human:
             bits.append(html.escape(human))
         if bits:
-            story.append(Paragraph("  ·  ".join(bits), styles["meta"]))
+            story.append(Paragraph(_fontify_markup("  ·  ".join(bits), bold=False), styles["meta"]))
         sha = meta.get("Source SHA-256")
         if sha:
             story.append(Paragraph("source  " + html.escape(sha), styles["hash"]))
@@ -610,7 +840,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 textColor=muted,
             ),
         ]
-        story.append(Paragraph("Contents / 目录", styles["h1"]))
+        story.append(Paragraph(_fontify_plain("Contents / 目录", bold=True), styles["h1"]))
         story.append(HRFlowable(width="100%", thickness=0.5, color=rule, spaceAfter=6))
         story.append(toc)
         story.append(Spacer(1, 8))
@@ -629,7 +859,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
                 if heading.startswith(prefix):
                     section_accent = HexColor(color)
                     break
-            dests, markup = _markup(text)
+            dests, markup = _markup(text, bold=True)
             heading_plain = _plain_heading(text)
             heading_key = _outline_key("h2", heading_plain)
             heading_group = KeepTogether(
@@ -647,13 +877,13 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             continue
         if kind == "h3":
             flush_issue()
-            story.extend(flow(_markup(text), styles["h2"]))
+            story.extend(flow(_markup(text, bold=True), styles["h2"]))
             index += 1
             continue
         if kind == "h4":
             flush_issue()
             story.append(CondPageBreak(70 * mm))
-            heading_items = flow(_markup(text), styles["h3"])
+            heading_items = flow(_markup(text, bold=True), styles["h3"])
             index += 1
             bundled = list(heading_items)
             while index < len(tokens) and tokens[index][0] in {"bullet", "blank"}:
@@ -682,7 +912,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
             issue_key = _outline_key("issue", text)
             current_issue = [
                 TocMark(1, issue_title, issue_key),
-                *flow(_markup(text), issue_style),
+                *flow(_markup(text, bold=True), issue_style),
             ]
             current_issue[0]._toc_entry = (1, issue_title, issue_key)
             index += 1
@@ -779,7 +1009,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
         if kind == "body":
             flush_issue()
             if _KICKER_RE.match(text):
-                story.extend(flow(_markup(text), styles["kicker"]))
+                story.extend(flow(_markup(text, bold=True), styles["kicker"]))
             else:
                 story.extend(flow(_markup(text), styles["body"]))
             index += 1
@@ -798,7 +1028,8 @@ def write_report_pdf(markdown: str, path: Path, *, title: str) -> None:
         canvas.line(0, A4[1], 0, 0)
         canvas.setFillColor(muted)
         canvas.setFont(body_font, 8)
-        canvas.drawString(left, 11 * mm, "AutoPaperReview  ·  evidence-linked review  ·  no overall score")
+        note = footer_note or "AutoPaperReview  ·  evidence-linked review  ·  no overall score"
+        canvas.drawString(left, 11 * mm, note)
         canvas.drawRightString(A4[0] - right, 11 * mm, str(doc.page))
         if doc.page == 1:
             canvas.showOutline()

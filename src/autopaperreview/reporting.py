@@ -8,12 +8,13 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
-from .i18n import ensure_package_languages, normalize_languages, require_language, translate_text
+from .i18n import ensure_package_languages, normalize_languages, require_language
 from .models import (
     IntegrityRecord,
     LedgerClaim,
     LocalizedText,
     NoveltyAssessment,
+    OverallScoreMethod,
     ReviewClaimKind,
     ReviewIssue,
     ReviewPackage,
@@ -69,6 +70,7 @@ SECTION_ZH = {
     "Novelty": "新颖性",
     "Evidence Catalog": "证据目录",
     "Appendix": "附录",
+    "Format and Visual Checks": "版式与视觉检查",
 }
 
 SEVERITY_ZH = {
@@ -86,6 +88,50 @@ NO_OVERALL_EN = (
 NO_OVERALL_ZH = (
     "未给出总体分数。七个维度各自按 1–10 打分；结论按会议或期刊分别给出，不是拟合的总分映射。"
 )
+
+_VISUAL_STATUS = {
+    "unchecked": ("unchecked", "未检查"),
+    "format_only": ("format only", "仅版式"),
+    "checked": ("checked", "已检查"),
+}
+
+
+def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
+    score = package.overall_score
+    if (
+        score is None
+        or score.method != OverallScoreMethod.declared_formula
+        or not score.coefficient_set
+    ):
+        return [NO_OVERALL_ZH if language == "zh-Hans" else NO_OVERALL_EN]
+    meta = score.metadata or {}
+    cap_ids = meta.get("cap_ids") or []
+    exemption_ids = meta.get("exemption_ids") or []
+    status_key = str(meta.get("visual_status") or "unchecked")
+    status = _VISUAL_STATUS.get(status_key, (status_key, status_key))
+    status_label = status[1] if language == "zh-Hans" else status[0]
+    none = "无" if language == "zh-Hans" else "none"
+    if language == "zh-Hans":
+        return [
+            f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{score.value:.0f}**。"
+            "这不是拟合回归。",
+            f"- 加权平均：{meta.get('weighted')}",
+            f"- 门控 min(主张, 可靠性)：{meta.get('gate')}",
+            f"- 上限：{', '.join(cap_ids) if cap_ids else none}",
+            f"- 豁免：{', '.join(exemption_ids) if exemption_ids else none}",
+            f"- 视觉状态：{status_label}",
+            f"- 信心：{meta.get('confidence')}",
+        ]
+    return [
+        f"Declared rating `{score.coefficient_set}`: ICLR bin **{score.value:.0f}**. "
+        "This is not a fitted regression.",
+        f"- Weighted mean: {meta.get('weighted')}",
+        f"- Gate min(claims, soundness): {meta.get('gate')}",
+        f"- Caps: {', '.join(cap_ids) if cap_ids else none}",
+        f"- Exemptions: {', '.join(exemption_ids) if exemption_ids else none}",
+        f"- Visual status: {status_label}",
+        f"- Confidence: {meta.get('confidence')}",
+    ]
 
 
 def sort_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
@@ -473,7 +519,7 @@ def _heading(title: str, languages: Sequence[str]) -> str:
 
 
 def _render_venue_block_monolingual(package: ReviewPackage, language: str) -> list[str]:
-    lines = ["## Venue Conclusions", "", NO_OVERALL_EN if language != "zh-Hans" else NO_OVERALL_ZH, ""]
+    lines = ["## Venue Conclusions", "", *_rating_lines(package, language), ""]
     if not package.venue_conclusions:
         return lines
     conferences = [item for item in package.venue_conclusions if item.kind == VenueKind.conference]
@@ -500,21 +546,10 @@ def _render_venue_block_monolingual(package: ReviewPackage, language: str) -> li
 
 def _render_venue_block_bilingual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
     lines = [_heading("Venue Conclusions", languages), ""]
-    no_overall = {
-        "en": NO_OVERALL_EN,
-        "zh-Hans": NO_OVERALL_ZH,
-    }
     lines.extend(
         _language_blocks(
             languages,
-            {
-                language: [
-                    no_overall[language]
-                    if language in no_overall
-                    else translate_text(NO_OVERALL_EN, source="en", target=language)
-                ]
-                for language in languages
-            },
+            {language: _rating_lines(package, language) for language in languages},
         )
     )
     if not package.venue_conclusions:
@@ -542,6 +577,34 @@ def _render_venue_block_bilingual(package: ReviewPackage, languages: Sequence[st
                     },
                 )
             )
+    return lines
+
+
+def _render_format_and_visual(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    if not package.format_checks and not package.visual_findings:
+        return []
+    lines = [_heading("Format and Visual Checks", languages), ""]
+    for item in package.format_checks:
+        status = "pass" if item.passed else "fail"
+        clause = f" `{item.clause_id}`" if item.clause_id else ""
+        fatal = f" `{item.fatal_class.value}`" if item.fatal_class else ""
+        lines.append(f"- **{item.id}** `{item.check}` — {status}{clause}{fatal}")
+        if item.detail and len(languages) > 1:
+            lines.extend(
+                _prose_items(item.detail, languages, field=f"{item.id}.detail")
+            )
+        elif item.detail:
+            lines.append(f"  - {item.detail.resolve(languages[0])}")
+    for finding in package.visual_findings:
+        fatal = f" `{finding.fatal_class.value}`" if finding.fatal_class else ""
+        clause = f" `{finding.clause_id}`" if finding.clause_id else ""
+        figure = f" {finding.figure_id}" if finding.figure_id else ""
+        severity = f" {finding.severity.value}" if finding.severity else ""
+        lines.append(
+            f"- **{finding.id}** page {finding.page}{figure} `{finding.kind.value}`"
+            f"{severity}{clause}{fatal} — `{finding.page_image_sha256[:12]}`"
+        )
+    lines.append("")
     return lines
 
 
@@ -624,13 +687,15 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             rationale = score.rationale.resolve(language) if score.rationale else ""
             detail = f" — {rationale}" if rationale else ""
             label = dimension_label(score.dimension, language)
+            clause = f" `{score.clause_id}`" if score.clause_id else ""
             lines.append(
-                f"- **{score.dimension.value}:** {label} — {score.score:.1f}/10"
+                f"- **{score.dimension.value}:** {label} — {score.score:.1f}/10{clause}"
                 f"{_evidence_suffix(score.evidence_ids)}{detail}"
             )
         lines.append("")
 
     lines.extend(_render_venue_block_monolingual(package, language))
+    lines.extend(_render_format_and_visual(package, [language]))
 
     claims_by_kind = {kind: [] for kind in CLAIM_SECTION}
     for claim in package.claims:
@@ -685,6 +750,16 @@ def _render_monolingual(package: ReviewPackage, language: str) -> str:
             [
                 f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
+                *(
+                    [f"- **Fatal class:** `{issue.fatal_class.value}`"]
+                    if issue.fatal_class is not None
+                    else []
+                ),
+                *(
+                    ["- **Decision relevant:** true"]
+                    if issue.decision_relevant
+                    else []
+                ),
                 f"- **Routes:** {routes}",
                 f"- **Sources:** {sources}",
                 f"- **Evidence IDs:** {evidence_ids}",
@@ -791,8 +866,9 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.extend([_heading("Dimension Scores", languages), ""])
         for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
             labels = " / ".join(dimension_label(score.dimension, language) for language in languages)
+            clause = f" `{score.clause_id}`" if score.clause_id else ""
             lines.append(
-                f"- **{score.dimension.value}:** {labels} — {score.score:.1f}/10"
+                f"- **{score.dimension.value}:** {labels} — {score.score:.1f}/10{clause}"
                 f"{_evidence_suffix(score.evidence_ids)}"
             )
             if score.rationale:
@@ -804,6 +880,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
         lines.append("")
 
     lines.extend(_render_venue_block_bilingual(package, languages))
+    lines.extend(_render_format_and_visual(package, languages))
 
     def _claim_section(kind: ReviewClaimKind, title: str) -> None:
         claims = claims_by_kind[kind]
@@ -864,6 +941,16 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
             [
                 f"- **Location:** {_issue_location(issue)}",
                 f"- **Confidence:** {issue.confidence:.2f}",
+                *(
+                    [f"- **Fatal class:** `{issue.fatal_class.value}`"]
+                    if issue.fatal_class is not None
+                    else []
+                ),
+                *(
+                    ["- **Decision relevant:** true"]
+                    if issue.decision_relevant
+                    else []
+                ),
                 f"- **Routes:** {routes}",
                 f"- **Sources:** {sources}",
                 f"- **Evidence IDs:** {evidence_ids}",

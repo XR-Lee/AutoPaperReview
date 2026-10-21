@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "PairRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "axis": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis"
+        },
+        "decision_gap": {
+          "enum": [
+            "cap_differs",
+            "same_cap"
+          ],
+          "title": "Decision Gap",
+          "type": "string"
+        },
+        "left_project_id": {
+          "minLength": 1,
+          "title": "Left Project Id",
+          "type": "string"
+        },
+        "left_value": {
+          "title": "Left Value",
+          "type": "integer"
+        },
+        "right_project_id": {
+          "minLength": 1,
+          "title": "Right Project Id",
+          "type": "string"
+        },
+        "right_value": {
+          "title": "Right Value",
+          "type": "integer"
+        },
+        "same_bin_justified": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Same Bin Justified"
+        }
+      },
+      "required": [
+        "left_project_id",
+        "right_project_id",
+        "left_value",
+        "right_value",
+        "decision_gap"
+      ],
+      "title": "PairRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Cross-paper order. Same-bin neighbors must carry a structured justification.",
+  "properties": {
+    "coefficient_set": {
+      "minLength": 1,
+      "title": "Coefficient Set",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "order": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Order",
+      "type": "array"
+    },
+    "pairs": {
+      "items": {
+        "$ref": "#/$defs/PairRecord"
+      },
+      "title": "Pairs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "coefficient_set",
+    "order"
+  ],
+  "title": "BatchCalibration",
+  "type": "object"
+}

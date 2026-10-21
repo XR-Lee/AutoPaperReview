@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .hashing import digest_excerpt
+from .rubrics import clause_dimension, clause_score
 
 
 SCHEMA_VERSION = "1.0"
@@ -72,6 +73,27 @@ class OverallScoreMethod(str, Enum):
     declared_formula = "declared_formula"
     human = "human"
     llm_direct = "llm_direct"
+
+
+class FatalClass(str, Enum):
+    """Hard venue cap. Active only for a blocking decision-relevant issue, or a format/visual record."""
+
+    invalid_protocol = "invalid_protocol"
+    leakage = "leakage"
+    wrong_metric = "wrong_metric"
+    unfair_baseline = "unfair_baseline"
+    unsupported_claim = "unsupported_claim"
+    format_desk_reject = "format_desk_reject"
+
+
+class VisualFindingKind(str, Enum):
+    legibility = "legibility"
+    axis_legend = "axis_legend"
+    error_bar = "error_bar"
+    figure_text_mismatch = "figure_text_mismatch"
+    qualitative_photo = "qualitative_photo"
+    equation_render = "equation_render"
+    table_rule = "table_rule"
 
 
 class QueryPerspective(str, Enum):
@@ -303,6 +325,8 @@ class DimensionScore(StrictModel):
     rationale: LocalizedText | None = None
     evidence_ids: list[str] = Field(min_length=1)
     route_ids: list[str] = Field(default_factory=list)
+    rubric_id: str | None = None
+    clause_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("evidence_ids", "route_ids")
@@ -312,6 +336,19 @@ class DimensionScore(StrictModel):
         if info.field_name == "evidence_ids" and not cleaned:
             raise ValueError("at least one evidence ID is required")
         return cleaned
+
+    @model_validator(mode="after")
+    def clause_matches_score(self) -> "DimensionScore":
+        if not self.clause_id:
+            return self
+        if clause_dimension(self.clause_id) != self.dimension.value:
+            raise ValueError(f"clause {self.clause_id} does not belong to {self.dimension.value}")
+        expected = clause_score(self.clause_id)
+        if float(self.score) != float(expected):
+            raise ValueError(
+                f"score {self.score} does not match clause {self.clause_id} ({expected})"
+            )
+        return self
 
 
 class OverallScore(StrictModel):
@@ -445,6 +482,8 @@ class ReviewIssue(StrictModel):
     decision: ReviewDecision = ReviewDecision.open
     anchor: Anchor | None = None
     first_read: FirstReadNote | None = None
+    fatal_class: FatalClass | None = None
+    decision_relevant: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("route_ids", "source_ids", "evidence_ids", "tags")
@@ -521,6 +560,117 @@ class NoveltyAssessment(StrictModel):
         return self.matched_task and self.matched_dataset and self.matched_metric
 
 
+class CapExemption(StrictModel):
+    """Raises one fatal cap. The basis evidence must not be the excluded evidence."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    issue_id: str
+    raises_cap_to: float
+    decision_basis_evidence_ids: list[str] = Field(min_length=1)
+    excluded_evidence_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("decision_basis_evidence_ids", "excluded_evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str], info) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if info.field_name == "decision_basis_evidence_ids" and not cleaned:
+            raise ValueError("at least one decision-basis evidence ID is required")
+        return cleaned
+
+    @model_validator(mode="after")
+    def basis_excludes_copied_cells(self) -> "CapExemption":
+        from .rubrics import ICLR_BINS
+
+        if int(self.raises_cap_to) not in ICLR_BINS or float(self.raises_cap_to) != float(int(self.raises_cap_to)):
+            raise ValueError("raises_cap_to must be one of 1, 3, 5, 6, 8, 10")
+        overlap = set(self.decision_basis_evidence_ids) & set(self.excluded_evidence_ids)
+        if overlap:
+            raise ValueError(f"decision basis overlaps excluded evidence: {sorted(overlap)}")
+        return self
+
+
+class VisualFinding(StrictModel):
+    """A pixel-backed observation. The visible mark is not a caption restatement."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    page: int = Field(ge=1)
+    bbox: list[float]
+    page_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    kind: VisualFindingKind
+    visible_mark: str = Field(min_length=1)
+    supports_citation: bool = False
+    evidence_ids: list[str] = Field(default_factory=list)
+    figure_id: str | None = None
+    caption_excerpt: str | None = None
+    fatal_class: FatalClass | None = None
+    decision_relevant: bool = False
+    clause_id: str | None = None
+    severity: Severity | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("evidence_ids")
+    @classmethod
+    def unique_strings(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @model_validator(mode="after")
+    def mark_is_not_the_caption(self) -> "VisualFinding":
+        if self.bbox is None or len(self.bbox) != 4:
+            raise ValueError("bbox must be [xmin, ymin, xmax, ymax]")
+        caption = (self.caption_excerpt or "").strip().casefold()
+        if caption and self.visible_mark.strip().casefold() == caption:
+            raise ValueError("visible_mark repeats the caption; that is not a page inspection")
+        if self.clause_id:
+            clause_score(self.clause_id)
+        return self
+
+
+class FormatCheck(StrictModel):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    check: str = Field(min_length=1)
+    passed: bool
+    fatal_class: FatalClass | None = None
+    clause_id: str | None = None
+    detail: LocalizedText | None = None
+    page: int | None = Field(default=None, ge=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def failure_carries_a_consequence(self) -> "FormatCheck":
+        if self.passed and (self.fatal_class is not None or self.clause_id is not None):
+            raise ValueError("a passing format check cannot set a cap or a clause ceiling")
+        if self.clause_id:
+            clause_score(self.clause_id)
+        return self
+
+
+class PairRecord(StrictModel):
+    left_project_id: str = Field(min_length=1)
+    right_project_id: str = Field(min_length=1)
+    left_value: int
+    right_value: int
+    decision_gap: Literal["cap_differs", "same_cap"]
+    same_bin_justified: str | None = None
+    axis: str | None = None
+
+    @model_validator(mode="after")
+    def tie_requires_a_reason(self) -> "PairRecord":
+        if self.left_value == self.right_value and not (self.same_bin_justified and self.same_bin_justified.strip()):
+            raise ValueError("equal venue bins require same_bin_justified")
+        if self.decision_gap == "cap_differs" and self.left_value == self.right_value:
+            raise ValueError("different active caps cannot share a venue bin")
+        return self
+
+
+class BatchCalibration(StrictModel):
+    """Cross-paper order. Same-bin neighbors must carry a structured justification."""
+
+    coefficient_set: str = Field(min_length=1)
+    order: list[str] = Field(min_length=1)
+    pairs: list[PairRecord] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ReviewPackage(StrictModel):
     schema_version: Literal[SCHEMA_VERSION] = SCHEMA_VERSION
     project_id: str = Field(min_length=1)
@@ -544,6 +694,9 @@ class ReviewPackage(StrictModel):
     agenda: list[AgendaQuestion] = Field(default_factory=list)
     integrity_records: list[IntegrityRecord] = Field(default_factory=list)
     novelty_assessments: list[NoveltyAssessment] = Field(default_factory=list)
+    cap_exemptions: list[CapExemption] = Field(default_factory=list)
+    visual_findings: list[VisualFinding] = Field(default_factory=list)
+    format_checks: list[FormatCheck] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -561,6 +714,9 @@ class ReviewPackage(StrictModel):
             "agenda question": [item.id for item in self.agenda],
             "integrity record": [item.id for item in self.integrity_records],
             "novelty assessment": [item.id for item in self.novelty_assessments],
+            "cap exemption": [item.id for item in self.cap_exemptions],
+            "visual finding": [item.id for item in self.visual_findings],
+            "format check": [item.id for item in self.format_checks],
         }
         for label, identifiers in collections.items():
             if len(identifiers) != len(set(identifiers)):
@@ -643,6 +799,31 @@ class ReviewPackage(StrictModel):
         )
         if missing:
             raise ValueError(f"novelty assessments reference unknown evidence: {missing}")
+        known_cap_targets = (
+            {issue.id for issue in self.issues}
+            | {item.id for item in self.visual_findings}
+            | {item.id for item in self.format_checks}
+        )
+        missing_targets = sorted(
+            {item.issue_id for item in self.cap_exemptions} - known_cap_targets
+        )
+        if missing_targets:
+            raise ValueError(f"cap exemptions reference unknown records: {missing_targets}")
+        missing = sorted(
+            {eid for item in self.cap_exemptions for eid in item.decision_basis_evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"cap exemptions reference unknown evidence: {missing}")
+        missing = sorted(
+            {eid for item in self.cap_exemptions for eid in item.excluded_evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"cap exemptions reference unknown excluded evidence: {missing}")
+        missing = sorted(
+            {eid for item in self.visual_findings for eid in item.evidence_ids} - evidence_ids
+        )
+        if missing:
+            raise ValueError(f"visual findings reference unknown evidence: {missing}")
         return self
 
 

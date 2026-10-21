@@ -302,6 +302,48 @@
       "title": "Artifact",
       "type": "object"
     },
+    "CapExemption": {
+      "additionalProperties": false,
+      "description": "Raises one fatal cap. The basis evidence must not be the excluded evidence.",
+      "properties": {
+        "decision_basis_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Decision Basis Evidence Ids",
+          "type": "array"
+        },
+        "excluded_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Evidence Ids",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "issue_id": {
+          "title": "Issue Id",
+          "type": "string"
+        },
+        "raises_cap_to": {
+          "title": "Raises Cap To",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "issue_id",
+        "raises_cap_to",
+        "decision_basis_evidence_ids"
+      ],
+      "title": "CapExemption",
+      "type": "object"
+    },
     "CommentIntent": {
       "description": "Conventional Comments-style intent. Optional; reports remain readable without it.",
       "enum": [
@@ -317,6 +359,18 @@
     "DimensionScore": {
       "additionalProperties": false,
       "properties": {
+        "clause_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clause Id"
+        },
         "dimension": {
           "$ref": "#/$defs/SarDimension"
         },
@@ -350,6 +404,18 @@
           },
           "title": "Route Ids",
           "type": "array"
+        },
+        "rubric_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rubric Id"
         },
         "score": {
           "maximum": 10.0,
@@ -464,6 +530,19 @@
       "title": "EvidenceRecord",
       "type": "object"
     },
+    "FatalClass": {
+      "description": "Hard venue cap. Active only for a blocking decision-relevant issue, or a format/visual record.",
+      "enum": [
+        "invalid_protocol",
+        "leakage",
+        "wrong_metric",
+        "unfair_baseline",
+        "unsupported_claim",
+        "format_desk_reject"
+      ],
+      "title": "FatalClass",
+      "type": "string"
+    },
     "FirstReadNote": {
       "additionalProperties": false,
       "description": "Self-contained argument for a reader who is seeing the paper for the first time.",
@@ -508,6 +587,84 @@
         "explanation"
       ],
       "title": "FirstReadNote",
+      "type": "object"
+    },
+    "FormatCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "minLength": 1,
+          "title": "Check",
+          "type": "string"
+        },
+        "clause_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clause Id"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalizedText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fatal_class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FatalClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "check",
+        "passed"
+      ],
+      "title": "FormatCheck",
       "type": "object"
     },
     "IntegrityKind": {
@@ -1220,6 +1377,11 @@
           "$ref": "#/$defs/ReviewDecision",
           "default": "open"
         },
+        "decision_relevant": {
+          "default": false,
+          "title": "Decision Relevant",
+          "type": "boolean"
+        },
         "evidence": {
           "$ref": "#/$defs/LocalizedText"
         },
@@ -1229,6 +1391,17 @@
           },
           "title": "Evidence Ids",
           "type": "array"
+        },
+        "fatal_class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FatalClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "first_read": {
           "anyOf": [
@@ -1561,6 +1734,145 @@
       ],
       "title": "VenueOutcome",
       "type": "string"
+    },
+    "VisualFinding": {
+      "additionalProperties": false,
+      "description": "A pixel-backed observation. The visible mark is not a caption restatement.",
+      "properties": {
+        "bbox": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Bbox",
+          "type": "array"
+        },
+        "caption_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Caption Excerpt"
+        },
+        "clause_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clause Id"
+        },
+        "decision_relevant": {
+          "default": false,
+          "title": "Decision Relevant",
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "fatal_class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FatalClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "figure_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Figure Id"
+        },
+        "id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VisualFindingKind"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_image_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Page Image Sha256",
+          "type": "string"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supports_citation": {
+          "default": false,
+          "title": "Supports Citation",
+          "type": "boolean"
+        },
+        "visible_mark": {
+          "minLength": 1,
+          "title": "Visible Mark",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "page",
+        "bbox",
+        "page_image_sha256",
+        "kind",
+        "visible_mark"
+      ],
+      "title": "VisualFinding",
+      "type": "object"
+    },
+    "VisualFindingKind": {
+      "enum": [
+        "legibility",
+        "axis_legend",
+        "error_bar",
+        "figure_text_mismatch",
+        "qualitative_photo",
+        "equation_render",
+        "table_rule"
+      ],
+      "title": "VisualFindingKind",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -1582,6 +1894,13 @@
       "title": "Agenda",
       "type": "array"
     },
+    "cap_exemptions": {
+      "items": {
+        "$ref": "#/$defs/CapExemption"
+      },
+      "title": "Cap Exemptions",
+      "type": "array"
+    },
     "claims": {
       "items": {
         "$ref": "#/$defs/ReviewClaim"
@@ -1601,6 +1920,13 @@
         "$ref": "#/$defs/EvidenceRecord"
       },
       "title": "Evidence",
+      "type": "array"
+    },
+    "format_checks": {
+      "items": {
+        "$ref": "#/$defs/FormatCheck"
+      },
+      "title": "Format Checks",
       "type": "array"
     },
     "integrity_records": {
@@ -1733,6 +2059,13 @@
         "$ref": "#/$defs/VenueConclusion"
       },
       "title": "Venue Conclusions",
+      "type": "array"
+    },
+    "visual_findings": {
+      "items": {
+        "$ref": "#/$defs/VisualFinding"
+      },
+      "title": "Visual Findings",
       "type": "array"
     }
   },
