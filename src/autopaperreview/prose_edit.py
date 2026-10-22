@@ -17,9 +17,12 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-# A sentence ends at punctuation followed by a space and a capital or CJK
-# character. Periods inside scores (8.0), DOIs, and filenames stay in place.
-_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+(?=[A-Z\u3400-\u9fff\"“])")
+# Latin sentences end at .!? plus a space and a capital or quote, so scores
+# (8.0), DOIs, and filenames stay intact. CJK sentences end at 。！？ even when
+# the next sentence is not separated by a space.
+_BOUNDARY = re.compile(
+    r"(?:(?<=[。！？])\s*|(?<=[.!?])\s+(?=[A-Z\"“]))"
+)
 _WORD = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _CITE = re.compile(r"\[\[[^\]]+\]\(#[^)]+\)\]")

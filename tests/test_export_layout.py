@@ -196,6 +196,14 @@ class ReadabilityTests(unittest.TestCase):
         metrics = measure_prose(edited, language="en")
         self.assertEqual(metrics["structure_present"][0], "Summary")
 
+    def test_decimals_stay_one_sentence_and_cjk_periods_split(self) -> None:
+        english = measure_prose("The score is 8.0/10. The next sentence starts here.", language="en")
+        self.assertEqual(english["sentence_count"], 2)
+        edited, _report = edit_body("The score is 8.0/10. The next sentence starts here.", language="en")
+        self.assertIn("8.0/10", edited)
+        chinese = measure_prose("第一句说完了。第二句也说完了。", language="zh-Hans")
+        self.assertEqual(chinese["sentence_count"], 2)
+
 
 class TranslatorHookTests(unittest.TestCase):
     def test_callable_translator_fills_a_bcp47_tag(self) -> None:
