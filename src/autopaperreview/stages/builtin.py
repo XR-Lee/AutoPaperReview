@@ -1016,7 +1016,7 @@ _REPORT_PRESENTATION = {
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "15"
+    version = "16"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
@@ -1161,16 +1161,13 @@ class ReportStage(StageHandler):
                 and package.overall_score.method.value == "declared_formula"
                 and package.overall_score.coefficient_set
             )
-            footer = (
-                f"AutoPaperReview  ·  {package.overall_score.coefficient_set}  ·  evidence-linked"
-                if formula and package.overall_score is not None
-                else None
-            )
+            footer = "AutoPaperReview  ·  evidence-linked" if formula else None
             write_report_pdf(
                 edited,
                 pdf_path,
                 title=f"Review: {package.project_id}",
                 footer_note=footer,
+                compact=True,
             )
             (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
             pdf_written = True

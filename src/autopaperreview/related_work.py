@@ -3602,7 +3602,6 @@ def render_related_work_brief(
             f"Effective venue cap {record.effective_venue_cap}.",
             f"生效上限 {record.effective_venue_cap}。",
         )
-    subsection("Suggested weakness", "建议的不足", record.weakness_en, record.weakness_zh)
     return lines
 
 
