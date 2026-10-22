@@ -62,7 +62,7 @@ from .models import (
     SourceRecord,
     VisualFinding,
 )
-from .rubrics import RUBRIC_ID, clause_dimension, clause_score
+from .rubrics import RUBRIC_ID, band_case_errors, clause_dimension, clause_score
 from .visual import VisualPageRequest
 
 Transport = Callable[[urllib.request.Request, float], bytes]
@@ -143,11 +143,20 @@ class LedgerJudgment(StrictPayload):
         return self
 
 
+class BandEvidence(StrictPayload):
+    excerpt: str = Field(min_length=12)
+    location: str = Field(min_length=2)
+    observable: str = Field(min_length=2)
+
+
 class DimensionItem(StrictPayload):
     dimension: SarDimension
+    supporting: list[BandEvidence] = Field(min_length=1)
+    opposing: list[BandEvidence] = Field(min_length=1)
+    move_up: str = Field(min_length=40)
+    move_down: str = Field(min_length=40)
     clause_id: str = Field(min_length=1)
-    rationale: str = Field(min_length=1)
-    excerpt: str = Field(min_length=1)
+    rationale: str = Field(min_length=40)
 
     @model_validator(mode="after")
     def clause_matches_dimension(self) -> "DimensionItem":
@@ -284,10 +293,17 @@ _SCHEMA_HINTS = {
         "ledger must contain at least one claim."
     ),
     "dimensions": (
-        '{"dimensions":[{"dimension":"experimental_soundness","clause_id":"es-4",'
-        '"rationale":"...","excerpt":"exact substring"}]} '
+        '{"dimensions":[{"dimension":"experimental_soundness",'
+        '"supporting":[{"excerpt":"exact substring","location":"Section 4","observable":"named_confound"}],'
+        '"opposing":[{"excerpt":"a different exact substring","location":"Table 2","observable":"ablations_present"}],'
+        '"move_up":"what observable result would make the next higher band true",'
+        '"move_down":"what observable result would make the next lower band true",'
+        '"clause_id":"es-4","rationale":"why this clause and not the neighbors"}]} '
+        "Write supporting evidence, opposing evidence, move_up, and move_down before clause_id. "
         "Include each of the seven SAR dimensions once. "
-        "The pipeline sets the numeric score from the clause id."
+        "The pipeline sets the numeric score from the clause id. "
+        "A band without both excerpts is rejected. "
+        "Band 6 is rejected unless supporting cites a band-6 observable and opposing cites a missing band-8 observable."
     ),
     "fatal": (
         '{"classifications":[{"issue_id":"I-C1","fatal_class":"leakage","decision_relevant":true}]} '
@@ -966,8 +982,10 @@ class OpenAICompatibleAdapter:
 
 def _anchor_retry_message(missing: list[tuple[str, str]]) -> str:
     lines = [
-        "Unresolved evidence anchors. Return one JSON object with all seven dimensions.",
+        "Dimension band rejected. Return one JSON object with all seven dimensions.",
+        "Write supporting evidence, opposing evidence, move_up, and move_down before clause_id.",
         "Each excerpt must be an exact substring of the manuscript or a retrieved snapshot.",
+        "Band 6 needs a band-6 supporting observable and a missing band-8 opposing observable.",
     ]
     lines.extend(f"- {name}: {reason}" for name, reason in missing)
     return "\n".join(lines)
@@ -984,27 +1002,54 @@ def _dimension_rows(
     evidence: list[EvidenceRecord] = []
     missing: list[tuple[str, str]] = []
     for item in payload.dimensions:
-        anchor = locate_excerpt(
-            item.excerpt,
-            manuscript=request.source_text,
-            manuscript_sha=request.manuscript.sha256,
-            snapshots=snapshots,
+        resolved: list[tuple[str, int, BandEvidence, Anchor]] = []
+        item_missing: list[str] = []
+        for role, group in (("supporting", item.supporting), ("opposing", item.opposing)):
+            for index, ev in enumerate(group, start=1):
+                anchor = locate_excerpt(
+                    ev.excerpt,
+                    manuscript=request.source_text,
+                    manuscript_sha=request.manuscript.sha256,
+                    snapshots=snapshots,
+                )
+                if anchor is None:
+                    item_missing.append(f"{role}[{index}] excerpt is not in the manuscript")
+                else:
+                    resolved.append((role, index, ev, anchor))
+        structure = band_case_errors(
+            dimension=item.dimension.value,
+            score=clause_score(item.clause_id),
+            supporting=[ev.model_dump() for ev in item.supporting],
+            opposing=[ev.model_dump() for ev in item.opposing],
+            move_up=item.move_up,
+            move_down=item.move_down,
         )
-        if anchor is None:
-            missing.append((item.dimension.value, _UNRESOLVED_ANCHOR))
+        item_missing.extend(reason.split(": ", 1)[-1] for reason in structure)
+        if item_missing:
+            missing.append((item.dimension.value, "; ".join(item_missing)))
             continue
-        evidence_id = f"E-{item.dimension.value}"
-        evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
+        evidence_ids: list[str] = []
+        for role, index, ev, anchor in resolved:
+            evidence_id = f"E-{item.dimension.value}-{role[0]}{index}"
+            evidence_ids.append(evidence_id)
+            evidence.append(_evidence(evidence_id, ev.excerpt, anchor, request.manuscript))
         scores.append(
             DimensionScore(
                 dimension=item.dimension,
                 score=clause_score(item.clause_id),
                 rationale=_localized(item.rationale),
-                evidence_ids=[evidence_id],
+                evidence_ids=evidence_ids,
                 route_ids=_route_ids(route_id, request.routes),
                 rubric_id=RUBRIC_ID,
                 clause_id=item.clause_id,
-                metadata={"judgment": "dimensions"},
+                metadata={
+                    "judgment": "dimensions",
+                    "supporting": [ev.model_dump() for ev in item.supporting],
+                    "opposing": [ev.model_dump() for ev in item.opposing],
+                    "move_up": item.move_up,
+                    "move_down": item.move_down,
+                    "band6_default": False,
+                },
             )
         )
     return scores, evidence, missing

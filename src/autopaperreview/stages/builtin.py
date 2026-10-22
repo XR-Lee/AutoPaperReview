@@ -1389,7 +1389,7 @@ class ExecuteReviewParams(ParamsModel):
 
 class ExecuteReviewStage(StageHandler):
     type_name = "execute_review"
-    version = "1"
+    version = "2"
     params_model = ExecuteReviewParams
     reads_source = True
 

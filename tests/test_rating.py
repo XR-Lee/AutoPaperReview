@@ -284,13 +284,13 @@ class RatingFormulaTests(unittest.TestCase):
             dimension=SarDimension.claims_supported,
             score=4,
             clause_id="cs-4",
-            rubric_id="sar_bands_v1",
+            rubric_id="sar_bands_v2",
             evidence_ids=["E1"],
         )
         self.assertEqual(score.score, 4)
 
     def test_rubric_file_lists_every_clause(self) -> None:
-        text = Path("src/autopaperreview/prompts/sar_bands_v1.md").read_text(encoding="utf-8")
+        text = Path("src/autopaperreview/prompts/sar_bands_v2.md").read_text(encoding="utf-8")
         for clause_id in CLAUSES:
             self.assertIn(f"`{clause_id}`", text)
 
