@@ -19,9 +19,9 @@ def _item(excerpt: str, observable: str) -> dict[str, str]:
 
 class BandCaseTests(unittest.TestCase):
     def test_soundness_band_6_still_covers_missing_uncertainty(self) -> None:
-        self.assertIn("uncertainty is missing", CLAUSES["es-6"][2])
-        self.assertIn("confound", CLAUSES["es-4"][2])
-        self.assertNotIn("single seed", CLAUSES["es-4"][2])
+        self.assertIn("moves the decision metric", CLAUSES["es-6"][2])
+        self.assertIn("single seed", CLAUSES["es-4"][2])
+        self.assertIn("no ablation removes the claimed piece", CLAUSES["es-4"][2])
 
     def test_band_without_evidence_is_rejected(self) -> None:
         errors = band_case_errors(

@@ -2,7 +2,7 @@
 
 Scores are the clause, not a free float. Allowed scores are 2, 4, 6, 8, and 10. The `rate` stage reads these clause ids. It does not fit an ICLR regression. Weights and the gate are unchanged.
 
-Set `rubric_id` to `sar_bands_v2`. The pipeline sets `score` from the clause id. The clause sentences are unchanged from the previous table. Missing uncertainty with ablations present remains band 6.
+Set `rubric_id` to `sar_bands_v2`. The pipeline sets `score` from the clause id. For experimental soundness, a single seed or a missing interval is band 4 unless an ablation removes the claimed piece and moves the decision metric, or an external number is copied. Other dimensions keep their previous clause sentences.
 
 Write the evidence before the clause. Each dimension needs:
 
@@ -31,8 +31,8 @@ Stop at the first matching clause.
 Stop at the first matching clause.
 
 - `es-2` (2) Protocol is not one experiment, or leakage decides the result. Observables: `leakage_decides_result`, `not_an_experiment`.
-- `es-4` (4) Protocol is defined, and a confound or an unfair baseline sits on the decision comparison. Observables: `named_confound`, `unfair_baseline_on_decision`.
-- `es-6` (6) Ablations exist; uncertainty is missing, or external numbers are copied beside an otherwise clean internal run. Observables: `ablations_present`, `copied_external_number`, `uncertainty_missing`.
+- `es-4` (4) Protocol is defined, no ablation removes the claimed piece and moves the decision metric, and no external number is copied. The decision comparison is a single seed without an interval, a needed baseline is not rerun, an ablation misses the claim, or a confound or unfair baseline is named. Observables: `ablation_misses_claim`, `named_confound`, `needed_baseline_not_rerun`, `single_seed_no_interval`, `unfair_baseline_on_decision`.
+- `es-6` (6) An ablation removes the claimed piece and moves the decision metric, or one external number is copied, and an interval or an in-stack baseline rerun is still missing. Observables: `ablation_moves_decision_metric`, `ablations_present`, `copied_external_number`, `uncertainty_missing`.
 - `es-8` (8) Matched controls, uncertainty, and the decision comparison is in-stack. Observables: `matched_controls_in_stack`, `uncertainty_reported`.
 - `es-10` (10) The es-8 conditions plus a released protocol card. Observables: `protocol_card_released`.
 

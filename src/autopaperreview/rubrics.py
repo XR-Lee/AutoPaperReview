@@ -3,7 +3,9 @@
 `sar_bands_v2.md` is the prompt-facing copy. This module is the validator.
 A score may omit a clause. Once a clause id is set, the score must equal it.
 Band 6 needs an observable that belongs to band 6 and an opposing observable
-from band 8. The clause sentences are the previous table.
+from band 8. Experimental soundness band 4 includes a single seed without an
+interval unless an ablation moves the decision metric or an external number is
+copied. The other six dimensions keep the previous clause sentences.
 """
 
 from __future__ import annotations
@@ -54,14 +56,14 @@ CLAUSES: dict[str, tuple[str, float, str, str]] = {
     "es-4": (
         "experimental_soundness",
         4.0,
-        "Protocol is defined, and a confound or an unfair baseline sits on the decision comparison.",
-        "协议已写明，但决定性比较上有混淆或不公平基线。",
+        "Protocol is defined, no ablation removes the claimed piece and moves the decision metric, and no external number is copied. The decision comparison is a single seed without an interval, a needed baseline is not rerun, an ablation misses the claim, or a confound or unfair baseline is named.",
+        "协议已写明，没有消融去掉所声称的部件并改变决定性指标，也没有抄录外部数字。决定性比较是无区间的单一种子、所需基线未重跑、消融未触及主张，或写明了混淆或不公平基线。",
     ),
     "es-6": (
         "experimental_soundness",
         6.0,
-        "Ablations exist; uncertainty is missing, or external numbers are copied beside an otherwise clean internal run.",
-        "有消融；缺不确定性，或干净的内部运行旁边抄了外部数字。",
+        "An ablation removes the claimed piece and moves the decision metric, or one external number is copied, and an interval or an in-stack baseline rerun is still missing.",
+        "消融去掉了所声称的部件且决定性指标发生变化，或抄录了一个外部数字，同时仍缺区间或同栈重跑的基线。",
     ),
     "es-8": (
         "experimental_soundness",
@@ -240,8 +242,8 @@ BAND_OBSERVABLES: dict[str, dict[int, frozenset[str]]] = {
     },
     "experimental_soundness": {
         2: frozenset({"not_an_experiment", "leakage_decides_result"}),
-        4: frozenset({"named_confound", "unfair_baseline_on_decision"}),
-        6: frozenset({"ablations_present", "uncertainty_missing", "copied_external_number"}),
+        4: frozenset({"named_confound", "unfair_baseline_on_decision", "single_seed_no_interval", "needed_baseline_not_rerun", "ablation_misses_claim"}),
+        6: frozenset({"ablations_present", "uncertainty_missing", "copied_external_number", "ablation_moves_decision_metric"}),
         8: frozenset({"matched_controls_in_stack", "uncertainty_reported"}),
         10: frozenset({"protocol_card_released"}),
     },
