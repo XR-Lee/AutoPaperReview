@@ -1016,7 +1016,7 @@ _REPORT_PRESENTATION = {
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "14"
+    version = "15"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:

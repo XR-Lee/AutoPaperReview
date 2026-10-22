@@ -202,6 +202,12 @@ class ReadabilityTests(unittest.TestCase):
     def test_decimals_stay_one_sentence_and_cjk_periods_split(self) -> None:
         english = measure_prose("The score is 8.0/10. The next sentence starts here.", language="en")
         self.assertEqual(english["sentence_count"], 2)
+        cited = measure_prose(
+            "- First point stays short. [[E1, p.5](#marker-e1)]\n- Second point stays short too.",
+            language="en",
+        )
+        self.assertEqual(cited["sentence_count"], 2)
+        self.assertLessEqual(cited["max_sentence_words"], 10)
         edited, _report = edit_body("The score is 8.0/10. The next sentence starts here.", language="en")
         self.assertIn("8.0/10", edited)
         chinese = measure_prose("第一句说完了。第二句也说完了。", language="zh-Hans")

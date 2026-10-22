@@ -91,6 +91,19 @@ def _sentences(text: str) -> list[str]:
     return found or ([text.strip()] if text.strip() else [])
 
 
+def _measure_sentences(prose: str) -> list[str]:
+    """One sentence per bullet, with citation markup left out of the count."""
+    found: list[str] = []
+    for line in prose.splitlines():
+        line = _CITE.sub(" ", line)
+        line = re.sub(r"^-\s+", "", line.strip())
+        line = " ".join(line.split())
+        if not line:
+            continue
+        found.extend(part.strip() for part in _sentences(line) if part.strip())
+    return found
+
+
 def _syllables(word: str) -> int:
     groups = _VOWEL.findall(word.lower())
     count = len(groups)
@@ -133,7 +146,7 @@ def _structure(markdown: str) -> dict[str, list[str]]:
 def measure_prose(markdown: str, *, language: str = "en") -> dict[str, object]:
     """Return deterministic readability metrics for one review body."""
     prose = _prose(markdown)
-    sentences = _sentences(prose)
+    sentences = _measure_sentences(prose)
     cjk = _is_cjk_heavy(prose) or language == "zh-Hans"
     structure = _structure(markdown)
     if cjk:
