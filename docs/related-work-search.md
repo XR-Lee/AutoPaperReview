@@ -111,7 +111,7 @@ If every requested provider fails, a provider times out before returning records
 
 `novelty` reads the comparison of baselines and closest neighbours before it assigns tags. `rate` reads the same comparison before it uses the originality band. When a config contains `related_work_search`, both `novelty` and `rate` must depend on it, directly or through an earlier stage. Clause ids stay `pw-2` / `pw-4` / `pw-6` / `pw-8` / `es-4` / `or-4`. Copy a clause onto a dimension score only when the reviewer accepts that advice. The ceiling inside `rate` is what changes the bin.
 
-The report section is bilingual (`en` / `zh-Hans`) and includes suggested weakness and rebuttal sentences. The dimension table shows the assigned score and clause beside the after-ceiling band when `overall_score.metadata.bands_after_ceiling` has that dimension. The stage also writes `related_work.md`.
+The review body includes a short Related Work note in the export language: status, gap prose, and the effective cap. Gap kind ids and the suggested-weakness paragraph stay out of that note. Query strings, candidates, and retrieved excerpts stay in `related_work.md` and, when `--appendix full` is set, in the appendix. The body shows the assigned score and the after-ceiling band. Clause codes stay in the appendix.
 
 ## Venue deadlines
 

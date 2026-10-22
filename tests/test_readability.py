@@ -23,7 +23,7 @@ from autopaperreview.readability import (
     issue_quote,
     resolve_first_read_contract,
 )
-from autopaperreview.reporting import render_markdown
+from autopaperreview.reporting import render_appendix, render_markdown
 
 from tests.support import localized, make_artifact, make_issue
 
@@ -103,14 +103,18 @@ class FirstReadReportTests(unittest.TestCase):
             )
         )
         markdown = render_markdown(package, language="en")
-        self.assertIn("How to Read This Review", markdown)
-        self.assertIn("seeing the manuscript for the first time", markdown)
-        self.assertIn("**What the paper said.**", markdown)
-        self.assertIn("**Quoted passage.**", markdown)
-        self.assertIn("**Why this matters.**", markdown)
-        self.assertIn("Issue (blocking)", markdown)
-        self.assertIn("## Evidence Catalog", markdown)
-        self.assertIn("Eight temporally related images from one specimen", markdown)
+        self.assertIn("## Weaknesses", markdown)
+        self.assertIn("Required action:", markdown)
+        self.assertNotIn("How to Read This Review", markdown)
+        self.assertNotIn("**What the paper said.**", markdown)
+        self.assertNotIn("## Evidence Catalog", markdown)
+        appendix = render_appendix(package, language="en", level="full")
+        self.assertIn("## Evidence Catalog", appendix)
+        self.assertIn("How to Read This Review", appendix)
+        self.assertIn("**What the paper said.**", appendix)
+        self.assertIn("**Quoted passage.**", appendix)
+        self.assertIn("**Why this matters.**", appendix)
+        self.assertIn("Eight temporally related images from one specimen", appendix)
 
 
 class FirstReadPacketTests(unittest.TestCase):

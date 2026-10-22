@@ -517,7 +517,14 @@ def _is_lang_token(kind: str, text: str) -> bool:
     return kind == "langline" or (kind == "bullet" and _LANG_PREFIX_RE.match(text) is not None)
 
 
-def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str | None = None) -> None:
+def write_report_pdf(
+    markdown: str,
+    path: Path,
+    *,
+    title: str,
+    footer_note: str | None = None,
+    compact: bool = False,
+) -> None:
     """Write a linked PDF. Requires the optional reportlab extra."""
     from .bilingual_coverage import require_bilingual_markdown
 
@@ -613,8 +620,18 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
             spaceAfter=4,
             keepWithNext=True,
         ),
-        "body": style("apr-body", spaceAfter=6),
-        "bullet": style("apr-bullet", leftIndent=2, spaceAfter=4, leading=16.5),
+        "body": style(
+            "apr-body",
+            spaceAfter=2 if compact else 6,
+            fontSize=10.5,
+            leading=13.5 if compact else 17.5,
+        ),
+        "bullet": style(
+            "apr-bullet",
+            leftIndent=2,
+            spaceAfter=2 if compact else 4,
+            leading=13.5 if compact else 16.5,
+        ),
         "sub": style("apr-sub", leftIndent=14, spaceAfter=3, fontSize=10, leading=16, textColor=ink),
         "kicker": style(
             "apr-kicker",
@@ -630,6 +647,13 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
         "card": style("apr-card", fontSize=10.5, leading=17, spaceAfter=2),
         "footer": style("apr-footer", fontSize=8, leading=10, textColor=muted),
     }
+    if compact:
+        styles["h1"].spaceBefore = 6
+        styles["h1"].spaceAfter = 2
+        styles["h2"].spaceBefore = 6
+        styles["h2"].spaceAfter = 2
+        styles["h3"].spaceBefore = 4
+        styles["h3"].spaceAfter = 2
 
     class TocMark(Flowable):
         """Zero-size marker: named dest + outline + TOC notify."""
@@ -840,10 +864,12 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
                 textColor=muted,
             ),
         ]
-        story.append(Paragraph(_fontify_plain("Contents / 目录", bold=True), styles["h1"]))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=rule, spaceAfter=6))
-        story.append(toc)
-        story.append(Spacer(1, 8))
+        if not compact:
+            story.append(Paragraph(_fontify_plain("Contents / 目录", bold=True), styles["h1"]))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=rule, spaceAfter=6))
+            story.append(toc)
+            story.append(Spacer(1, 8))
+    section_break = 32 * mm if compact else 88 * mm
 
     while index < len(tokens):
         kind, text, indent = tokens[index]
@@ -852,7 +878,7 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
             continue
         if kind == "h2":
             flush_issue()
-            story.append(CondPageBreak(88 * mm))
+            story.append(CondPageBreak(section_break))
             heading = _HTML_ID.sub("", text)
             section_accent = navy
             for prefix, color in _SECTION_ACCENT.items():

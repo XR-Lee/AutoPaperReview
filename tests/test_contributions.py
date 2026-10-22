@@ -10,7 +10,7 @@ from autopaperreview.ledger import (
     build_ledger_claims,
 )
 from autopaperreview.literature import generate_related_work_queries
-from autopaperreview.reporting import render_markdown
+from autopaperreview.reporting import render_appendix, render_markdown
 from autopaperreview.export_gate import ExportGateParams, export_gate_errors
 from autopaperreview.models import LocalizedText, ReviewPackage, ReviewRoute, RouteKind
 
@@ -193,7 +193,7 @@ class ContributionLedgerTests(unittest.TestCase):
         self.assertIn("Tests: Table 1", filled.ledger_claims[0].risk.primary)
         self.assertNotEqual(filled.ledger_claims[0].risk.primary, PENDING_CONTRIBUTION_RISK_EN)
         self.assertEqual(filled.ledger_claims[1].risk.primary, PENDING_CONTRIBUTION_RISK_EN)
-        markdown = render_markdown(filled, bilingual=True)
+        markdown = render_appendix(filled, bilingual=True, level="full")
         listed = markdown.split("## Listed Contributions")[1].split("## ")[0]
         self.assertIn("Tests: Table 1", listed)
         self.assertIn("测了：表 1", listed)
@@ -207,7 +207,7 @@ class ContributionLedgerTests(unittest.TestCase):
             ledger_claims=claims,
             issues=[make_issue(location="Contribution 1; Table 1")],
         )
-        markdown = render_markdown(package, language="en")
+        markdown = render_appendix(package, language="en", level="full")
         self.assertIn("## Listed Contributions", markdown)
         self.assertIn("`C1`", markdown)
         self.assertNotIn("## Claim Ledger", markdown)

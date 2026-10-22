@@ -14,12 +14,12 @@ The core does not parse PDF/DOCX by itself. It calls a model only when a stage s
 
 - Strict Pydantic models for artifacts, sources, evidence, issues, review packages, stages, and run manifests.
 - A TOML-defined DAG with validation, resumable execution, content-hash caching, and atomic stage promotion.
-- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations` only for short fixture phrases; bilingual rendering does not silently fall back to the primary language, and incomplete pairing is refused before Markdown/PDF export.
+- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. The default export is one language (`en`): a review body a person can paste into a form. `--lang zh-Hans` or `bilingual` still fills short fixture phrases into `LocalizedText.translations` and refuses unpaired English and Chinese. Other BCP-47 tags use the report `translator` hook. The evidence catalog, ledger, agenda, novelty grid, and retrieval logs are a separate appendix (`--appendix none|summary|full`, default `none`). See [report export](docs/report-export.md).
 - A deny-by-default network declaration gate. Commands never use a shell, and network-requiring stages must declare their scope.
 - Python entry-point plugins under `autopaperreview.stages`.
 - Migration support for the earlier bare issue-array and review-package JSON formats.
 - Generated JSON Schema, a synthetic end-to-end example, unit tests, CI, and an open-source reference-stack snapshot.
-- Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default. Report Markdown (and PDF, if `reportlab` is installed) links each `[E2]` to the Evidence Index.
+- Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default. The review body cites in-document evidence as `[E3, p.5]`. With `pip install 'autopaperreview[annotate]'` the report stage writes an annotated copy of the submission PDF. Retrieved text stays in the appendix.
 - A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
 - P0–P2 contract stages: `execute_review` (fixture JSON, deterministic checks, or an OpenAI-compatible chat adapter), snapshot excerpts, typed `Anchor`s, a report export gate, `ledger` / `agenda`, read-only `workspace_inspect`, `integrity`, and matched-setting `novelty`.
 - Figure-grounded review: a visual route (`figure_grounded_v1`) plus prompt packets that require inspecting every numbered figure on the sibling PDF page. Caption paraphrase is not inspection.
@@ -39,7 +39,7 @@ The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, Pape
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[pdf,visual]"
+pip install -e ".[pdf,visual,annotate]"
 ```
 
 For development without installation:
@@ -55,7 +55,7 @@ PYTHONPATH=src python3 -m autopaperreview validate examples/synthetic/review.tom
 PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/review.toml
 ```
 
-The synthetic example sets `bilingual = true` on the report stage so `review_report.md` contains English and Simplified Chinese section by section, including dimension rationales. After a successful run, `review_report.md` (and `review_report.pdf` if `reportlab` is installed) is also copied next to `review.toml`. Evidence citations such as `[E2, E3]` link each id to the Evidence Index. Inspect `stages/report/review_report.md`, `stages/prompt_packets/M3.md`, `stages/integrity/integrity.json`, and `stages/novelty/novelty.json` under the run directory.
+The synthetic example sets `lang = "en"` and `appendix = "none"` on the report stage. `review_report.md` is the English review body. Pass `--lang bilingual` to write both languages, or `--appendix full` to add `review_appendix.md`. After a successful run, `review_report.md` (and `review_report.pdf` if `reportlab` is installed) is also copied next to `review.toml`. In-document citations such as `[E3, p.5]` point at the marker index. Inspect `stages/report/review_report.md`, `stages/report/readability.json`, `stages/prompt_packets/M3.md`, `stages/integrity/integrity.json`, and `stages/novelty/novelty.json` under the run directory.
 
 The related-work example is a separate fictional manuscript. It does not replace the example above.
 
@@ -125,7 +125,7 @@ packet_route = "M6"
 allow_remote = false
 ```
 
-Set `bilingual = true` on `execute_review` for one `zh-Hans` judgment over the accepted English fields. A bilingual `report` stage can then export. To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. `rate` still applies `apr-iclr-cap-v2`. The chat adapter does not emit the overall score.
+Set `bilingual = true` on `execute_review` for one `zh-Hans` judgment over the accepted English fields. The report can then use `--lang zh-Hans` or `--lang bilingual`. Another language uses the report `translator` hook documented in [report export](docs/report-export.md). To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. `rate` still applies `apr-iclr-cap-v2`. The chat adapter does not emit the overall score.
 
 Raw requests and responses are stored under `stages/<id>/model/` with their SHA-256 on the stage record. A second `run` reuses that stage while the signature matches and does not call the endpoint again.
 
@@ -147,6 +147,8 @@ The migration command does not copy an unpublished manuscript beside the output 
 autopaperreview init       Create a minimal project
 autopaperreview validate   Validate TOML, DAG, plugins, and local paths
 autopaperreview run        Run or resume the pipeline
+                           --lang en|zh-Hans|bilingual|<BCP-47>
+                           --appendix none|summary|full
 autopaperreview inspect    Print a run manifest
 autopaperreview migrate    Import legacy review JSON
 autopaperreview schema     Export canonical JSON Schema

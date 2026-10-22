@@ -22,7 +22,7 @@ from autopaperreview.models import (
     SarDimension,
     SourceRecord,
 )
-from autopaperreview.reporting import render_markdown
+from autopaperreview.reporting import render_appendix, render_markdown
 from autopaperreview.rating import apply_rating, calibrate_packages, rate_venue, snap_down
 from autopaperreview.rating import TieNote
 from autopaperreview.related_work import preview_venue_bin
@@ -315,9 +315,14 @@ class RatingFormulaTests(unittest.TestCase):
         package = apply_rating(package)
         markdown = render_markdown(package, languages=["en", "zh-Hans"], fill_missing=False)
         require_bilingual_markdown(markdown)
-        self.assertIn("apr-iclr-cap-v2", markdown)
-        self.assertIn("已声明评分", markdown)
-        self.assertIn("FMT-pages", markdown)
+        self.assertIn("Venue bin: 1.", markdown)
+        self.assertIn("会议档位：1。", markdown)
+        self.assertNotIn("apr-iclr-cap-v2", markdown)
+        self.assertNotIn("FMT-pages", markdown)
+        appendix = render_appendix(package, languages=["en", "zh-Hans"], level="full")
+        self.assertIn("apr-iclr-cap-v2", appendix)
+        self.assertIn("已声明评分", appendix)
+        self.assertIn("FMT-pages", appendix)
         self.assertEqual(package.overall_score.value, 1)
 
     def test_apply_rating_records_provenance(self) -> None:

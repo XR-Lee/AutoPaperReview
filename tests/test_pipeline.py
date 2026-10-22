@@ -122,7 +122,9 @@ class PipelineIntegrationTests(unittest.TestCase):
             report_path = run_dir / "stages" / "report" / "review_report.md"
             package = ReviewPackage.model_validate_json(release_path.read_text(encoding="utf-8"))
             self.assertEqual(len(package.issues), 1)
-            self.assertIn("I001", report_path.read_text(encoding="utf-8"))
+            report = report_path.read_text(encoding="utf-8")
+            self.assertIn("Evaluation is incomplete", report)
+            self.assertNotIn("I001", report)
             first_hashes = {
                 stage.id: [(artifact.role, artifact.sha256) for artifact in stage.outputs]
                 for stage in first.stages

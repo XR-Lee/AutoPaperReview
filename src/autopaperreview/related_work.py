@@ -3546,6 +3546,67 @@ def render_related_work_section(judgment: RelatedWorkJudgment | dict[str, Any], 
     return lines
 
 
+def render_related_work_brief(
+    judgment: RelatedWorkJudgment | dict[str, Any],
+    languages: Sequence[str],
+) -> list[str]:
+    """Reviewer-facing related-work note. Queries and candidates stay in the appendix."""
+    record = judgment if isinstance(judgment, RelatedWorkJudgment) else RelatedWorkJudgment.model_validate(judgment)
+    bilingual = len(languages) > 1
+    if languages == ["zh-Hans"]:
+        heading = "## 相关工作"
+    elif bilingual:
+        heading = "## Related Work / 相关工作"
+    else:
+        heading = "## Related Work"
+    lines = [heading, ""]
+
+    def subsection(title_en: str, title_zh: str, en: str, zh: str) -> None:
+        if bilingual:
+            lines.extend([f"### {title_en} / {title_zh}", "", f"- **en:** {en}", f"- **zh-Hans:** {zh}", ""])
+        elif languages == ["zh-Hans"]:
+            lines.extend([f"### {title_zh}", "", zh, ""])
+        else:
+            lines.extend([f"### {title_en}", "", en, ""])
+
+    status_en = f"Search status: {record.status}. Confirmation: {record.confirmation}."
+    status_zh = f"检索状态：{record.status}。确认：{record.confirmation}。"
+    if record.status == "partial":
+        failed = ", ".join(record.failed_providers) if record.failed_providers else "none recorded"
+        status_en += f" Failed providers: {failed}. The search may be incomplete."
+        status_zh += f"失败的数据源：{failed}。检索可能不完整。"
+    subsection("Status", "状态", status_en, status_zh)
+    if record.gaps:
+        if bilingual:
+            lines.extend(["### Gaps / 差距", ""])
+        elif languages == ["zh-Hans"]:
+            lines.extend(["### 差距", ""])
+        else:
+            lines.extend(["### Gaps", ""])
+        for gap in record.gaps:
+            if bilingual:
+                lines.extend([f"- **en:** {gap.detail_en}", f"- **zh-Hans:** {gap.detail_zh}", ""])
+            elif languages == ["zh-Hans"]:
+                lines.extend([f"- {gap.detail_zh}", ""])
+            else:
+                lines.extend([f"- {gap.detail_en}", ""])
+    else:
+        subsection(
+            "Experiment comparison",
+            "实验对照",
+            "No missing must-compare baseline and no unfair baseline.",
+            "没有缺失的必须基线，也没有不公平基线。",
+        )
+    if record.effective_venue_cap is not None:
+        subsection(
+            "Caps",
+            "上限",
+            f"Effective venue cap {record.effective_venue_cap}.",
+            f"生效上限 {record.effective_venue_cap}。",
+        )
+    return lines
+
+
 def render_related_work_markdown(judgment: RelatedWorkJudgment, languages: Sequence[str] | None = None) -> str:
     body = render_related_work_section(judgment, list(languages or ("en", "zh-Hans")))
     return "\n".join(body).rstrip() + "\n"

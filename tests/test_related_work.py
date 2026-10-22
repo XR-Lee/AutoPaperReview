@@ -27,7 +27,7 @@ from autopaperreview.models import (
 )
 from autopaperreview.rating import rate_venue
 from autopaperreview.readability import first_read_gate_errors
-from autopaperreview.reporting import render_markdown
+from autopaperreview.reporting import render_appendix, render_markdown
 from autopaperreview.related_work import (
     MANUSCRIPT_BASELINE_EVIDENCE_ID,
     BaselineGap,
@@ -957,7 +957,10 @@ class StageTests(unittest.TestCase):
             report = (workspace / ".runs" / manifest.run_id / "stages" / "report" / "review_report.md").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("## Related Work / 相关工作", report)
+            self.assertIn("## Related Work", report)
+            self.assertNotIn("### Queries", report)
+            self.assertNotIn("### Candidates", report)
+            self.assertNotIn("## Retrieved Sources", report)
             require_bilingual_markdown(report)
             queries = json.loads((stage_dir / "queries.json").read_text(encoding="utf-8"))
             families = {query["metadata"]["family"] for query in queries}
@@ -993,8 +996,16 @@ class StageTests(unittest.TestCase):
             self.assertNotIn("检索可能不完整", report)
             self.assertIn("assigned 8.0/10", report)
             self.assertIn("after ceiling 4.0/10", report)
-            self.assertIn("**What the paper said / 论文写了什么.**", report)
-            self.assertIn("> ", report)
+            self.assertNotIn("**What the paper said.**", report)
+            self.assertNotIn("missing_baseline-", report)
+            released = ReviewPackage.model_validate_json(
+                (workspace / ".runs" / manifest.run_id / "stages" / "report" / "review_package.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            appendix = render_appendix(released, language="en", level="full")
+            self.assertIn("**What the paper said.**", appendix)
+            self.assertIn("> ", appendix)
             self.assertGreater(comparison["baseline_counts"]["missing"], 0)
             self.assertGreater(comparison["baseline_counts"]["privileged"], 0)
             self.assertTrue(comparison["closest_neighbour_ids"])
@@ -1346,8 +1357,10 @@ class TieringAndRetrievalTests(unittest.TestCase):
         )
         markdown = render_markdown(package, languages=["en", "zh-Hans"])
         require_bilingual_markdown(markdown)
-        self.assertIn("> ", markdown)
-        self.assertIn("Compared baselines", markdown)
+        self.assertNotIn("> ", markdown)
+        appendix = render_appendix(package, languages=["en", "zh-Hans"], level="full")
+        self.assertIn("> ", appendix)
+        self.assertIn("Compared baselines", appendix)
 
     def test_live_search_waits_for_confirmation_instead_of_demoting(self) -> None:
         seen: list[str] = []
