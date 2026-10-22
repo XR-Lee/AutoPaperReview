@@ -4,7 +4,9 @@ The report stage writes a review a person can paste into a form. Scores, caps, a
 
 ## What the body contains
 
-The default file is a short review: summary, strengths, weaknesses (each with the required action), questions, and a score justification (recommendation, venue bin, and the seven dimension scores in plain language). A short related-work note states status, gaps, the effective cap, and the suggested weakness. A compact marker legend lists `E1`..`En`.
+The default file is a short review: summary, strengths, weaknesses (each title, then the required action as its own sentence), questions, and a score justification (recommendation, venue bin, and the seven dimension scores in plain language). A short related-work note states status, gap prose, and the effective cap. Gap ids and the suggested-weakness paragraph stay in the full related-work section, which is appendix-only. A compact marker legend lists `E1`..`En`.
+
+The body PDF is compact: no contents page, shorter heading breaks, and a footer that does not print the coefficient-set name. The appendix PDF keeps a contents page. The formula name stays in the appendix text.
 
 The body does not include internal ids. Issue ids (`I-*`), claim ids (`C-*`), clause codes (`cs-4`), coefficient-set names, and raw evidence tokens (`E-init`) stay in the appendix. The body cites in-paper evidence only as `[E1, p.5]`.
 
@@ -50,7 +52,7 @@ translator_allow_remote = false
 - Flesch reading ease, using the public formula `206.835 - 1.015*(words/sentences) - 84.6*(syllables/words)`
 - presence of Summary, Strengths, Weaknesses, Questions, and Score justification (or the Chinese headings)
 
-The rewrite substitutes those weasel phrases, splits a sentence longer than 35 words, and turns a semicolon chain into bullets. Headings, block quotes, marker-legend lines, and `[E1, p.5](#marker-e1)` citations are left alone. If a rewrite would drop a citation, or would unpair a bilingual body, the original paragraph or the original body is kept and the report says so. An LLM rewrite of prose is allowed only when scores, numbers, and evidence markers are checked and unchanged afterward. The export does not call a model by itself.
+The rewrite substitutes those weasel phrases, splits a sentence longer than 35 words, and turns a semicolon chain into bullets. Headings, block quotes, marker-legend lines, and `[E1, p.5](#marker-e1)` citations are left alone. Citations are shielded while a sentence is split, and the paragraph is restored if a citation would be cut. Sentence metrics strip citation markup and count each bullet on its own, so a marker does not glue the rest of the review into one sentence. If a rewrite would drop a citation, or would unpair a bilingual body, the original paragraph or the original body is kept and the report says so. An LLM rewrite of prose is allowed only when scores, numbers, and evidence markers are checked and unchanged afterward. The export does not call a model by itself.
 
 These tools were surveyed and left out:
 

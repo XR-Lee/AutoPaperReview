@@ -856,6 +856,8 @@ def _render_concise(
                 continue
             title = _text_line(issue.title, language, languages, f"{issue.id}.title")
             action = _text_line(issue.required_action, language, languages, f"{issue.id}.required_action")
+            if title and title[-1] not in ".!?。！？":
+                title = f"{title}{'。' if language == 'zh-Hans' else '.'}"
             bullets.append(f"- {title} {action_label}{action}{_body_cite(issue.evidence_ids, markers)}")
         if bullets:
             weakness_bodies[language] = bullets
