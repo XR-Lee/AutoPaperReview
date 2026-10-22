@@ -9,7 +9,8 @@ and quotations intact. Heavier tools are intentionally not dependencies:
 - proselint and Vale pull in large rule sets and, for Vale, an external binary.
 - write-good is a Node program with the same regex ideas used here.
 - An LLM rewrite can change a reviewer's meaning, so it stays behind the
-  translation/model adapter instead of running on every export.
+  translation/model adapter instead of running on every export. The export
+  itself caps sentences at 35 words and turns semicolon chains into bullets.
 """
 
 from __future__ import annotations
@@ -78,10 +79,10 @@ _STRUCTURE = (
     ("Strengths", "优点"),
     ("Weaknesses", "不足"),
     ("Questions", "问题"),
-    ("Dimension Scores", "维度评分"),
+    ("Score justification", "分数说明"),
 )
 
-_LONG_WORDS = 40
+_MAX_SENTENCE_WORDS = 35
 _LONG_CHARS = 80
 
 
@@ -178,7 +179,7 @@ def measure_prose(markdown: str, *, language: str = "en") -> dict[str, object]:
         "word_count": word_count,
         "mean_sentence_words": round(word_count / sentence_count, 2) if words else 0,
         "max_sentence_words": max(lengths) if lengths else 0,
-        "long_sentence_count": sum(1 for length in lengths if length > 28),
+        "long_sentence_count": sum(1 for length in lengths if length > _MAX_SENTENCE_WORDS),
         "passive_voice_count": len(_PASSIVE.findall(prose)),
         "jargon_count": jargon,
         "redundant_sentence_count": _redundant(sentences),
@@ -201,9 +202,61 @@ def _redundant(sentences: Sequence[str]) -> int:
     return extra
 
 
+def _finish_sentence(text: str) -> str:
+    cleaned = " ".join(text.split()).strip().rstrip(",")
+    if not cleaned:
+        return ""
+    if cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    if not cleaned.endswith((".", "!", "?", "。", "！", "？")):
+        cleaned += "."
+    return cleaned
+
+
+def _split_long_sentence(sentence: str) -> list[str]:
+    """Break one sentence so each piece stays within the word cap."""
+    spans = list(_WORD.finditer(sentence))
+    if len(spans) <= _MAX_SENTENCE_WORDS:
+        finished = _finish_sentence(sentence)
+        return [finished] if finished else []
+    if "; " in sentence:
+        pieces: list[str] = []
+        for part in sentence.split("; "):
+            pieces.extend(_split_long_sentence(part))
+        return pieces
+    best: tuple[int, int] | None = None
+    for match in re.finditer(r", (?:and |but |so |which )?", sentence):
+        left = len(_WORD.findall(sentence[: match.start()]))
+        right = len(_WORD.findall(sentence[match.end() :]))
+        if left < 8 or right < 8:
+            continue
+        balance = abs(left - right)
+        if best is None or balance < best[0]:
+            best = (balance, match.end())
+    cut = best[1] if best is not None else spans[_MAX_SENTENCE_WORDS].start()
+    head = sentence[:cut].strip().rstrip(",")
+    tail = sentence[cut:].strip()
+    if not head or not tail:
+        cut = spans[_MAX_SENTENCE_WORDS].start()
+        head = sentence[:cut].strip().rstrip(",")
+        tail = sentence[cut:].strip()
+    return [*_split_long_sentence(head), *_split_long_sentence(tail)]
+
+
 def _rewrite_sentence(sentence: str) -> tuple[str, list[str]]:
     if _is_cjk_heavy(sentence):
-        return sentence, []
+        chars = _CJK.findall(sentence)
+        if len(chars) <= _LONG_CHARS or "，" not in sentence:
+            return sentence, []
+        pieces = [part.strip() for part in sentence.split("，") if part.strip()]
+        if len(pieces) < 2:
+            return sentence, []
+        finished = []
+        for part in pieces:
+            if not part.endswith(("。", "！", "？")):
+                part += "。"
+            finished.append(part)
+        return "".join(finished), ["cjk_sentence_split"]
     edits: list[str] = []
     updated = sentence
     for source, target in _WORDY:
@@ -225,17 +278,11 @@ def _rewrite_sentence(sentence: str) -> tuple[str, list[str]]:
             edits.append(source)
     updated = re.sub(r"\s{2,}", " ", updated).strip()
     updated = re.sub(r"\s+([,.;])", r"\1", updated)
-    words = _WORD.findall(updated)
-    if len(words) > _LONG_WORDS and "; " in updated:
-        head, tail = updated.split("; ", 1)
-        tail = tail[:1].upper() + tail[1:] if tail else tail
-        if not head.endswith("."):
-            head = head.rstrip() + "."
-        if tail and not tail.endswith((".", "!", "?")):
-            tail = tail.rstrip() + "."
-        updated = f"{head} {tail}".strip()
-        edits.append("long_sentence_split")
-    return updated, edits
+    pieces = _split_long_sentence(updated)
+    if len(pieces) > 1 or (pieces and pieces[0] != updated.strip()):
+        if len(_WORD.findall(updated)) > _MAX_SENTENCE_WORDS or "; " in updated:
+            edits.append("long_sentence_split")
+    return " ".join(pieces), edits
 
 
 def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
@@ -248,6 +295,22 @@ def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
         return f"@@CITE{len(protected) - 1}@@"
 
     shielded = _CITE.sub(_hold, paragraph)
+    if "; " in shielded and not paragraph.lstrip().startswith("-"):
+        chunks = [part.strip() for part in shielded.split("; ") if part.strip()]
+        if len(chunks) >= 2:
+            bullets: list[str] = []
+            edits: list[str] = []
+            for chunk in chunks:
+                updated, piece_edits = _rewrite_sentence(chunk)
+                bullets.append(f"- {updated}")
+                edits.extend(piece_edits)
+            edits.append("semicolon_bullets")
+            text = "\n".join(bullets)
+            for index, token in enumerate(protected):
+                text = text.replace(f"@@CITE{index}@@", token)
+            if text.count("[[") != paragraph.count("[["):
+                return paragraph, []
+            return text, edits
     pieces = _sentences(shielded)
     if not pieces:
         return paragraph, []
@@ -271,6 +334,21 @@ def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
     return text, edits
 
 
+def _rewrite_bullet_block(block: str) -> tuple[str, list[str]]:
+    edits: list[str] = []
+    lines: list[str] = []
+    for line in block.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("- ") and not stripped.startswith("- <a ") and "id=\"marker-" not in stripped:
+            indent = line[: len(line) - len(stripped)]
+            updated, piece_edits = _rewrite_sentence(stripped[2:])
+            lines.append(f"{indent}- {updated}")
+            edits.extend(piece_edits)
+        else:
+            lines.append(line)
+    return "\n".join(lines), edits
+
+
 def edit_body(markdown: str, *, language: str = "en") -> tuple[str, dict[str, object]]:
     """Rewrite review prose and report metrics before and after.
 
@@ -288,6 +366,11 @@ def edit_body(markdown: str, *, language: str = "en") -> tuple[str, dict[str, ob
         first = block.strip().splitlines()[0]
         if first.startswith("#") or first.startswith(">") or first.startswith("|") or first.startswith("- <a "):
             output.append(block)
+            continue
+        if any(line.lstrip().startswith("- ") for line in block.splitlines()):
+            rewritten, block_edits = _rewrite_bullet_block(block)
+            edits.extend(block_edits)
+            output.append(rewritten)
             continue
         rewritten, block_edits = _rewrite_paragraph(block)
         edits.extend(block_edits)

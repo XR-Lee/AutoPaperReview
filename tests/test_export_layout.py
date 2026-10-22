@@ -9,7 +9,7 @@ from pathlib import Path
 
 from autopaperreview.annotate_pdf import pymupdf_available, write_annotated_pdf
 from autopaperreview.i18n import MissingTranslationError
-from autopaperreview.markers import build_markers
+from autopaperreview.markers import assign_display_numbers, build_markers
 from autopaperreview.models import (
     Anchor,
     AnchorKind,
@@ -97,8 +97,11 @@ class BodyAppendixTests(unittest.TestCase):
     def test_default_body_cites_pages_and_omits_external_text(self) -> None:
         package = _package()
         markdown = render_markdown(package, language="en")
-        self.assertIn("[[E3, p.5](#marker-e3)]", markdown)
-        self.assertIn('id="marker-e3"', markdown)
+        self.assertIn("[[E1, p.5](#marker-e1)]", markdown)
+        self.assertIn('id="marker-e1"', markdown)
+        self.assertNotIn("E3", markdown)
+        self.assertNotIn("`I3`", markdown)
+        self.assertNotRegex(markdown, r"\b[CI]-[A-Za-z0-9]")
         self.assertNotIn("External abstract text", markdown)
         self.assertNotIn("## Evidence Index", markdown)
         self.assertNotIn("## Retrieved Sources", markdown)
@@ -204,6 +207,20 @@ class ReadabilityTests(unittest.TestCase):
         chinese = measure_prose("第一句说完了。第二句也说完了。", language="zh-Hans")
         self.assertEqual(chinese["sentence_count"], 2)
 
+    def test_long_sentences_split_and_semicolons_become_bullets(self) -> None:
+        words = " ".join(f"word{index}" for index in range(40))
+        edited, report = edit_body(f"## Summary\n\n{words}.", language="en")
+        metrics = measure_prose(edited, language="en")
+        self.assertEqual(metrics["long_sentence_count"], 0)
+        self.assertLessEqual(metrics["max_sentence_words"], 35)
+        self.assertIn("long_sentence_split", report["edits"])
+        bullets, bullet_report = edit_body(
+            "The split is weak; the baseline is privileged; the claim is unsupported.",
+            language="en",
+        )
+        self.assertGreaterEqual(bullets.count("\n- "), 2)
+        self.assertIn("semicolon_bullets", bullet_report["edits"])
+
 
 class TranslatorHookTests(unittest.TestCase):
     def test_callable_translator_fills_a_bcp47_tag(self) -> None:
@@ -241,10 +258,12 @@ class AnnotatedPdfTests(unittest.TestCase):
             document.save(pdf)
             document.close()
             package = _package()
-            markers = build_markers(package)
+            markers = assign_display_numbers(package, build_markers(package))
             markers["E3"] = markers["E3"].with_page(None)
+            self.assertEqual(markers["E3"].label, "E1")
             located = locate_markers(pdf, markers)
             self.assertEqual(located["E3"].page, 1)
+            self.assertEqual(located["E3"].label, "E1")
             output = root / "annotated.pdf"
             info = write_annotated_pdf(pdf, located, output)
             self.assertGreaterEqual(info["markers_placed"], 1)
@@ -252,6 +271,7 @@ class AnnotatedPdfTests(unittest.TestCase):
             try:
                 self.assertGreaterEqual(saved.page_count, 2)
                 self.assertGreaterEqual(len(list(saved[0].annots() or [])), 1)
+                self.assertIn("E1", saved[0].get_text())
             finally:
                 saved.close()
 

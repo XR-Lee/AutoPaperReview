@@ -105,15 +105,19 @@ class BilingualRenderTests(unittest.TestCase):
         package = _package_with_english_only_rationale()
         markdown = render_markdown(package, language="en")
         self.assertIn("## Summary", markdown)
-        self.assertIn("## How to Read This Review", markdown)
+        self.assertIn("## Score justification", markdown)
         self.assertIn("A short paper claims deployment readiness. [[E1](#marker-e1)]", markdown)
-        self.assertIn("## Dimension Scores", markdown)
         self.assertIn("The claim is not supported.", markdown)
-        self.assertIn("**claims_supported:** Whether claims are supported", markdown)
+        self.assertIn("Whether claims are supported", markdown)
+        self.assertNotIn("**claims_supported:**", markdown)
+        self.assertNotIn("## How to Read This Review", markdown)
         self.assertNotIn("### en", markdown)
         self.assertNotIn("### zh-Hans", markdown)
         self.assertNotIn("## Summary / 摘要", markdown)
         self.assertNotIn("- Languages:", markdown)
+        appendix = render_appendix(package, language="en", level="full")
+        self.assertIn("## How to Read This Review", appendix)
+        self.assertIn("**claims_supported:** Whether claims are supported", appendix)
 
     def test_monolingual_zh_hans_may_still_resolve_english_primary(self) -> None:
         package = _package_with_english_only_rationale()
@@ -134,17 +138,14 @@ class BilingualRenderTests(unittest.TestCase):
 
         self.assertIn("- Languages: en, zh-Hans", markdown)
         self.assertIn("## Summary / 摘要", markdown)
-        self.assertIn("## How to Read This Review / 如何阅读本审稿", markdown)
-        self.assertIn("第一次读这篇稿件的人", markdown)
-        self.assertIn("**What the paper said / 论文写了什么.**", markdown)
-        self.assertIn("**Quoted passage / 原文摘录.**", markdown)
-        self.assertIn("**Why this matters / 为何重要.**", markdown)
         self.assertIn("## Strengths / 优点", markdown)
         self.assertIn("## Weaknesses / 不足", markdown)
         self.assertIn("## Questions / 问题", markdown)
-        self.assertIn("## Dimension Scores / 维度评分", markdown)
+        self.assertIn("## Score justification / 分数说明", markdown)
         self.assertIn("### en", markdown)
         self.assertIn("### zh-Hans", markdown)
+        self.assertNotIn("How to Read This Review", markdown)
+        self.assertNotIn("**claims_supported:**", markdown)
 
         self.assertIn(
             "The paper reports 95% accuracy on two held-out images from the same specimen",
@@ -160,13 +161,12 @@ class BilingualRenderTests(unittest.TestCase):
 
         for dimension in SarDimension:
             with self.subTest(dimension=dimension.value):
-                self.assertIn(f"**{dimension.value}:**", markdown)
+                self.assertNotIn(f"**{dimension.value}:**", markdown)
 
         self.assertIn("The tracking objective is concrete but the method is not compared", markdown)
         self.assertIn("跟踪目标具体，但本夹具中的方法未与已有工作进行比较。", markdown)
         self.assertIn("The image-level split does not establish sequence independence", markdown)
         self.assertIn("图像级拆分没有建立序列独立性", markdown)
-        self.assertIn("**Evidence / 证据.**", markdown)
         self.assertGreaterEqual(markdown.count("### en"), 3)
         self.assertGreaterEqual(markdown.count("### zh-Hans"), 3)
 
@@ -180,12 +180,17 @@ class BilingualRenderTests(unittest.TestCase):
         self.assertIn("## Evidence Index / 证据索引", appendix)
         self.assertIn('id="record-e1"', appendix)
         self.assertIn("`[E1]`", markdown)
-        self.assertIn("## Venue Conclusions / 会议与期刊结论", markdown)
-        self.assertIn("#### ICLR", markdown)
-        self.assertIn("#### TMLR", markdown)
-        self.assertIn("`reject`", markdown)
-        self.assertIn("`major_revision`", markdown)
+        self.assertIn("## How to Read This Review / 如何阅读本审稿", appendix)
+        self.assertIn("**What the paper said / 论文写了什么.**", appendix)
+        self.assertIn("## Dimension Scores / 维度评分", appendix)
+        self.assertIn("## Venue Conclusions / 会议与期刊结论", appendix)
+        self.assertIn("#### ICLR", appendix)
+        self.assertIn("#### TMLR", appendix)
+        self.assertIn("`reject`", appendix)
+        self.assertIn("`major_revision`", appendix)
+        self.assertIn("`E1` = `E1`", appendix)
         self.assertNotIn("**Score:**", markdown)
+        self.assertNotIn("#### ICLR", markdown)
 
     def test_bilingual_render_fills_english_only_dimension_rationale(self) -> None:
         package = _package_with_english_only_rationale()

@@ -87,7 +87,12 @@ def write_annotated_pdf(
     placed = 0
     unlocated = 0
     try:
-        in_paper = [marker for marker in markers.values() if not marker.external]
+        in_paper = [
+            marker
+            for marker in markers.values()
+            if not marker.external and marker.label.startswith("E") and marker.label[1:].isdigit()
+        ]
+        in_paper.sort(key=lambda marker: int(marker.label[1:]))
         for marker in in_paper:
             page_index = (marker.page or 0) - 1
             rects = []
@@ -118,18 +123,18 @@ def write_annotated_pdf(
             rect = rects[0]
             highlight = page.add_highlight_annot(rect)
             highlight.set_colors(stroke=(1, 0.85, 0.2))
-            highlight.set_info(title=marker.evidence_id, content=marker.cite)
+            highlight.set_info(title=marker.label, content=marker.cite)
             highlight.update()
             box = page.add_rect_annot(rect)
             box.set_colors(stroke=(0.75, 0.15, 0.15))
             box.set_border(width=1.2)
-            box.set_info(title=marker.evidence_id, content=marker.cite)
+            box.set_info(title=marker.label, content=marker.cite)
             box.update()
             label_x = max(rect.x0, 36)
             label_y = max(rect.y0 - 2, 12)
             page.insert_text(
                 pymupdf.Point(label_x, label_y),
-                marker.evidence_id,
+                marker.label,
                 fontsize=8,
                 color=(0.7, 0.1, 0.1),
             )
@@ -138,8 +143,7 @@ def write_annotated_pdf(
         lines = ["Evidence markers", ""]
         for marker in in_paper:
             page_label = f"p.{marker.page}" if marker.page else "page unknown"
-            pointer = next(iter(marker.pointers.values()), "")
-            lines.append(f"[{marker.cite}]  {page_label}  {pointer}".rstrip())
+            lines.append(f"[{marker.cite}]  {page_label}".rstrip())
         if not in_paper:
             lines.append("No in-paper markers.")
         index.insert_text(pymupdf.Point(54, 72), "\n".join(lines), fontsize=11)

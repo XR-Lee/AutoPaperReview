@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .models import AnchorKind, ReviewPackage
+from .models import AnchorKind, ReviewClaimKind, ReviewPackage, Severity
 
 _PAGE = re.compile(r"\b(?:pp?|pages?)\.?\s*(\d+)\b", re.IGNORECASE)
 
@@ -25,17 +25,22 @@ class EvidenceMarker:
     excerpt: str | None = None
     bbox: list[float] | None = None
     pointers: dict[str, str] = field(default_factory=dict)
+    label: str = ""
+
+    def shown(self) -> str:
+        return self.label or self.evidence_id
 
     def with_page(self, page: int | None) -> EvidenceMarker:
         return EvidenceMarker(
             evidence_id=self.evidence_id,
             page=page,
             external=self.external,
-            cite=cite_text(self.evidence_id, page),
+            cite=cite_text(self.shown(), page),
             anchor=self.anchor,
             excerpt=self.excerpt,
             bbox=self.bbox,
             pointers=dict(self.pointers),
+            label=self.label,
         )
 
 
@@ -115,8 +120,48 @@ def build_markers(package: ReviewPackage) -> dict[str, EvidenceMarker]:
     return markers
 
 
+def assign_display_numbers(
+    package: ReviewPackage,
+    markers: dict[str, EvidenceMarker],
+) -> dict[str, EvidenceMarker]:
+    """Number in-paper citations E1..En in the order the body cites them.
+
+    The raw evidence id stays on `evidence_id` for the appendix. `label` and
+    `cite` are what the body and the annotated PDF show.
+    """
+    updated = dict(markers)
+    number = 1
+    for evidence_id in body_citation_ids(package):
+        marker = updated.get(evidence_id)
+        if marker is None or marker.external:
+            continue
+        label = f"E{number}"
+        updated[evidence_id] = EvidenceMarker(
+            evidence_id=marker.evidence_id,
+            page=marker.page,
+            external=False,
+            cite=cite_text(label, marker.page),
+            anchor=marker_anchor(label),
+            excerpt=marker.excerpt,
+            bbox=marker.bbox,
+            pointers=dict(marker.pointers),
+            label=label,
+        )
+        number += 1
+    return updated
+
+
+_SEVERITY_RANK = {
+    Severity.critical: 0,
+    Severity.major: 1,
+    Severity.moderate: 2,
+    Severity.minor: 3,
+    Severity.editorial: 4,
+}
+
+
 def body_citation_ids(package: ReviewPackage) -> list[str]:
-    """Evidence ids mentioned by the review body, in first-seen order."""
+    """Evidence ids the concise body cites, in the order that body cites them."""
     ordered: list[str] = []
 
     def add(ids: list[str]) -> None:
@@ -124,14 +169,20 @@ def body_citation_ids(package: ReviewPackage) -> list[str]:
             if evidence_id not in ordered:
                 ordered.append(evidence_id)
 
-    for claim in package.claims:
-        add(claim.evidence_ids)
-    if package.summary is None and not any(True for _ in package.claims):
-        pass
-    for score in package.dimension_scores:
-        add(score.evidence_ids)
-    for item in package.venue_conclusions:
-        add(item.evidence_ids)
-    for issue in package.issues:
+    def claims(kind: ReviewClaimKind) -> None:
+        for claim in package.claims:
+            if claim.kind == kind:
+                add(claim.evidence_ids)
+
+    claims(ReviewClaimKind.summary)
+    claims(ReviewClaimKind.strength)
+    claims(ReviewClaimKind.weakness)
+    issues = sorted(package.issues, key=lambda issue: (_SEVERITY_RANK[issue.severity], issue.id))
+    for issue in issues:
+        if issue.severity == Severity.editorial:
+            continue
         add(issue.evidence_ids)
+    claims(ReviewClaimKind.question)
+    for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
+        add(score.evidence_ids)
     return ordered

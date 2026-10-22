@@ -13,7 +13,7 @@ from .i18n import (
     normalize_languages,
     require_language,
 )
-from .markers import EvidenceMarker, body_citation_ids, build_markers
+from .markers import EvidenceMarker, assign_display_numbers, body_citation_ids, build_markers
 from .models import (
     DimensionScore,
     IntegrityRecord,
@@ -78,6 +78,9 @@ SECTION_ZH = {
     "Related Work": "相关工作",
     "Evidence Catalog": "证据目录",
     "Evidence markers": "证据标记",
+    "Score justification": "分数说明",
+    "Marker numbers": "标记编号",
+    "Clause codes": "条款编号",
     "Appendix": "附录",
     "Appendix summary": "附录摘要",
     "Format and Visual Checks": "版式与视觉检查",
@@ -724,6 +727,186 @@ def _prepare_languages(
     return ensure_package_languages(package, languages)
 
 
+def _score_phrase(package: ReviewPackage, score: DimensionScore) -> str:
+    """Score text for the body. Clause codes stay in the appendix."""
+    assigned = f"assigned {score.score:.1f}/10"
+    after = _after_ceiling(package, score)
+    if after is None:
+        return assigned
+    return f"{assigned}; after ceiling {after:.1f}/10"
+
+
+def _concise_venue(package: ReviewPackage, language: str) -> str:
+    score = package.overall_score
+    if (
+        score is None
+        or score.method != OverallScoreMethod.declared_formula
+        or not score.coefficient_set
+    ):
+        return NO_OVERALL_ZH if language == "zh-Hans" else NO_OVERALL_EN
+    if language == "zh-Hans":
+        return f"会议档位：{score.value:.0f}。"
+    return f"Venue bin: {score.value:.0f}."
+
+
+def _text_line(text: LocalizedText, language: str, languages: Sequence[str], field: str) -> str:
+    if len(languages) == 1:
+        return require_language(text, language, field=field)
+    return require_language(text, language, field=field)
+
+
+def _marker_legend(
+    package: ReviewPackage,
+    languages: Sequence[str],
+    markers: dict[str, EvidenceMarker],
+) -> list[str]:
+    numbered = [marker for marker in markers.values() if marker.label]
+    numbered.sort(key=lambda marker: int(marker.label[1:]))
+    if not numbered:
+        return []
+    lines = [_heading("Evidence markers", languages), ""]
+    for marker in numbered:
+        titles = [
+            issue.title
+            for issue in sort_issues(package.issues)
+            if marker.evidence_id in issue.evidence_ids
+        ]
+        if len(languages) == 1:
+            pointer = ""
+            if titles:
+                pointer = " " + require_language(titles[0], languages[0], field=marker.label)
+            lines.append(f'- <a id="{marker.anchor}"></a>`[{marker.cite}]`{pointer}')
+            continue
+        lines.append(f'- <a id="{marker.anchor}"></a>`[{marker.cite}]`')
+        for language in languages:
+            if not titles:
+                continue
+            pointer = require_language(titles[0], language, field=marker.label)
+            lines.append(f"  - **{language}:** {pointer}")
+    lines.append("")
+    return lines
+
+
+def _render_concise(
+    package: ReviewPackage,
+    languages: Sequence[str],
+    markers: dict[str, EvidenceMarker],
+) -> str:
+    """OpenReview-style body. Internal ids and the audit trail stay in the appendix."""
+    bilingual = len(languages) > 1
+    lines = [f"# Review: {package.project_id}", ""]
+    if bilingual:
+        lines.extend([f"- Languages: {', '.join(languages)}", ""])
+
+    def emit(title: str, bodies: dict[str, list[str]]) -> None:
+        if not any(bodies.get(language) for language in languages):
+            return
+        lines.append(_heading(title, languages))
+        lines.append("")
+        if bilingual:
+            lines.extend(_language_blocks(languages, bodies))
+            return
+        language = languages[0]
+        lines.extend(bodies.get(language, []))
+        if bodies.get(language) and bodies[language][-1] != "":
+            lines.append("")
+
+    summaries = [claim for claim in package.claims if claim.kind == ReviewClaimKind.summary]
+    summary_bodies: dict[str, list[str]] = {}
+    for language in languages:
+        if summaries:
+            text = " ".join(
+                f"{_text_line(claim.text, language, languages, claim.id)}"
+                f"{_body_cite(claim.evidence_ids, markers)}"
+                for claim in summaries
+            )
+        elif package.summary:
+            text = _text_line(package.summary, language, languages, "summary")
+        else:
+            text = ""
+        if text:
+            summary_bodies[language] = [text]
+    emit("Summary", summary_bodies)
+
+    strength_claims = [claim for claim in package.claims if claim.kind == ReviewClaimKind.strength]
+    strength_bodies: dict[str, list[str]] = {}
+    for language in languages:
+        bullets = [
+            f"- {_text_line(claim.text, language, languages, claim.id)}"
+            f"{_body_cite(claim.evidence_ids, markers)}"
+            for claim in strength_claims
+        ]
+        if not bullets:
+            bullets = [f"- {value}" for value in _string_list(package.strengths, language, "strengths")]
+        if bullets:
+            strength_bodies[language] = bullets
+    emit("Strengths", strength_bodies)
+
+    weakness_claims = [claim for claim in package.claims if claim.kind == ReviewClaimKind.weakness]
+    weakness_bodies: dict[str, list[str]] = {}
+    for language in languages:
+        bullets = [
+            f"- {_text_line(claim.text, language, languages, claim.id)}"
+            f"{_body_cite(claim.evidence_ids, markers)}"
+            for claim in weakness_claims
+        ]
+        action_label = "需采取的行动：" if language == "zh-Hans" else "Required action: "
+        for issue in sort_issues(package.issues):
+            if issue.severity == Severity.editorial:
+                continue
+            title = _text_line(issue.title, language, languages, f"{issue.id}.title")
+            action = _text_line(issue.required_action, language, languages, f"{issue.id}.required_action")
+            bullets.append(f"- {title} {action_label}{action}{_body_cite(issue.evidence_ids, markers)}")
+        if bullets:
+            weakness_bodies[language] = bullets
+    emit("Weaknesses", weakness_bodies)
+
+    question_claims = [claim for claim in package.claims if claim.kind == ReviewClaimKind.question]
+    question_bodies: dict[str, list[str]] = {}
+    for language in languages:
+        bullets = [
+            f"- {_text_line(claim.text, language, languages, claim.id)}"
+            f"{_body_cite(claim.evidence_ids, markers)}"
+            for claim in question_claims
+        ]
+        if bullets:
+            question_bodies[language] = bullets
+    emit("Questions", question_bodies)
+
+    score_bodies: dict[str, list[str]] = {}
+    for language in languages:
+        rows: list[str] = []
+        if package.recommendation:
+            rows.append(_text_line(package.recommendation, language, languages, "recommendation"))
+        rows.append(_concise_venue(package, language))
+        for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
+            label = dimension_label(score.dimension, language)
+            rationale = ""
+            if score.rationale:
+                rationale = " " + _text_line(
+                    score.rationale,
+                    language,
+                    languages,
+                    f"{score.dimension.value}.rationale",
+                )
+            rows.append(
+                f"- {label}: {_score_phrase(package, score)}.{rationale}"
+                f"{_body_cite(score.evidence_ids, markers)}"
+            )
+        if rows:
+            score_bodies[language] = rows
+    emit("Score justification", score_bodies)
+
+    lines.extend(render_related_work_brief(package.metadata.get("related_work"), languages) if package.metadata.get("related_work") else [])
+    lines.extend(_marker_legend(package, languages, markers))
+    gate_bodies = {
+        language: [f"- [ ] {value}" for value in _string_list(package.acceptance_gate, language, "acceptance_gate")]
+        for language in languages
+    }
+    emit("Acceptance Gate", gate_bodies)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_markdown(
     package: ReviewPackage,
     *,
@@ -741,10 +924,9 @@ def render_markdown(
         default_language="en",
     )
     prepared = _prepare_languages(package, langs, fill_missing=fill_missing)
-    marker_map = markers if markers is not None else build_markers(prepared)
-    if len(langs) == 1:
-        return _render_monolingual(prepared, langs[0], marker_map)
-    return _render_multilingual(prepared, langs, marker_map)
+    raw = markers if markers is not None else build_markers(prepared)
+    marker_map = assign_display_numbers(prepared, raw)
+    return _render_concise(prepared, langs, marker_map)
 
 
 def _marker_index(
@@ -1142,6 +1324,36 @@ def _render_appendix_summary(package: ReviewPackage, languages: Sequence[str]) -
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _marker_crosswalk(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    numbered = assign_display_numbers(package, build_markers(package))
+    shown = [marker for marker in numbered.values() if marker.label]
+    shown.sort(key=lambda marker: int(marker.label[1:]))
+    if not shown:
+        return []
+    lines = [_heading("Marker numbers", languages), ""]
+    for marker in shown:
+        page = f", p.{marker.page}" if marker.page else ""
+        lines.append(f"- `{marker.label}` = `{marker.evidence_id}`{page}")
+    lines.append("")
+    return lines
+
+
+def _clause_table(package: ReviewPackage, languages: Sequence[str]) -> list[str]:
+    rows: list[str] = []
+    for score in sorted(package.dimension_scores, key=lambda item: item.dimension.value):
+        if score.clause_id:
+            rows.append(f"- `{score.dimension.value}` `{score.clause_id}`")
+    for item in package.format_checks:
+        if item.clause_id:
+            rows.append(f"- `{item.id}` `{item.clause_id}`")
+    for finding in package.visual_findings:
+        if finding.clause_id:
+            rows.append(f"- `{finding.id}` `{finding.clause_id}`")
+    if not rows:
+        return []
+    return [_heading("Clause codes", languages), "", *rows, ""]
+
+
 def _render_appendix_full(package: ReviewPackage, languages: Sequence[str]) -> str:
     lines = [_heading("Appendix", languages), ""]
     index_lines = _evidence_index_lines(package)
@@ -1174,6 +1386,16 @@ def _render_appendix_full(package: ReviewPackage, languages: Sequence[str]) -> s
             catalog[0] = _heading("Evidence Catalog", languages)
         lines.extend(catalog)
     lines.extend(_render_audit(package, languages))
+    lines.extend(_marker_crosswalk(package, languages))
+    lines.extend(_clause_table(package, languages))
+    raw = build_markers(package)
+    try:
+        if len(languages) == 1:
+            lines.append(_render_monolingual(package, languages[0], raw))
+        else:
+            lines.append(_render_multilingual(package, languages, raw))
+    except MissingTranslationError:
+        lines.append(_render_monolingual(package, "en", raw))
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -1016,7 +1016,7 @@ _REPORT_PRESENTATION = {
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "13"
+    version = "14"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
@@ -1092,9 +1092,9 @@ class ReportStage(StageHandler):
         if gate_errors:
             raise ValueError("export gate failed:\n- " + "\n- ".join(gate_errors))
         from ..annotate_pdf import locate_markers, pymupdf_available, write_annotated_pdf
-        from ..markers import build_markers
+        from ..markers import assign_display_numbers, build_markers
 
-        markers = build_markers(package)
+        markers = assign_display_numbers(package, build_markers(package))
         pdf_source = sibling_pdf(context.source_path)
         annotate_meta: dict[str, object] = {"status": "skipped", "reason": "disabled"}
         annotated_path = context.stage_dir / "annotated_submission.pdf"

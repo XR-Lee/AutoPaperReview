@@ -3575,14 +3575,19 @@ def render_related_work_brief(
         status_zh += f"失败的数据源：{failed}。检索可能不完整。"
     subsection("Status", "状态", status_en, status_zh)
     if record.gaps:
-        for index, gap in enumerate(record.gaps, start=1):
-            lines.extend([f"- `{gap.kind}-{index}`", ""])
+        if bilingual:
+            lines.extend(["### Gaps / 差距", ""])
+        elif languages == ["zh-Hans"]:
+            lines.extend(["### 差距", ""])
+        else:
+            lines.extend(["### Gaps", ""])
+        for gap in record.gaps:
             if bilingual:
                 lines.extend([f"- **en:** {gap.detail_en}", f"- **zh-Hans:** {gap.detail_zh}", ""])
             elif languages == ["zh-Hans"]:
-                lines.extend([gap.detail_zh, ""])
+                lines.extend([f"- {gap.detail_zh}", ""])
             else:
-                lines.extend([gap.detail_en, ""])
+                lines.extend([f"- {gap.detail_en}", ""])
     else:
         subsection(
             "Experiment comparison",
