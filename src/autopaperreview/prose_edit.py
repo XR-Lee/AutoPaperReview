@@ -202,13 +202,34 @@ def _redundant(sentences: Sequence[str]) -> int:
     return extra
 
 
+_DANGLING = re.compile(r"(?:,?\s+)(?:and|but|so|which|or)$", re.IGNORECASE)
+_PLACEHOLDER = "\ue000{index}\ue001"
+
+
+def _shield_cites(text: str) -> tuple[str, list[str]]:
+    protected: list[str] = []
+
+    def _hold(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return _PLACEHOLDER.format(index=len(protected) - 1)
+
+    return _CITE.sub(_hold, text), protected
+
+
+def _restore_cites(text: str, protected: Sequence[str]) -> str:
+    for index, token in enumerate(protected):
+        text = text.replace(_PLACEHOLDER.format(index=index), token)
+    return text
+
+
 def _finish_sentence(text: str) -> str:
     cleaned = " ".join(text.split()).strip().rstrip(",")
+    cleaned = _DANGLING.sub("", cleaned).strip().rstrip(",")
     if not cleaned:
         return ""
     if cleaned[0].islower():
         cleaned = cleaned[0].upper() + cleaned[1:]
-    if not cleaned.endswith((".", "!", "?", "。", "！", "？")):
+    if not cleaned.endswith((".", "!", "?", "。", "！", "？", "]")):
         cleaned += "."
     return cleaned
 
@@ -225,7 +246,7 @@ def _split_long_sentence(sentence: str) -> list[str]:
             pieces.extend(_split_long_sentence(part))
         return pieces
     best: tuple[int, int] | None = None
-    for match in re.finditer(r", (?:and |but |so |which )?", sentence):
+    for match in re.finditer(r", (?:and |but |so |which |or )?", sentence):
         left = len(_WORD.findall(sentence[: match.start()]))
         right = len(_WORD.findall(sentence[match.end() :]))
         if left < 8 or right < 8:
@@ -234,8 +255,14 @@ def _split_long_sentence(sentence: str) -> list[str]:
         if best is None or balance < best[0]:
             best = (balance, match.end())
     cut = best[1] if best is not None else spans[_MAX_SENTENCE_WORDS].start()
-    head = sentence[:cut].strip().rstrip(",")
+    head = sentence[:cut].strip()
     tail = sentence[cut:].strip()
+    dangling = _DANGLING.search(head)
+    if dangling and dangling.start() > 0:
+        moved = head[dangling.start() :].lstrip(" ,")
+        head = head[: dangling.start()].strip().rstrip(",")
+        tail = f"{moved} {tail}".strip()
+    head = head.strip().rstrip(",")
     if not head or not tail:
         cut = spans[_MAX_SENTENCE_WORDS].start()
         head = sentence[:cut].strip().rstrip(",")
@@ -257,8 +284,9 @@ def _rewrite_sentence(sentence: str) -> tuple[str, list[str]]:
                 part += "。"
             finished.append(part)
         return "".join(finished), ["cjk_sentence_split"]
+    shielded, protected = _shield_cites(sentence)
     edits: list[str] = []
-    updated = sentence
+    updated = shielded
     for source, target in _WORDY:
         pattern = re.compile(re.escape(source), re.IGNORECASE)
 
@@ -282,19 +310,16 @@ def _rewrite_sentence(sentence: str) -> tuple[str, list[str]]:
     if len(pieces) > 1 or (pieces and pieces[0] != updated.strip()):
         if len(_WORD.findall(updated)) > _MAX_SENTENCE_WORDS or "; " in updated:
             edits.append("long_sentence_split")
-    return " ".join(pieces), edits
+    text = _restore_cites(" ".join(pieces), protected)
+    if text.count("[[") != sentence.count("[[") or "\ue000" in text:
+        return sentence, []
+    return text, edits
 
 
 def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
     if paragraph.lstrip().startswith(">") or paragraph.lstrip().startswith("#"):
         return paragraph, []
-    protected: list[str] = []
-
-    def _hold(match: re.Match[str]) -> str:
-        protected.append(match.group(0))
-        return f"@@CITE{len(protected) - 1}@@"
-
-    shielded = _CITE.sub(_hold, paragraph)
+    shielded, protected = _shield_cites(paragraph)
     if "; " in shielded and not paragraph.lstrip().startswith("-"):
         chunks = [part.strip() for part in shielded.split("; ") if part.strip()]
         if len(chunks) >= 2:
@@ -305,10 +330,8 @@ def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
                 bullets.append(f"- {updated}")
                 edits.extend(piece_edits)
             edits.append("semicolon_bullets")
-            text = "\n".join(bullets)
-            for index, token in enumerate(protected):
-                text = text.replace(f"@@CITE{index}@@", token)
-            if text.count("[[") != paragraph.count("[["):
+            text = _restore_cites("\n".join(bullets), protected)
+            if text.count("[[") != paragraph.count("[[") or "\ue000" in text:
                 return paragraph, []
             return text, edits
     pieces = _sentences(shielded)
@@ -326,10 +349,8 @@ def _rewrite_paragraph(paragraph: str) -> tuple[str, list[str]]:
         previous = key
         rewritten.append(updated)
         edits.extend(piece_edits)
-    text = " ".join(rewritten)
-    for index, token in enumerate(protected):
-        text = text.replace(f"@@CITE{index}@@", token)
-    if text.count("[[") != paragraph.count("[["):
+    text = _restore_cites(" ".join(rewritten), protected)
+    if text.count("[[") != paragraph.count("[[") or "\ue000" in text:
         return paragraph, []
     return text, edits
 

@@ -220,6 +220,11 @@ class ReadabilityTests(unittest.TestCase):
         )
         self.assertGreaterEqual(bullets.count("\n- "), 2)
         self.assertIn("semicolon_bullets", bullet_report["edits"])
+        cite = "[[E3, p.4](#marker-e3)]"
+        long_bullet = "- " + " ".join(f"word{index}" for index in range(40)) + f" {cite}"
+        kept, _kept_report = edit_body(long_bullet, language="en")
+        self.assertIn(cite, kept)
+        self.assertNotIn("marker-.", kept)
 
 
 class TranslatorHookTests(unittest.TestCase):
