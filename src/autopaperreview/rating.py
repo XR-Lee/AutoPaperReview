@@ -6,6 +6,7 @@ The core does not call a model. Inputs are records already on the package.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .models import (
@@ -222,7 +223,11 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
     bands = _bands(package)
     caps = active_caps(package)
     _apply_ceilings(bands, package, caps)
-    weighted = sum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
+    # math.fsum, not sum(). CPython 3.11 adds these products left to right, so a
+    # uniform 6 is 5.999999999999998 and snap_down returns 5 (a uniform 3
+    # becomes 2.999999999999999 and returns 1). 3.12+ sum() uses Neumaier
+    # summation and stays on the bin. fsum matches that result on 3.11/3.12/3.13.
+    weighted = math.fsum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
     gate = min(
         bands[SarDimension.claims_supported],
         bands[SarDimension.experimental_soundness],

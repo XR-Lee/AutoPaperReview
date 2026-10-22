@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from autopaperreview.models import (
 from autopaperreview.reporting import render_markdown
 from autopaperreview.rating import apply_rating, calibrate_packages, rate_venue, snap_down
 from autopaperreview.rating import TieNote
+from autopaperreview.related_work import preview_venue_bin
 from autopaperreview.related_work import snap_down as preview_snap
 from autopaperreview.rubrics import CLAUSES, COEFFICIENT_SET
 from tests.support import localized, make_artifact, make_issue
@@ -71,6 +73,10 @@ def _all(value: float) -> dict[str, float]:
     }
 
 
+def _preview_uniform(value: float) -> dict[str, float]:
+    return {dimension.value: float(value) for dimension in SarDimension}
+
+
 def _fatal(issue_id: str, fatal_class: FatalClass) -> ReviewIssue:
     return make_issue(
         id=issue_id,
@@ -101,6 +107,45 @@ class RatingFormulaTests(unittest.TestCase):
         scored = rate_venue(_package("mid", _all(6)))
         self.assertEqual(scored.value, 6)
         self.assertEqual(scored.metadata["gate"], 6)
+
+    def test_exact_bin_boundary_does_not_follow_cpython_sum(self) -> None:
+        # CPython 3.11 sum() of the uniform-6 products is 5.999999999999998, and
+        # of the uniform-3 products is 2.999999999999999. snap_down of those
+        # residuals is 5 and 1. The declared dot product is exactly the bin, and
+        # a value that really is below the cut still snaps down.
+        for score in (3, 6):
+            scored = rate_venue(_package(f"boundary-{score}", _all(float(score))))
+            self.assertEqual(scored.value, score)
+            self.assertEqual(scored.metadata["cap_ids"], [])
+            self.assertGreaterEqual(scored.metadata["capped"], score)
+            self.assertEqual(preview_venue_bin(_preview_uniform(score), []), score)
+
+        mixed = dict(originality=2, importance=8, claims=6, soundness=6, writing=6, community=10, prior=8)
+        scored = rate_venue(_package("boundary-mixed", mixed))
+        self.assertEqual(scored.metadata["cap_ids"], [])
+        self.assertGreaterEqual(scored.metadata["raw"], 6)
+        self.assertEqual(scored.value, 6)
+        self.assertEqual(
+            preview_venue_bin(
+                {
+                    "experimental_soundness": 6,
+                    "claims_supported": 6,
+                    "originality": 2,
+                    "importance_of_research_question": 8,
+                    "prior_work_contextualization": 8,
+                    "writing_clarity": 6,
+                    "community_value": 10,
+                },
+                [],
+            ),
+            6,
+        )
+        self.assertEqual(snap_down(6.0), 6)
+        self.assertEqual(snap_down(5.999999999999998), 5)
+        self.assertEqual(preview_snap(5.999999999999998), 5)
+        self.assertEqual(snap_down(2.999999999999999), 1)
+        self.assertEqual(snap_down(math.nextafter(6.0, 0.0)), 5)
+        self.assertEqual(snap_down(math.nextafter(3.0, 0.0)), 1)
 
     def test_raw_seven_lands_in_six(self) -> None:
         scored = rate_venue(_package("seven", _all(7)))

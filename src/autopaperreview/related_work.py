@@ -24,6 +24,7 @@ import hashlib
 import importlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -2145,7 +2146,8 @@ def preview_venue_bin(bands: dict[str, float], signals: Sequence[CapSignal]) -> 
     for signal in signals:
         for dimension, ceiling in signal.dimension_ceilings.items():
             adjusted[dimension] = min(adjusted[dimension], ceiling)
-    weighted = sum(_WEIGHTS[name] * adjusted[name] for name in _WEIGHTS)
+    # Same requirement as rating.rate_venue: 3.11 sum() undershoots an exact bin.
+    weighted = math.fsum(_WEIGHTS[name] * adjusted[name] for name in _WEIGHTS)
     gate = min(adjusted["claims_supported"], adjusted["experimental_soundness"])
     raw = min(weighted, gate + 1.0)
     caps = [signal.venue_cap for signal in signals]
