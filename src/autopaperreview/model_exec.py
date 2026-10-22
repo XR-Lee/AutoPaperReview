@@ -54,12 +54,14 @@ from .models import (
     LedgerClaim,
     LocalizedText,
     QueryPerspective,
+    ReviewClaim,
     ReviewIssue,
     ReviewPackage,
     ReviewRoute,
     SarDimension,
     Severity,
     SourceRecord,
+    VenueConclusion,
     VisualFinding,
 )
 from .rubrics import RUBRIC_ID, clause_dimension, clause_score
@@ -252,6 +254,71 @@ class ZhHansJudgment(StrictPayload):
         return self
 
 
+class ExportIssueText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    title: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    impact: str = Field(min_length=1)
+    required_action: str = Field(min_length=1)
+    paper_said: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+
+
+class ExportClaimText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    text: str = Field(min_length=1)
+
+
+class ExportScoreText(StrictPayload):
+    dimension: SarDimension
+    rationale: str = Field(min_length=1)
+
+
+class ExportVenueText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    label: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+
+class ExportProseText(StrictPayload):
+    field: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class ExportLedgerText(StrictPayload):
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")
+    claim: str = Field(min_length=1)
+    risk: str = Field(min_length=1)
+
+
+class ExportTranslation(StrictPayload):
+    """Field-for-field translation used by the report export hook."""
+
+    issues: list[ExportIssueText] = Field(default_factory=list)
+    claims: list[ExportClaimText] = Field(default_factory=list)
+    dimensions: list[ExportScoreText] = Field(default_factory=list)
+    venues: list[ExportVenueText] = Field(default_factory=list)
+    prose: list[ExportProseText] = Field(default_factory=list)
+    ledger: list[ExportLedgerText] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def matches_requested(self, info: ValidationInfo) -> "ExportTranslation":
+        expected = None if info.context is None else info.context.get("translate")
+        if not isinstance(expected, dict):
+            return self
+        _same_ids([item.id for item in self.issues], list(expected.get("issue_ids") or []), "issue")
+        _same_ids([item.id for item in self.claims], list(expected.get("claim_ids") or []), "claim")
+        _same_ids(
+            [item.dimension.value for item in self.dimensions],
+            list(expected.get("dimensions") or []),
+            "dimension",
+        )
+        _same_ids([item.id for item in self.venues], list(expected.get("venue_ids") or []), "venue")
+        _same_ids([item.field for item in self.prose], list(expected.get("prose_fields") or []), "prose")
+        _same_ids([item.id for item in self.ledger], list(expected.get("ledger_ids") or []), "ledger")
+        return self
+
+
 def _same_ids(found: list[str], expected: list[str], label: str) -> None:
     if len(found) != len(set(found)):
         raise ValueError(f"zh-Hans {label} ids must be unique")
@@ -306,6 +373,17 @@ _SCHEMA_HINTS = {
         '"dimensions":[{"dimension":"experimental_soundness","rationale":"..."}]} '
         "Write Simplified Chinese. Every string must contain Chinese characters. "
         "Ids and dimension names must match the accepted English records."
+    ),
+    "translate": (
+        '{"issues":[{"id":"I1","title":"...","evidence":"...","impact":"...",'
+        '"required_action":"...","paper_said":"...","explanation":"..."}],'
+        '"claims":[{"id":"C1","text":"..."}],'
+        '"dimensions":[{"dimension":"experimental_soundness","rationale":"..."}],'
+        '"venues":[{"id":"ICLR","label":"...","rationale":"..."}],'
+        '"prose":[{"field":"summary","text":"..."}],'
+        '"ledger":[{"id":"L1","claim":"...","risk":"..."}]} '
+        "Translate into the requested language. Keep every id and field name. "
+        "Do not add records."
     ),
 }
 
@@ -395,6 +473,14 @@ def _redact_bytes(payload: bytes, secret: str) -> bytes:
 
 
 def _system_prompt(judgment: str) -> str:
+    if judgment == "translate":
+        return (
+            "judgment=translate\n"
+            "Return one JSON object and no other text.\n"
+            "Translate each supplied English field into the requested language. "
+            "Keep every id. Do not add or drop records.\n"
+            f"Schema: {_SCHEMA_HINTS['translate']}\n"
+        )
     return (
         f"judgment={judgment}\n"
         "Return one JSON object and no other text.\n"
@@ -1124,6 +1210,228 @@ def _apply_zh_hans(
             )
         )
     return translated_issues, translated_claims, translated_scores
+
+
+def _missing_language(text: LocalizedText | None, language: str) -> bool:
+    return text is not None and not text.has_language(language)
+
+
+def _put_translation(text: LocalizedText, language: str, value: str) -> LocalizedText:
+    if language == "zh-Hans" and not script_matches(value, "zh-Hans"):
+        raise ModelExecutionError("translation into zh-Hans must contain Chinese text")
+    if language == text.language:
+        return text.model_copy(update={"primary": value.strip()})
+    updated = dict(text.translations)
+    updated[language] = value.strip()
+    return text.model_copy(update={"translations": updated})
+
+
+def translate_package(package: ReviewPackage, language: str, **options: Any) -> ReviewPackage:
+    """Model-adapter hook for report export.
+
+    `execute_review` bilingual mode remains the zh-Hans path during review.
+    This function is the export hook for any BCP-47 tag, including zh-Hans
+    when that pass did not run. It sends review fields, not a new score.
+    """
+    if language in {"", "en"}:
+        return package
+    scratch = options.get("scratch")
+    if scratch is None:
+        raise ModelExecutionError("translate_package requires scratch")
+    base_url = str(options.get("base_url") or "").strip()
+    model = str(options.get("model") or "").strip()
+    if not base_url or not model:
+        raise ModelExecutionError("translate_package requires base_url and model")
+    issues = [
+        issue
+        for issue in package.issues
+        if any(
+            _missing_language(getattr(issue, name), language)
+            for name in ("title", "evidence", "impact", "required_action")
+        )
+        or (
+            issue.first_read is not None
+            and (
+                _missing_language(issue.first_read.paper_said, language)
+                or _missing_language(issue.first_read.explanation, language)
+            )
+        )
+    ]
+    claims = [claim for claim in package.claims if _missing_language(claim.text, language)]
+    scores = [score for score in package.dimension_scores if _missing_language(score.rationale, language)]
+    venues = [
+        item
+        for item in package.venue_conclusions
+        if _missing_language(item.label, language) or _missing_language(item.rationale, language)
+    ]
+    prose: list[tuple[str, LocalizedText]] = []
+    if _missing_language(package.summary, language) and package.summary is not None:
+        prose.append(("summary", package.summary))
+    if _missing_language(package.recommendation, language) and package.recommendation is not None:
+        prose.append(("recommendation", package.recommendation))
+    ledger = [
+        claim
+        for claim in package.ledger_claims
+        if _missing_language(claim.claim, language) or _missing_language(claim.risk, language)
+    ]
+    if not any((issues, claims, scores, venues, prose, ledger)):
+        return package
+    payload = {
+        "language": language,
+        "issues": [
+            {
+                "id": issue.id,
+                "title": issue.title.primary,
+                "evidence": issue.evidence.primary,
+                "impact": issue.impact.primary,
+                "required_action": issue.required_action.primary,
+                "paper_said": issue.first_read.paper_said.primary if issue.first_read else issue.title.primary,
+                "explanation": issue.first_read.explanation.primary if issue.first_read else issue.impact.primary,
+            }
+            for issue in issues
+        ],
+        "claims": [{"id": claim.id, "text": claim.text.primary} for claim in claims],
+        "dimensions": [
+            {
+                "dimension": score.dimension.value,
+                "rationale": score.rationale.primary if score.rationale else score.dimension.value,
+            }
+            for score in scores
+        ],
+        "venues": [
+            {"id": item.id, "label": item.label.primary, "rationale": item.rationale.primary}
+            for item in venues
+        ],
+        "prose": [{"field": name, "text": text.primary} for name, text in prose],
+        "ledger": [
+            {
+                "id": claim.id,
+                "claim": claim.claim.primary,
+                "risk": claim.risk.primary if claim.risk else claim.claim.primary,
+            }
+            for claim in ledger
+        ],
+    }
+    session = ModelSession(
+        base_url=base_url,
+        model=model,
+        api_key_env=str(options.get("api_key_env") or "APR_MODEL_API_KEY"),
+        allow_remote=bool(options.get("allow_remote")),
+        network_policy=str(options.get("network_policy") or "deny"),
+        timeout_seconds=float(options.get("timeout_seconds") or 60),
+        temperature=float(options.get("temperature") or 0),
+        json_object=True,
+        scratch=Path(scratch),
+        stage_signature=str(options.get("stage_signature") or "export-translation"),
+    )
+    context = {
+        "translate": {
+            "issue_ids": [issue.id for issue in issues],
+            "claim_ids": [claim.id for claim in claims],
+            "dimensions": [score.dimension.value for score in scores],
+            "venue_ids": [item.id for item in venues],
+            "prose_fields": [name for name, _text in prose],
+            "ledger_ids": [claim.id for claim in ledger],
+        }
+    }
+    user = (
+        f"Translate each English field into {language}. Keep every id. Return one JSON object.\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    translated = session.complete("translate", user, ExportTranslation, context=context)
+    assert isinstance(translated, ExportTranslation)
+    issue_text = {item.id: item for item in translated.issues}
+    updated_issues: list[ReviewIssue] = []
+    for issue in package.issues:
+        item = issue_text.get(issue.id)
+        if item is None:
+            updated_issues.append(issue)
+            continue
+        first = issue.first_read
+        if first is not None:
+            first = first.model_copy(
+                update={
+                    "paper_said": _put_translation(first.paper_said, language, item.paper_said),
+                    "explanation": _put_translation(first.explanation, language, item.explanation),
+                }
+            )
+        updated_issues.append(
+            issue.model_copy(
+                update={
+                    "title": _put_translation(issue.title, language, item.title),
+                    "evidence": _put_translation(issue.evidence, language, item.evidence),
+                    "impact": _put_translation(issue.impact, language, item.impact),
+                    "required_action": _put_translation(issue.required_action, language, item.required_action),
+                    "first_read": first,
+                }
+            )
+        )
+    claim_text = {item.id: item for item in translated.claims}
+    updated_claims = [
+        claim.model_copy(update={"text": _put_translation(claim.text, language, claim_text[claim.id].text)})
+        if claim.id in claim_text
+        else claim
+        for claim in package.claims
+    ]
+    score_text = {item.dimension: item for item in translated.dimensions}
+    updated_scores: list[DimensionScore] = []
+    for score in package.dimension_scores:
+        item = score_text.get(score.dimension)
+        if item is None or score.rationale is None:
+            updated_scores.append(score)
+            continue
+        updated_scores.append(
+            score.model_copy(update={"rationale": _put_translation(score.rationale, language, item.rationale)})
+        )
+    venue_text = {item.id: item for item in translated.venues}
+    updated_venues: list[VenueConclusion] = []
+    for item in package.venue_conclusions:
+        translated_venue = venue_text.get(item.id)
+        if translated_venue is None:
+            updated_venues.append(item)
+            continue
+        updated_venues.append(
+            item.model_copy(
+                update={
+                    "label": _put_translation(item.label, language, translated_venue.label),
+                    "rationale": _put_translation(item.rationale, language, translated_venue.rationale),
+                }
+            )
+        )
+    prose_text = {item.field: item.text for item in translated.prose}
+    summary = package.summary
+    recommendation = package.recommendation
+    if summary is not None and "summary" in prose_text:
+        summary = _put_translation(summary, language, prose_text["summary"])
+    if recommendation is not None and "recommendation" in prose_text:
+        recommendation = _put_translation(recommendation, language, prose_text["recommendation"])
+    ledger_text = {item.id: item for item in translated.ledger}
+    updated_ledger: list[LedgerClaim] = []
+    for claim in package.ledger_claims:
+        item = ledger_text.get(claim.id)
+        if item is None:
+            updated_ledger.append(claim)
+            continue
+        updated_ledger.append(
+            claim.model_copy(
+                update={
+                    "claim": _put_translation(claim.claim, language, item.claim),
+                    "risk": _put_translation(claim.risk, language, item.risk) if claim.risk is not None else None,
+                }
+            )
+        )
+    session.write_index()
+    return package.model_copy(
+        update={
+            "issues": updated_issues,
+            "claims": updated_claims,
+            "dimension_scores": updated_scores,
+            "venue_conclusions": updated_venues,
+            "summary": summary,
+            "recommendation": recommendation,
+            "ledger_claims": updated_ledger,
+        }
+    )
 
 
 def _run_judgments(

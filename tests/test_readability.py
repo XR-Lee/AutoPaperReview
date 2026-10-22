@@ -23,7 +23,7 @@ from autopaperreview.readability import (
     issue_quote,
     resolve_first_read_contract,
 )
-from autopaperreview.reporting import render_markdown
+from autopaperreview.reporting import render_appendix, render_markdown
 
 from tests.support import localized, make_artifact, make_issue
 
@@ -109,7 +109,9 @@ class FirstReadReportTests(unittest.TestCase):
         self.assertIn("**Quoted passage.**", markdown)
         self.assertIn("**Why this matters.**", markdown)
         self.assertIn("Issue (blocking)", markdown)
-        self.assertIn("## Evidence Catalog", markdown)
+        self.assertNotIn("## Evidence Catalog", markdown)
+        appendix = render_appendix(package, language="en", level="full")
+        self.assertIn("## Evidence Catalog", appendix)
         self.assertIn("Eight temporally related images from one specimen", markdown)
 
 

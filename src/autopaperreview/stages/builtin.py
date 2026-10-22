@@ -24,7 +24,7 @@ from ..export_gate import ExportGateParams, export_gate_errors
 from ..bilingual_coverage import package_bilingual_gaps, require_bilingual_markdown
 from ..figures import caption_inventory, sibling_pdf
 from ..hashing import digest_excerpt, hash_json, sha256_file
-from ..i18n import ensure_package_languages, normalize_languages
+from ..i18n import MissingTranslationError, ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
 from ..ledger import build_agenda, build_ledger_claims
 from ..literature import (
@@ -55,8 +55,10 @@ from ..models import (
     VenueConclusion,
 )
 from ..novelty import assess_novelty
+from ..prose_edit import edit_body
 from ..readability import resolve_first_read_contract
-from ..reporting import render_markdown, write_package_json
+from ..reporting import render_appendix, render_markdown, write_package_json
+from ..translation import apply_translator, hook_error, parse_export_lang
 from .base import StageContext, StageHandler, StageOutcome
 
 
@@ -940,6 +942,14 @@ class ReportParams(ParamsModel):
     language: str | None = None
     languages: list[str] | None = None
     bilingual: bool = False
+    lang: str | None = None
+    appendix: str = "none"
+    translator: str | None = None
+    translator_base_url: str | None = None
+    translator_model: str | None = None
+    translator_api_key_env: str = "APR_MODEL_API_KEY"
+    translator_allow_remote: bool = False
+    annotate: bool = True
     min_issues: int = Field(default=0, ge=0)
     min_claims: int = Field(default=0, ge=0)
     min_anchored_issues: int = Field(default=0, ge=0)
@@ -973,10 +983,40 @@ class ReportParams(ParamsModel):
             raise ValueError("report languages cannot be empty")
         return cleaned
 
+    @field_validator("lang")
+    @classmethod
+    def check_lang(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parse_export_lang(value)
+        return value.strip()
+
+    @field_validator("appendix")
+    @classmethod
+    def check_appendix(cls, value: str) -> str:
+        if value not in {"none", "summary", "full"}:
+            raise ValueError("appendix must be none, summary, or full")
+        return value
+
+
+_REPORT_PRESENTATION = {
+    "language",
+    "languages",
+    "bilingual",
+    "lang",
+    "appendix",
+    "translator",
+    "translator_base_url",
+    "translator_model",
+    "translator_api_key_env",
+    "translator_allow_remote",
+    "annotate",
+}
+
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "11"
+    version = "12"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
@@ -994,18 +1034,56 @@ class ReportStage(StageHandler):
                     return ReviewPackage.model_validate_json(candidate.read_text(encoding="utf-8"))
         raise FileNotFoundError("report stage requires a dependency that emits consensus.json or package.json")
 
+    def _languages(self, params: ReportParams, default_language: str) -> list[str]:
+        if params.lang:
+            return parse_export_lang(params.lang)
+        if params.bilingual or params.languages or params.language:
+            return normalize_languages(
+                language=params.language,
+                languages=params.languages,
+                bilingual=params.bilingual,
+                default_language=default_language,
+            )
+        return ["en"]
+
+    def _prepare_languages(self, package: ReviewPackage, languages: list[str], params: ReportParams, context: StageContext) -> ReviewPackage:
+        foreign = [language for language in languages if language != "en"]
+        if not foreign:
+            return package
+        working = package
+        if set(foreign) <= {"zh-Hans"}:
+            try:
+                working = ensure_package_languages(working, languages)
+                if len(languages) == 1 or not package_bilingual_gaps(working, languages):
+                    return working
+            except MissingTranslationError as exc:
+                if not params.translator:
+                    raise hook_error("zh-Hans") from exc
+        elif not params.translator:
+            raise hook_error(foreign[0])
+        if not params.translator:
+            raise hook_error(foreign[0])
+        options = {
+            "base_url": params.translator_base_url,
+            "model": params.translator_model,
+            "api_key_env": params.translator_api_key_env,
+            "allow_remote": params.translator_allow_remote,
+            "network_policy": context.loaded_config.config.project.network_policy.value,
+            "scratch": context.stage_dir,
+        }
+        for language in foreign:
+            working = apply_translator(params.translator, working, language, options)
+        if len(languages) > 1 and set(languages) <= {"en", "zh-Hans"}:
+            gaps = package_bilingual_gaps(working, languages)
+            if gaps:
+                raise ValueError("bilingual package is incomplete:\n- " + "\n- ".join(gaps[:20]))
+        return working
+
     def run(self, context: StageContext) -> StageOutcome:
         params = ReportParams.model_validate(context.stage.params)
-        gate = ExportGateParams.model_validate(
-            params.model_dump(exclude={"language", "languages", "bilingual"})
-        )
-        languages = normalize_languages(
-            language=params.language,
-            languages=params.languages,
-            bilingual=params.bilingual,
-            default_language=context.loaded_config.config.project.default_language,
-        )
-        package = self._package(context).model_copy(deep=True)
+        gate = ExportGateParams.model_validate(params.model_dump(exclude=_REPORT_PRESENTATION))
+        languages = self._languages(params, context.loaded_config.config.project.default_language)
+        package = self._prepare_languages(self._package(context).model_copy(deep=True), languages, params, context)
         gate_errors = export_gate_errors(
             package,
             gate,
@@ -1013,26 +1091,66 @@ class ReportStage(StageHandler):
         )
         if gate_errors:
             raise ValueError("export gate failed:\n- " + "\n- ".join(gate_errors))
-        if len(languages) > 1:
-            package = ensure_package_languages(package, languages)
-            package_gaps = package_bilingual_gaps(package, languages)
-            if package_gaps:
-                raise ValueError("bilingual package is incomplete:\n- " + "\n- ".join(package_gaps[:20]))
+        from ..annotate_pdf import locate_markers, pymupdf_available, write_annotated_pdf
+        from ..markers import build_markers
+
+        markers = build_markers(package)
+        pdf_source = sibling_pdf(context.source_path)
+        annotate_meta: dict[str, object] = {"status": "skipped", "reason": "disabled"}
+        annotated_path = context.stage_dir / "annotated_submission.pdf"
+        if not params.annotate:
+            annotate_meta = {"status": "skipped", "reason": "disabled"}
+        elif pdf_source is None:
+            annotate_meta = {"status": "skipped", "reason": "no submission pdf"}
+        elif not pymupdf_available():
+            annotate_meta = {"status": "skipped", "reason": "pymupdf not installed"}
+        else:
+            markers = locate_markers(pdf_source, markers)
+            annotate_meta = {
+                "status": "written",
+                **write_annotated_pdf(pdf_source, markers, annotated_path),
+            }
         package.metadata = {
             **package.metadata,
             "run_id": context.manifest.run_id,
             "report_languages": list(languages),
+            "appendix": params.appendix,
         }
         package_path = context.stage_dir / "review_package.json"
         markdown_path = context.stage_dir / "review_report.md"
         summary_path = context.stage_dir / "summary.json"
+        readability_path = context.stage_dir / "readability.json"
         write_package_json(package, package_path)
-        markdown = render_markdown(package, languages=languages, fill_missing=False)
+        markdown = render_markdown(package, languages=languages, fill_missing=False, markers=markers)
         if len(languages) > 1:
             require_bilingual_markdown(markdown)
-        markdown_path.write_text(markdown, encoding="utf-8")
+        edited, readability = edit_body(markdown, language=languages[0])
+        if len(languages) > 1:
+            from ..bilingual_coverage import markdown_bilingual_gaps
+
+            if markdown_bilingual_gaps(edited):
+                edited = markdown
+                readability = {
+                    **readability,
+                    "reverted": "edit would unpair bilingual prose",
+                    "after": readability["before"],
+                    "edits": [],
+                }
+        markdown_path.write_text(edited, encoding="utf-8")
+        _write_json(readability_path, readability)
         project_dir = context.loaded_config.path.parent
-        (project_dir / "review_report.md").write_text(markdown, encoding="utf-8")
+        (project_dir / "review_report.md").write_text(edited, encoding="utf-8")
+        (project_dir / "review_readability.json").write_text(
+            readability_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        appendix_written = False
+        appendix_path = context.stage_dir / "review_appendix.md"
+        if params.appendix != "none":
+            appendix = render_appendix(package, languages=languages, level=params.appendix)
+            appendix_path.write_text(appendix, encoding="utf-8")
+            (project_dir / "review_appendix.md").write_text(appendix, encoding="utf-8")
+            appendix_written = True
         pdf_written = False
         from ..pdf_report import reportlab_available, write_report_pdf
 
@@ -1049,13 +1167,20 @@ class ReportStage(StageHandler):
                 else None
             )
             write_report_pdf(
-                markdown,
+                edited,
                 pdf_path,
-                title=f"Review Report: {package.project_id}",
+                title=f"Review: {package.project_id}",
                 footer_note=footer,
             )
             (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
             pdf_written = True
+            if appendix_written:
+                write_report_pdf(
+                    appendix_path.read_text(encoding="utf-8"),
+                    context.stage_dir / "review_appendix.pdf",
+                    title=f"Appendix: {package.project_id}",
+                    footer_note=footer,
+                )
         _write_json(
             summary_path,
             {
@@ -1065,14 +1190,23 @@ class ReportStage(StageHandler):
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "appendix": params.appendix,
                 "pdf": pdf_written,
+                "body_bytes": len(edited.encode("utf-8")),
+                "annotate": annotate_meta,
+                "readability": readability,
             },
         )
         artifacts = [
             _artifact(package_path, context, "review.package.release"),
             _artifact(markdown_path, context, "review.report.markdown"),
             _artifact(summary_path, context, "review.summary"),
+            _artifact(readability_path, context, "review.readability"),
         ]
+        if appendix_written:
+            artifacts.append(_artifact(appendix_path, context, "review.report.appendix"))
+        if annotate_meta.get("status") == "written":
+            artifacts.append(_artifact(annotated_path, context, "review.annotated_pdf"))
         return StageOutcome(
             artifacts=artifacts,
             metadata={
@@ -1080,7 +1214,10 @@ class ReportStage(StageHandler):
                 "language": languages[0],
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
+                "appendix": params.appendix,
                 "pdf": pdf_written,
+                "body_bytes": len(edited.encode("utf-8")),
+                "annotate": annotate_meta,
             },
         )
 

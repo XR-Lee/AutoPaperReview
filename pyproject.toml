@@ -28,6 +28,7 @@ Issues = "https://github.com/XR-Lee/AutoPaperReview/issues"
 
 [project.optional-dependencies]
 pdf = ["reportlab>=4"]
+annotate = ["pymupdf>=1.24.9,<2"]
 visual = ["pypdfium2>=4.30,<6", "pillow>=10"]
 
 [project.scripts]

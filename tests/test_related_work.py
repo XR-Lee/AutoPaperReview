@@ -957,7 +957,10 @@ class StageTests(unittest.TestCase):
             report = (workspace / ".runs" / manifest.run_id / "stages" / "report" / "review_report.md").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("## Related Work / 相关工作", report)
+            self.assertIn("## Related Work", report)
+            self.assertNotIn("### Queries", report)
+            self.assertNotIn("### Candidates", report)
+            self.assertNotIn("## Retrieved Sources", report)
             require_bilingual_markdown(report)
             queries = json.loads((stage_dir / "queries.json").read_text(encoding="utf-8"))
             families = {query["metadata"]["family"] for query in queries}
@@ -993,7 +996,8 @@ class StageTests(unittest.TestCase):
             self.assertNotIn("检索可能不完整", report)
             self.assertIn("assigned 8.0/10", report)
             self.assertIn("after ceiling 4.0/10", report)
-            self.assertIn("**What the paper said / 论文写了什么.**", report)
+            self.assertIn("**What the paper said.**", report)
+            self.assertNotIn("**What the paper said / 论文写了什么.**", report)
             self.assertIn("> ", report)
             self.assertGreater(comparison["baseline_counts"]["missing"], 0)
             self.assertGreater(comparison["baseline_counts"]["privileged"], 0)

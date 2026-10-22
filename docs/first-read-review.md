@@ -36,7 +36,7 @@ ICLR's own sample reviews do this: they first retell the paper's central idea in
 
 1. **`FirstReadNote`** on `ReviewIssue` (optional, additive). Fields: `paper_said`, `explanation`, optional `quote`, Conventional Comments `intent`, optional `blocking`. Schema version stays `1.0`.
 2. **`first_read_v1.md`** — packaged writing contract. `prompt_packet` prepends it to every route packet. Specialist prompts remind the model that an evidence ID is not the argument. `init` adds a clarity route `M8`; the synthetic example keeps a dedicated clarity route as `M6`.
-3. **Reader-facing Markdown** — how-to-read note, human dimension labels next to the machine key, inlined quotes, first-read restatement when present, evidence catalog in an appendix.
+3. **Reader-facing Markdown** — how-to-read note, human dimension labels next to the machine key, inlined quotes, and a first-read restatement when present. The default file is that body. The evidence catalog, ledger, and retrieval logs are a separate appendix (`--appendix`). See [report export](report-export.md).
 4. **Optional export-gate checks** — `require_first_read_on_major`, `require_quote_on_major`, `min_explanation_chars`. Off by default so older packages still export. The synthetic example and `init` turn the first two on.
 5. **Deterministic / fixture adapters** fill `FirstReadNote` so a model-free run still demonstrates the contract.
 

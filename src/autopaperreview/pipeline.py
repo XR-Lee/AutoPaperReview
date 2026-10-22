@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -12,7 +13,7 @@ from typing import Any
 
 from . import __version__
 from .artifacts import artifact_from_path, resolve_artifact_path
-from .config import LoadedConfig, StageConfig, load_config
+from .config import HarnessConfig, LoadedConfig, StageConfig, load_config
 from .hashing import hash_json
 from .models import Artifact, RunManifest, StageRecord, StageStatus
 from .registry import StageRegistry
@@ -259,13 +260,49 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
     return errors
 
 
+def _override_report(
+    loaded: LoadedConfig,
+    *,
+    lang: str | None,
+    appendix: str | None,
+) -> LoadedConfig:
+    raw = copy.deepcopy(loaded.raw)
+    found = False
+    for stage in raw.get("stages", []):
+        if stage.get("type") != "report":
+            continue
+        found = True
+        params = stage.setdefault("params", {})
+        if lang:
+            params["lang"] = lang
+            params.pop("bilingual", None)
+            params.pop("language", None)
+            params.pop("languages", None)
+        if appendix:
+            params["appendix"] = appendix
+    if not found:
+        raise PipelineError("--lang and --appendix require a report stage")
+    config = HarnessConfig.model_validate(raw)
+    return LoadedConfig(
+        path=loaded.path,
+        workspace=loaded.workspace,
+        raw=raw,
+        config=config,
+        sha256=hash_json(raw),
+    )
+
+
 def run_pipeline(
     config_path: str | Path,
     *,
     force: bool = False,
     registry: StageRegistry | None = None,
+    report_lang: str | None = None,
+    report_appendix: str | None = None,
 ) -> RunManifest:
     loaded = load_config(config_path)
+    if report_lang or report_appendix:
+        loaded = _override_report(loaded, lang=report_lang, appendix=report_appendix)
     registry = registry or default_registry()
     errors = validate_config_paths(loaded, registry)
     if errors:

@@ -33,7 +33,7 @@ from autopaperreview.models import (
 from autopaperreview.status_notes import classify_status_note
 from autopaperreview.pipeline import run_pipeline
 from autopaperreview.pdf_report import _markup, reportlab_available, write_report_pdf
-from autopaperreview.reporting import record_anchor, render_markdown
+from autopaperreview.reporting import record_anchor, render_appendix, render_markdown
 
 from tests.support import localized, make_artifact, make_issue
 
@@ -106,7 +106,7 @@ class BilingualRenderTests(unittest.TestCase):
         markdown = render_markdown(package, language="en")
         self.assertIn("## Summary", markdown)
         self.assertIn("## How to Read This Review", markdown)
-        self.assertIn("A short paper claims deployment readiness. [[E1](#record-e1)]", markdown)
+        self.assertIn("A short paper claims deployment readiness. [[E1](#marker-e1)]", markdown)
         self.assertIn("## Dimension Scores", markdown)
         self.assertIn("The claim is not supported.", markdown)
         self.assertIn("**claims_supported:** Whether claims are supported", markdown)
@@ -118,7 +118,7 @@ class BilingualRenderTests(unittest.TestCase):
     def test_monolingual_zh_hans_may_still_resolve_english_primary(self) -> None:
         package = _package_with_english_only_rationale()
         markdown = render_markdown(package, language="zh-Hans")
-        self.assertIn("The claim is not supported.", markdown)
+        self.assertIn("该主张缺少支持。", markdown)
         self.assertNotIn("### zh-Hans", markdown)
 
     def test_bilingual_render_includes_en_and_zh_hans_section_by_section(self) -> None:
@@ -173,10 +173,13 @@ class BilingualRenderTests(unittest.TestCase):
         self.assertIsNone(package.overall_score)
         self.assertIn("No overall score is assigned", markdown)
         self.assertIn("未给出总体分数", markdown)
-        self.assertIn("## Evidence Index / 证据索引", markdown)
-        self.assertIn("[E1](#record-e1)", markdown)
-        self.assertIn('id="record-e1"', markdown)
-        self.assertIn("`E1`", markdown)
+        self.assertNotIn("## Evidence Index", markdown)
+        self.assertIn("[[E1](#marker-e1)]", markdown)
+        self.assertIn('id="marker-e1"', markdown)
+        appendix = render_appendix(package, bilingual=True, level="full")
+        self.assertIn("## Evidence Index / 证据索引", appendix)
+        self.assertIn('id="record-e1"', appendix)
+        self.assertIn("`[E1]`", markdown)
         self.assertIn("## Venue Conclusions / 会议与期刊结论", markdown)
         self.assertIn("#### ICLR", markdown)
         self.assertIn("#### TMLR", markdown)
@@ -346,7 +349,9 @@ class BilingualReportStageTests(unittest.TestCase):
             sidecar = workspace / "review_report.md"
             self.assertTrue(sidecar.is_file())
             self.assertEqual(sidecar.read_text(encoding="utf-8"), markdown)
-            self.assertIn("[[E1](#record-e1)]", markdown)
+            self.assertIn("[[E1](#marker-e1)]", markdown)
+            self.assertNotIn("## Evidence Index", markdown)
+            self.assertNotIn("## Retrieved Sources", markdown)
             if reportlab_available():
                 self.assertTrue((workspace / "review_report.pdf").is_file())
                 self.assertTrue(summary["pdf"])
@@ -364,9 +369,12 @@ class EvidenceLinkTests(unittest.TestCase):
             project_id="synthetic-tracking-review",
         )
         markdown = render_markdown(package, bilingual=True)
-        self.assertIn("[[E1](#record-e1)]", markdown)
-        self.assertIn('<a id="record-e1"></a>', markdown)
-        self.assertIn("## Evidence Index / 证据索引", markdown)
+        self.assertIn("[[E1](#marker-e1)]", markdown)
+        self.assertIn('<a id="marker-e1"></a>', markdown)
+        self.assertNotIn("## Evidence Index", markdown)
+        appendix = render_appendix(package, bilingual=True, level="full")
+        self.assertIn("## Evidence Index / 证据索引", appendix)
+        self.assertIn('<a id="record-e1"></a>', appendix)
 
     def test_pdf_markup_keeps_citation_brackets_and_one_target_per_id(self) -> None:
         dests, markup = _markup(
@@ -392,7 +400,7 @@ class EvidenceLinkTests(unittest.TestCase):
             payload = path.read_bytes()
             self.assertIn(b"/Link", payload)
             self.assertIn(b"/Dest", payload)
-            self.assertGreaterEqual(payload.count(b"/Subtype /Link"), markdown.count("[E1](#record-e1)"))
+            self.assertGreaterEqual(payload.count(b"/Subtype /Link"), markdown.count("[E1](#marker-e1)"))
 
 
     @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
@@ -517,7 +525,7 @@ class StatusNoteRenderTests(unittest.TestCase):
             integrity_records=records,
             novelty_assessments=novelty,
         )
-        markdown = render_markdown(package, bilingual=True)
+        markdown = render_appendix(package, bilingual=True, level="full")
         self.assertEqual(markdown.count("**fixture**"), 1)
         self.assertEqual(markdown.count("**not-matched**"), 1)
         self.assertEqual(markdown.count("**no-CI/seed**"), 1)
@@ -567,7 +575,7 @@ class StatusNoteRenderTests(unittest.TestCase):
             issues=[make_issue()],
             ledger_claims=claims,
         )
-        markdown = render_markdown(package, bilingual=True)
+        markdown = render_appendix(package, bilingual=True, level="full")
         listed = markdown.split("## Listed Contributions")[1].split("## ")[0]
         self.assertEqual(markdown.count("**unchecked**"), 1)
         self.assertIn("尚未核对", listed)
@@ -598,7 +606,7 @@ class StatusNoteRenderTests(unittest.TestCase):
                 )
             ],
         )
-        markdown = render_markdown(package, bilingual=True)
+        markdown = render_appendix(package, bilingual=True, level="full")
         integrity = markdown.split("## Integrity")[1].split("## ")[0]
         self.assertIn("**en:**", integrity)
         self.assertIn("**zh-Hans:**", integrity)

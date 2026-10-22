@@ -47,7 +47,12 @@ def command_validate(args: argparse.Namespace) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    manifest = run_pipeline(args.config, force=args.force)
+    manifest = run_pipeline(
+        args.config,
+        force=args.force,
+        report_lang=args.lang,
+        report_appendix=args.appendix,
+    )
     _print_json(
         {
             "status": "success",
@@ -478,6 +483,17 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="run or resume a review pipeline")
     run.add_argument("config")
     run.add_argument("--force", action="store_true", help="rerun every enabled stage")
+    run.add_argument(
+        "--lang",
+        default=None,
+        help="export language: en, zh-Hans, bilingual, or another BCP-47 tag (default: en)",
+    )
+    run.add_argument(
+        "--appendix",
+        choices=("none", "summary", "full"),
+        default=None,
+        help="write the audit appendix to a separate file (default: none)",
+    )
     run.set_defaults(func=command_run)
 
     inspect = subparsers.add_parser("inspect", help="print a run manifest")
