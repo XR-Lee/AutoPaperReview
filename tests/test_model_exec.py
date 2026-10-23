@@ -157,15 +157,29 @@ def _zh_hans() -> str:
     )
 
 
-def _fatal() -> str:
+def _fatal(excerpt: str = CONTRIBUTION) -> str:
     return json.dumps(
         {
             "classifications": [
-                {"issue_id": "I-C1", "fatal_class": "leakage", "decision_relevant": True},
-                {"issue_id": "I-missing", "fatal_class": "wrong_metric", "decision_relevant": True},
+                {
+                    "issue_id": "I-C1",
+                    "fatal_class": "leakage",
+                    "decision_relevant": True,
+                    "excerpt": excerpt,
+                },
+                {
+                    "issue_id": "I-missing",
+                    "fatal_class": "wrong_metric",
+                    "decision_relevant": True,
+                    "excerpt": excerpt,
+                },
             ]
         }
     )
+
+
+def _fatal_verify(holds: bool = True) -> str:
+    return json.dumps({"verdicts": [{"issue_id": "I-C1", "holds": holds}]})
 
 
 def _judgment_name(payload: dict[str, Any]) -> str:
@@ -233,6 +247,7 @@ def _closed_loop_reply(payload: dict[str, Any], attempt: int) -> bytes:
         "ledger": _ledger(),
         "dimensions": _dimensions(),
         "fatal": _fatal(),
+        "fatal-verify": _fatal_verify(),
     }[name]
     return _chat(content)
 
@@ -359,8 +374,8 @@ class ClosedLoopTests(unittest.TestCase):
             self.assertFalse(review.metadata["manuscript_left_machine"])
             self.assertFalse(first.metadata["manuscript_left_machine"])
             self.assertEqual(review.metadata["result_cache"], "stage_signature")
-            self.assertEqual(len(review.metadata["model_exchanges"]), 4)
-            self.assertEqual(server.authorizations, [f"Bearer {SECRET}"] * 4)
+            self.assertEqual(len(review.metadata["model_exchanges"]), 5)
+            self.assertEqual(server.authorizations, [f"Bearer {SECRET}"] * 5)
             run_dir = workspace / ".runs" / first.run_id
             stage_dir = run_dir / "stages" / "review"
             _exchange_hashes_match(stage_dir, review.metadata["model_exchanges"])
@@ -849,6 +864,58 @@ class DimensionAnchorTests(unittest.TestCase):
             self.assertEqual(len(package["dimension_scores"]), 7)
             self.assertEqual(manifest.stage("review").metadata["rejected_count"], 0)
 
+    def test_whitespace_difference_still_resolves_the_excerpt(self) -> None:
+        broken = "Synthetic cohort uses eight\nimages from one specimen."
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat(_dimensions({"experimental_soundness": broken}))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["dimensions"])
+            manifest = run_pipeline(config)
+            self.assertEqual(len(server.bodies), 1)
+            package = json.loads(
+                (workspace / ".runs" / manifest.run_id / "stages" / "review" / "package.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            evidence = next(item for item in package["evidence"] if item["id"] == "E-experimental_soundness")
+            self.assertEqual(evidence["excerpt"], COHORT)
+            request = json.loads(server.bodies[0].decode("utf-8"))
+            user = request["messages"][1]["content"]
+            self.assertIn("sar_bands_v1", user)
+            self.assertIn("Matched controls, uncertainty", user)
+            self.assertIn("not a default", user)
+
+    def test_unverified_fatal_class_is_not_stored(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name == "fatal-verify":
+                return _chat(_fatal_verify(False))
+            return _closed_loop_reply(payload, 1)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "fatal"],
+            )
+            manifest = run_pipeline(config)
+            package = json.loads(
+                (workspace / ".runs" / manifest.run_id / "stages" / "review" / "package.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIsNone(package["issues"][0]["fatal_class"])
+            rejected = json.loads(
+                (workspace / ".runs" / manifest.run_id / "stages" / "review" / "model" / "rejected.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("not verified", rejected[-1]["reason"])
+
     def test_anchor_retry_does_not_start_another_schema_retry(self) -> None:
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
             del payload
@@ -1049,7 +1116,10 @@ class BilingualJudgmentTests(unittest.TestCase):
             review = manifest.stage("review")
             assert review is not None
             names = [item["judgment"] for item in review.metadata["model_exchanges"]]
-            self.assertEqual(names, ["contributions", "ledger", "dimensions", "fatal", "zh-Hans"])
+            self.assertEqual(
+                names,
+                ["contributions", "ledger", "dimensions", "fatal", "fatal-verify", "zh-Hans"],
+            )
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
             _exchange_hashes_match(stage_dir, review.metadata["model_exchanges"])
             package_path = stage_dir / "package.json"

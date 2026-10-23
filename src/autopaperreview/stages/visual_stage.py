@@ -13,7 +13,7 @@ from ..figures import sibling_pdf
 from ..hashing import sha256_file
 from ..models import ReviewPackage, ReviewRoute, RouteKind, VisualFinding
 from ..reporting import write_package_json
-from ..model_exec import public_base_url
+from ..model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS, public_base_url
 from ..visual import (
     finding_matches_caption,
     format_check_pdf,
@@ -205,7 +205,7 @@ class VisualInspectParams(ParamsModel):
     allow_remote: bool = False
     base_url: str | None = None
     packet_route: str | None = None
-    timeout_seconds: float = Field(default=60, gt=0)
+    timeout_seconds: float = Field(default=DEFAULT_MODEL_TIMEOUT_SECONDS, gt=0)
     temperature: float = 0
     json_object: bool = True
 

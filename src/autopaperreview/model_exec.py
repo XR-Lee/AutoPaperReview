@@ -6,8 +6,9 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. `OpenAICompatibleVisionInspector` is the `visual_inspect`
-entry point and sends rendered page images to the same chat API.
+fatal classification. An optional `holistic` judgment adds one ICLR rating.
+`OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
+rendered page images to the same chat API.
 
 Loopback endpoints are allowed by default. A hostname that resolves only to
 loopback addresses is loopback. Any other host is remote: the stage must set
@@ -68,6 +69,10 @@ from .visual import VisualPageRequest
 Transport = Callable[[urllib.request.Request, float], bytes]
 
 TEXT_JUDGMENTS = ("contributions", "ledger", "dimensions", "fatal")
+OPTIONAL_JUDGMENTS = ("holistic",)
+KNOWN_JUDGMENTS = TEXT_JUDGMENTS + OPTIONAL_JUDGMENTS
+# One xhigh reasoning call is often several minutes. 60s aborted every paper.
+DEFAULT_MODEL_TIMEOUT_SECONDS = 900.0
 TRANSPORT_RETRIES = 2
 TRANSPORT_BACKOFF_SECONDS = (0.5, 1.0)
 _UNRESOLVED_ANCHOR = "excerpt does not occur in the manuscript or a retrieved snapshot"
@@ -76,6 +81,7 @@ _HINTS: dict[str, tuple[str, ...]] = {
     "ledger": ("ledger", "agenda", "closed-book", "closed_book"),
     "dimensions": ("sar", "dimension", "band"),
     "fatal": ("fatal", "metric", "protocol"),
+    "holistic": ("closed", "review", "overall"),
     "visual": ("visual", "figure", "page image"),
 }
 
@@ -172,6 +178,7 @@ class FatalItem(StrictPayload):
     issue_id: str = Field(min_length=1)
     fatal_class: FatalClass
     decision_relevant: bool = False
+    excerpt: str = Field(min_length=1)
 
 
 class FatalJudgment(StrictPayload):
@@ -183,6 +190,29 @@ class FatalJudgment(StrictPayload):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("fatal classifications must name each issue once")
         return self
+
+
+class FatalVerdict(StrictPayload):
+    issue_id: str = Field(min_length=1)
+    holds: bool = False
+
+
+class FatalVerifyJudgment(StrictPayload):
+    verdicts: list[FatalVerdict] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_verdicts(self) -> "FatalVerifyJudgment":
+        identifiers = [item.issue_id for item in self.verdicts]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("fatal verdicts must name each issue once")
+        return self
+
+
+class HolisticJudgment(StrictPayload):
+    rating: int = Field(ge=1, le=10)
+    strength_excerpt: str = Field(min_length=1)
+    weakness_excerpt: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
 
 
 class VisualJudgment(StrictPayload):
@@ -268,6 +298,8 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     "ledger": LedgerJudgment,
     "dimensions": DimensionJudgment,
     "fatal": FatalJudgment,
+    "fatal-verify": FatalVerifyJudgment,
+    "holistic": HolisticJudgment,
     "visual": VisualJudgment,
     "zh-Hans": ZhHansJudgment,
 }
@@ -284,15 +316,35 @@ _SCHEMA_HINTS = {
         "ledger must contain at least one claim."
     ),
     "dimensions": (
-        '{"dimensions":[{"dimension":"experimental_soundness","clause_id":"es-4",'
-        '"rationale":"...","excerpt":"exact substring"}]} '
+        '{"dimensions":[{"dimension":"experimental_soundness","clause_id":"<clause from the rubric>",'
+        '"rationale":"...","excerpt":"copied passage"}]} '
         "Include each of the seven SAR dimensions once. "
+        "clause_id is one of cs-2, cs-4, cs-6, cs-8, cs-10, es-2, es-4, es-6, es-8, es-10, "
+        "or-2, or-4, or-6, or-8, or-10, im-2, im-4, im-6, im-8, im-10, "
+        "wc-2, wc-4, wc-6, wc-8, wc-10, cv-2, cv-4, cv-6, cv-8, cv-10, "
+        "pw-2, pw-4, pw-6, pw-8, pw-10. "
+        "The rubric text is in the user message. None of those clauses is a default. "
         "The pipeline sets the numeric score from the clause id."
     ),
     "fatal": (
-        '{"classifications":[{"issue_id":"I-C1","fatal_class":"leakage","decision_relevant":true}]} '
+        '{"classifications":[{"issue_id":"I-C1","fatal_class":"leakage","decision_relevant":true,'
+        '"excerpt":"copied passage"}]} '
         "fatal_class is one of invalid_protocol, leakage, wrong_metric, unfair_baseline, "
-        "unsupported_claim, format_desk_reject."
+        "unsupported_claim, format_desk_reject. "
+        "Omit an issue when the excerpt does not state that class. "
+        "decision_relevant is true only when that stated condition decides the result."
+    ),
+    "fatal-verify": (
+        '{"verdicts":[{"issue_id":"I-C1","holds":false}]} '
+        "holds is true only when the excerpt itself states the class. "
+        "One verdict per issue in the user message."
+    ),
+    "holistic": (
+        '{"rating":6,"strength_excerpt":"copied passage","weakness_excerpt":"copied passage",'
+        '"rationale":"..."} '
+        "rating is an integer from 1 to 10 on the ICLR review scale: "
+        "1 strong reject, 3 reject, 5 marginally below, 6 marginally above, 8 accept, 10 strong accept. "
+        "2, 4, 7, and 9 are allowed between those anchors. Do not default to 3, 5, or 6."
     ),
     "visual": (
         '{"findings":[{"id":"V1","page":1,"bbox":[0,0,1,1],'
@@ -399,8 +451,9 @@ def _system_prompt(judgment: str) -> str:
         f"judgment={judgment}\n"
         "Return one JSON object and no other text.\n"
         f"Schema: {_SCHEMA_HINTS[judgment]}\n"
-        "Every excerpt must be an exact substring of the manuscript or of a retrieved snapshot "
-        "included in the packet. Do not invent a locator. Unknown fields are rejected."
+        "Every excerpt must be copied from the manuscript or from a retrieved snapshot in the packet. "
+        "A line break may be written as a space. Do not paraphrase. Do not invent a locator. "
+        "Unknown fields are rejected."
     )
 
 
@@ -447,6 +500,37 @@ def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes
         return response.read()
 
 
+def _collapse_whitespace(text: str) -> tuple[str, list[int]]:
+    """Collapse each whitespace run to one space. Origins point at the source characters."""
+    chars: list[str] = []
+    origins: list[int] = []
+    pending: int | None = None
+    for index, char in enumerate(text):
+        if char.isspace():
+            if chars and pending is None:
+                pending = index
+            continue
+        if pending is not None:
+            chars.append(" ")
+            origins.append(pending)
+            pending = None
+        chars.append(char)
+        origins.append(index)
+    return "".join(chars), origins
+
+
+def _whitespace_span(needle: str, source: str) -> tuple[int, int] | None:
+    collapsed_needle, _origins = _collapse_whitespace(needle.strip())
+    collapsed_source, origins = _collapse_whitespace(source)
+    if not collapsed_needle or not origins:
+        return None
+    start = collapsed_source.find(collapsed_needle)
+    if start < 0:
+        return None
+    end = start + len(collapsed_needle)
+    return origins[start], origins[end - 1] + 1
+
+
 def locate_excerpt(
     excerpt: str,
     *,
@@ -454,7 +538,11 @@ def locate_excerpt(
     manuscript_sha: str,
     snapshots: list[Any],
 ) -> Anchor | None:
-    """Resolve an exact excerpt against the manuscript or a retrieved snapshot."""
+    """Resolve an excerpt. Exact match wins; otherwise whitespace runs may differ.
+
+    The stored excerpt is the manuscript or snapshot span, so later checks see
+    the source text rather than the model's line breaks.
+    """
     if not excerpt or not excerpt.strip():
         return None
     if excerpt in manuscript:
@@ -468,6 +556,19 @@ def locate_excerpt(
             end=start + len(excerpt),
             excerpt=excerpt,
         )
+    span = _whitespace_span(excerpt, manuscript)
+    if span is not None:
+        start, end = span
+        canonical = manuscript[start:end]
+        return Anchor(
+            kind=AnchorKind.text_offset,
+            display=f"manuscript[{start}:{end}]",
+            artifact_sha256=manuscript_sha,
+            encoding="utf-8",
+            start=start,
+            end=end,
+            excerpt=canonical,
+        )
     for snapshot in snapshots:
         body = getattr(snapshot, "excerpt", None) or ""
         if excerpt in body:
@@ -478,6 +579,17 @@ def locate_excerpt(
                 artifact_sha256=snapshot.sha256,
                 excerpt=excerpt,
             )
+        span = _whitespace_span(excerpt, body)
+        if span is None:
+            continue
+        start, end = span
+        return Anchor(
+            kind=AnchorKind.external_snapshot,
+            display=snapshot.id,
+            snapshot_id=snapshot.id,
+            artifact_sha256=snapshot.sha256,
+            excerpt=body[start:end],
+        )
     return None
 
 
@@ -583,6 +695,7 @@ class ModelSession:
         self.manuscript_left_machine = False
         self.exchanges: list[dict[str, Any]] = []
         self.rejected: list[dict[str, str]] = []
+        self.usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self._checked = False
         self._attempt_counts: dict[str, int] = {}
         self._last_messages: list[dict[str, Any]] = []
@@ -621,6 +734,7 @@ class ModelSession:
             "result_cache": "stage_signature",
             "model_exchanges": list(self.exchanges),
             "rejected_count": len(self.rejected),
+            "usage_totals": dict(self.usage_totals),
         }
 
     def reject(self, judgment: str, item_id: str, reason: str) -> None:
@@ -803,6 +917,12 @@ class ModelSession:
                 return f"invalid chat envelope: {exc}"
             if not isinstance(payload, dict):
                 return "invalid chat envelope: response is not an object"
+            usage = payload.get("usage")
+            if isinstance(usage, dict):
+                for key in self.usage_totals:
+                    raw_tokens = usage.get(key)
+                    if isinstance(raw_tokens, int):
+                        self.usage_totals[key] += raw_tokens
             try:
                 return _message_text(payload)
             except ValueError as exc:
@@ -858,7 +978,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
     if not base_url or not model:
         raise ModelExecutionError("OpenAI-compatible adapter requires base_url and model")
     judgments = list(metadata.get("judgments") or TEXT_JUDGMENTS)
-    unknown = [item for item in judgments if item not in TEXT_JUDGMENTS]
+    unknown = [item for item in judgments if item not in KNOWN_JUDGMENTS]
     if unknown:
         raise ModelExecutionError(
             f"unknown judgments {unknown}; visual findings use visual_inspect "
@@ -875,7 +995,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
         "api_key_env": str(metadata.get("api_key_env") or "APR_MODEL_API_KEY"),
         "allow_remote": bool(metadata.get("allow_remote")),
         "network_policy": str(metadata.get("network_policy") or "deny"),
-        "timeout_seconds": float(metadata.get("timeout_seconds") or 60),
+        "timeout_seconds": float(metadata.get("timeout_seconds") or DEFAULT_MODEL_TIMEOUT_SECONDS),
         "temperature": float(metadata.get("temperature") or 0),
         "json_object": bool(metadata.get("json_object", True)),
         "judgments": judgments,
@@ -964,10 +1084,157 @@ class OpenAICompatibleAdapter:
         )
 
 
+FATAL_CLASS_DEFINITIONS = """
+Fatal classes are venue caps. Assign one only when the excerpt states the condition.
+- invalid_protocol: the decision comparison is not one experiment. Splits, populations, or protocols are mixed into one number.
+- leakage: the evaluation uses a label, an example, or a target the method was not allowed to see.
+- wrong_metric: the number used for the decision is not the metric the claim names.
+- unfair_baseline: a compared system receives an input, a label, or a task the claimed system does not.
+- unsupported_claim: the paper's own reported comparison contradicts the headline in the excerpt.
+- format_desk_reject: the excerpt states a broken anonymity rule or a broken page limit.
+Do not assign missing_closest_neighbor. Related-work search owns that class.
+A suspicion, a missing experiment, or a harsh tone is not one of these classes.
+""".strip()
+
+
+HOLISTIC_TASK = """
+## Overall ICLR rating
+Give the rating you would type on the ICLR review form after reading the manuscript.
+1 is a strong reject, 3 is a reject, 5 is marginally below the acceptance threshold, 6 is marginally above, 8 is an accept, and 10 is a strong accept.
+Integers 2, 4, 7, and 9 are allowed when the paper sits between those anchors.
+Do not default to 3, 5, or 6. Decide from the manuscript.
+strength_excerpt is one sentence the paper states that is a real strength.
+weakness_excerpt is one sentence the paper states that limits that strength.
+Copy both from the manuscript. A line break may be written as a space.
+""".strip()
+
+
+def rubric_prompt_text() -> str:
+    """Packaged sar_bands_v1 clause list. The dimension judgment appends this verbatim."""
+    from importlib.resources import files
+
+    return files("autopaperreview").joinpath("prompts", "sar_bands_v1.md").read_text(encoding="utf-8")
+
+
+def judgment_prompt_fingerprint() -> str:
+    """Hash of the text the adapter adds beyond the route packet. A prompt edit busts the cache."""
+    from .hashing import digest_excerpt
+
+    blob = "\n".join(
+        [
+            rubric_prompt_text(),
+            FATAL_CLASS_DEFINITIONS,
+            HOLISTIC_TASK,
+            "excerpt-whitespace-v1",
+            "fatal-verify-v1",
+        ]
+    )
+    return digest_excerpt(blob)
+
+
+def _dimensions_user(packet: str) -> str:
+    return (
+        packet
+        + "\n\n## Rubric sar_bands_v1\n"
+        + "Choose one clause per dimension from the list below. "
+        + "The clause id in the schema is not a default. "
+        + "Read every clause and pick the condition the manuscript meets. "
+        + "Do not pick a lower clause unless that condition is met.\n\n"
+        + rubric_prompt_text()
+    )
+
+
+def _fatal_user(packet: str, known_issue_ids: list[str]) -> str:
+    known = ", ".join(known_issue_ids) or "none"
+    return (
+        packet
+        + "\n\n"
+        + FATAL_CLASS_DEFINITIONS
+        + "\n\n## Pipeline context\n"
+        + f"Accepted issue ids: {known}\n"
+        + "Classify only these ids. The pipeline assigns I-<contribution id>.\n"
+        + "Every classification needs an excerpt copied from the manuscript that states the class.\n"
+    )
+
+
+def _fatal_verify_user(items: list[tuple[str, str, str]]) -> str:
+    lines = [
+        FATAL_CLASS_DEFINITIONS,
+        "",
+        "You see only an issue id, a proposed class, and a manuscript excerpt.",
+        "holds is true only when that excerpt states the class condition.",
+        "A missing experiment, a harsh tone, or a general weakness is not enough.",
+        "",
+    ]
+    for issue_id, fatal_class, excerpt in items:
+        lines.append(f"## {issue_id}\nclass: {fatal_class}\nexcerpt:\n{excerpt}\n")
+    lines.append(
+        'Return {"verdicts":[{"issue_id":"...","holds":false}]} with one verdict for each id above.'
+    )
+    return "\n".join(lines)
+
+
+def _holistic_anchors(
+    payload: HolisticJudgment,
+    request: ReviewRequest,
+    snapshots: list[Any],
+) -> tuple[dict[str, Anchor], list[tuple[str, str]]]:
+    found: dict[str, Anchor] = {}
+    missing: list[tuple[str, str]] = []
+    for name, excerpt in (
+        ("strength", payload.strength_excerpt),
+        ("weakness", payload.weakness_excerpt),
+    ):
+        anchor = locate_excerpt(
+            excerpt,
+            manuscript=request.source_text,
+            manuscript_sha=request.manuscript.sha256,
+            snapshots=snapshots,
+        )
+        if anchor is None:
+            missing.append((name, _UNRESOLVED_ANCHOR))
+        else:
+            found[name] = anchor
+    return found, missing
+
+
+def _accept_holistic(
+    session: ModelSession,
+    request: ReviewRequest,
+    snapshots: list[Any],
+    payload: HolisticJudgment,
+    evidence: list[EvidenceRecord],
+) -> dict[str, Any] | None:
+    """Keep a holistic rating only when both excerpts resolve. A failure does not fail the stage."""
+    found, missing = _holistic_anchors(payload, request, snapshots)
+    if missing:
+        message = "Unresolved holistic excerpts. Return the same JSON object.\n" + "\n".join(
+            f"- {name}: {reason}" for name, reason in missing
+        )
+        payload = session.continue_with_error("holistic", message, HolisticJudgment)
+        assert isinstance(payload, HolisticJudgment)
+        found, missing = _holistic_anchors(payload, request, snapshots)
+        if missing:
+            for name, reason in missing:
+                session.reject("holistic", name, reason)
+            return None
+    ids: dict[str, str] = {}
+    for name, anchor in found.items():
+        evidence_id = f"E-holistic-{name}"
+        evidence.append(_evidence(evidence_id, anchor.excerpt or "", anchor, request.manuscript))
+        ids[name] = evidence_id
+    return {
+        "rating": int(payload.rating),
+        "verified": True,
+        "strength_evidence_id": ids["strength"],
+        "weakness_evidence_id": ids["weakness"],
+    }
+
+
 def _anchor_retry_message(missing: list[tuple[str, str]]) -> str:
     lines = [
         "Unresolved evidence anchors. Return one JSON object with all seven dimensions.",
-        "Each excerpt must be an exact substring of the manuscript or a retrieved snapshot.",
+        "Each excerpt must be copied from the manuscript or a retrieved snapshot. A line break may be a space.",
     ]
     lines.extend(f"- {name}: {reason}" for name, reason in missing)
     return "\n".join(lines)
@@ -994,7 +1261,8 @@ def _dimension_rows(
             missing.append((item.dimension.value, _UNRESOLVED_ANCHOR))
             continue
         evidence_id = f"E-{item.dimension.value}"
-        evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
+        quote = anchor.excerpt or item.excerpt
+        evidence.append(_evidence(evidence_id, quote, anchor, request.manuscript))
         scores.append(
             DimensionScore(
                 dimension=item.dimension,
@@ -1139,6 +1407,7 @@ def _run_judgments(
     scores: list[DimensionScore] = []
     known_claims: dict[str, LedgerClaim] = {}
     known_issues: dict[str, ReviewIssue] = {}
+    holistic_meta: dict[str, Any] | None = None
 
     def packet_for(judgment: str) -> tuple[str | None, str]:
         return select_packet(judgment, request.packets, request.routes, settings["packet_routes"])
@@ -1163,7 +1432,8 @@ def _run_judgments(
                 )
                 continue
             evidence_id = f"E-{item.id}"
-            evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
+            quote = anchor.excerpt or item.excerpt
+            evidence.append(_evidence(evidence_id, quote, anchor, request.manuscript))
             claim = LedgerClaim(
                 id=item.id,
                 claim=_localized(item.claim),
@@ -1196,7 +1466,7 @@ def _run_judgments(
                 first_read=_first_read(
                     item.claim,
                     item.missing,
-                    item.excerpt,
+                    quote,
                     blocking=item.severity in {Severity.critical, Severity.major},
                 ),
                 metadata={"judgment": "contributions"},
@@ -1230,7 +1500,8 @@ def _run_judgments(
                 )
                 continue
             evidence_id = f"E-{item.id}"
-            evidence.append(_evidence(evidence_id, item.excerpt, anchor, request.manuscript))
+            quote = anchor.excerpt or item.excerpt
+            evidence.append(_evidence(evidence_id, quote, anchor, request.manuscript))
             claim = LedgerClaim(
                 id=item.id,
                 claim=_localized(item.claim),
@@ -1262,7 +1533,7 @@ def _run_judgments(
 
     if "dimensions" in judgments:
         route_id, packet = packet_for("dimensions")
-        payload = session.complete("dimensions", packet, DimensionJudgment)
+        payload = session.complete("dimensions", _dimensions_user(packet), DimensionJudgment)
         assert isinstance(payload, DimensionJudgment)
         score_rows, evidence_rows, missing = _dimension_rows(
             payload,
@@ -1295,20 +1566,55 @@ def _run_judgments(
 
     if "fatal" in judgments:
         _route_id, packet = packet_for("fatal")
-        known = ", ".join(sorted(known_issues)) or "none"
-        user = (
-            packet
-            + "\n\n## Pipeline context\n"
-            + f"Accepted issue ids: {known}\n"
-            + "Classify only these ids. The pipeline assigns I-<contribution id>.\n"
-        )
+        user = _fatal_user(packet, sorted(known_issues))
         payload = session.complete("fatal", user, FatalJudgment)
         assert isinstance(payload, FatalJudgment)
-        updates: dict[str, FatalItem] = {}
+        anchored: list[tuple[FatalItem, Anchor]] = []
         for item in payload.classifications:
             if item.issue_id not in known_issues:
                 session.reject("fatal", item.issue_id, "fatal classification names an unknown issue")
                 continue
+            if item.fatal_class == FatalClass.missing_closest_neighbor:
+                session.reject(
+                    "fatal",
+                    item.issue_id,
+                    "related-work search owns missing_closest_neighbor",
+                )
+                continue
+            anchor = locate_excerpt(
+                item.excerpt,
+                manuscript=request.source_text,
+                manuscript_sha=request.manuscript.sha256,
+                snapshots=snapshots,
+            )
+            if anchor is None:
+                session.reject(
+                    "fatal",
+                    item.issue_id,
+                    "excerpt does not occur in the manuscript or a retrieved snapshot",
+                )
+                continue
+            anchored.append((item, anchor))
+        verified: dict[str, bool] = {}
+        if anchored:
+            verify_user = _fatal_verify_user(
+                [
+                    (item.issue_id, item.fatal_class.value, anchor.excerpt or item.excerpt)
+                    for item, anchor in anchored
+                ]
+            )
+            verified_payload = session.complete("fatal-verify", verify_user, FatalVerifyJudgment)
+            assert isinstance(verified_payload, FatalVerifyJudgment)
+            verified = {item.issue_id: item.holds for item in verified_payload.verdicts}
+        updates: dict[str, FatalItem] = {}
+        for item, anchor in anchored:
+            if not verified.get(item.issue_id, False):
+                session.reject("fatal", item.issue_id, "fatal class was not verified from its excerpt")
+                continue
+            evidence_id = f"E-fatal-{item.issue_id}"
+            evidence.append(
+                _evidence(evidence_id, anchor.excerpt or item.excerpt, anchor, request.manuscript)
+            )
             updates[item.issue_id] = item
         revised: list[ReviewIssue] = []
         for issue in issues:
@@ -1316,15 +1622,24 @@ def _run_judgments(
             if item is None:
                 revised.append(issue)
                 continue
+            evidence_id = f"E-fatal-{item.issue_id}"
             revised.append(
                 issue.model_copy(
                     update={
                         "fatal_class": item.fatal_class,
                         "decision_relevant": item.decision_relevant,
+                        "evidence_ids": list(dict.fromkeys([*issue.evidence_ids, evidence_id])),
                     }
                 )
             )
         issues = revised
+        known_issues = {issue.id: issue for issue in issues}
+
+    if "holistic" in judgments:
+        _route_id, packet = packet_for("holistic")
+        holistic_payload = session.complete("holistic", packet + "\n\n" + HOLISTIC_TASK, HolisticJudgment)
+        assert isinstance(holistic_payload, HolisticJudgment)
+        holistic_meta = _accept_holistic(session, request, snapshots, holistic_payload, evidence)
 
     if settings["bilingual"]:
         issues, claims, scores = _apply_zh_hans(session, issues, claims, scores)
@@ -1351,6 +1666,7 @@ def _run_judgments(
             "model": session.model_name,
             "egress": session.egress,
             "manuscript_left_machine": session.manuscript_left_machine,
+            **({} if holistic_meta is None else {"holistic_rating": holistic_meta}),
         },
     )
 
@@ -1376,7 +1692,7 @@ class OpenAICompatibleVisionInspector:
         self._packet_route: str | None = None
         self._network_policy = "deny"
         self._stage_signature = ""
-        self._timeout_seconds = 60.0
+        self._timeout_seconds = DEFAULT_MODEL_TIMEOUT_SECONDS
         self._temperature = 0.0
         self._json_object = True
         self._routes: list[ReviewRoute] = []

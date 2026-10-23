@@ -3117,13 +3117,15 @@ def _confirm_with_model_session(
     model = str(params.get("model") or "").strip()
     if not base_url or not model:
         raise ValueError("OpenAI-compatible confirmation requires base_url and model")
+    from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
+
     session = session_cls(
         base_url=base_url,
         model=model,
         api_key_env=str(params.get("api_key_env") or "APR_MODEL_API_KEY"),
         allow_remote=bool(params.get("allow_remote")),
         network_policy=str(params.get("network_policy") or network_policy),
-        timeout_seconds=float(params.get("timeout_seconds") or 60),
+        timeout_seconds=float(params.get("timeout_seconds") or DEFAULT_MODEL_TIMEOUT_SECONDS),
         temperature=float(params.get("temperature") or 0),
         json_object=True,
         scratch=scratch,

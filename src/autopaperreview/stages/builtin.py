@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
-from ..model_exec import TEXT_JUDGMENTS, public_base_url
+from ..model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS, TEXT_JUDGMENTS, judgment_prompt_fingerprint, public_base_url
 from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
@@ -1381,7 +1381,7 @@ class ExecuteReviewParams(ParamsModel):
     allow_remote: bool = False
     judgments: list[str] = Field(default_factory=list)
     packet_routes: dict[str, str] = Field(default_factory=dict)
-    timeout_seconds: float = Field(default=60, gt=0)
+    timeout_seconds: float = Field(default=DEFAULT_MODEL_TIMEOUT_SECONDS, gt=0)
     temperature: float = 0
     json_object: bool = True
     bilingual: bool = False
@@ -1422,6 +1422,7 @@ class ExecuteReviewStage(StageHandler):
                 packets[path.name] = sha256_file(path)
         if packets:
             material["packet_hashes"] = packets
+        material["judgment_prompt_sha256"] = judgment_prompt_fingerprint()
         return material
 
     def run(self, context: StageContext) -> StageOutcome:

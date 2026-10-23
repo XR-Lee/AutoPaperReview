@@ -215,7 +215,29 @@ def _read_related_work_comparison(package: ReviewPackage) -> dict[str, Any] | No
     return comparison
 
 
-def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
+def _holistic_rating(package: ReviewPackage) -> float | None:
+    raw = package.metadata.get("holistic_rating")
+    if not isinstance(raw, dict) or raw.get("verified") is not True:
+        return None
+    rating = raw.get("rating")
+    if isinstance(rating, bool) or not isinstance(rating, (int, float)):
+        return None
+    value = float(rating)
+    if value < 1.0 or value > 10.0:
+        return None
+    return value
+
+
+def _clamp_rank(value: float) -> float:
+    return min(10.0, max(1.0, value))
+
+
+def rate_venue(
+    package: ReviewPackage,
+    *,
+    confidence: int = 3,
+    coefficient_set: str | None = None,
+) -> OverallScore:
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
@@ -236,6 +258,52 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
     venue_cap = effective_venue_cap(caps)
     capped = raw if venue_cap is None else min(raw, float(venue_cap))
     venue = snap_down(capped)
+    from .fusion import FUSION_COEFFICIENT_SET, FUSION_VARIANT, RankSignals, candidate_scores
+
+    chosen = coefficient_set or COEFFICIENT_SET
+    if chosen not in {COEFFICIENT_SET, FUSION_COEFFICIENT_SET}:
+        raise ValueError(f"unknown coefficient set {chosen}")
+    signals = RankSignals(
+        weighted=weighted,
+        gate=gate,
+        claims=bands[SarDimension.claims_supported],
+        soundness=bands[SarDimension.experimental_soundness],
+        band_mean=sum(bands.values()) / len(bands),
+        venue_cap=venue_cap,
+        holistic=_holistic_rating(package),
+    )
+    candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
+    if chosen == FUSION_COEFFICIENT_SET:
+        if FUSION_VARIANT not in candidates:
+            raise ValueError(f"unknown fusion variant {FUSION_VARIANT}")
+        rank_score = round(_clamp_rank(candidates[FUSION_VARIANT]), 4)
+        venue = snap_down(rank_score)
+        reported = rank_score
+        notes = (
+            "apr-fusion-v1 blends a verified holistic ICLR rating with the dimension term. "
+            "The dimension term keeps min(weighted, min(claims, soundness) + 1). "
+            "A verified fatal cap ceilings the rank. "
+            "The weakest-link ceiling also binds the blend when both critical bands are 4 or below. "
+            "It is not a fitted regression. venue_bin is snap_down of the rank score."
+        )
+        formula = (
+            f"rank = {FUSION_VARIANT}; "
+            "band = min(dot(weights, bands), min(claims, soundness) + 1); "
+            "verified caps ceiling the rank; "
+            "venue_bin = snap_down(rank)"
+        )
+    else:
+        rank_score = round(capped, 4)
+        reported = float(venue)
+        notes = (
+            "apr-iclr-cap-v2 is a declared formula with fatal-flaw caps. "
+            "The venue bin is the largest ICLR bin that does not exceed the capped raw score. "
+            "It is not a fitted ICLR regression."
+        )
+        formula = (
+            "raw = min(dot(weights, bands), min(claims, soundness) + 1); "
+            "capped = min(raw, active caps); venue = snap_down onto 1/3/5/6/8/10"
+        )
     evidence_ids: list[str] = []
     for score in package.dimension_scores:
         evidence_ids.extend(score.evidence_ids)
@@ -256,6 +324,10 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
         "gate": gate,
         "raw": round(raw, 4),
         "capped": round(capped, 4),
+        "venue_bin": int(venue),
+        "rank_score": rank_score,
+        "candidates": candidates,
+        "holistic": signals.holistic,
         "cap_ids": [item.record_id for item in caps],
         "caps": [
             {"id": item.record_id, "fatal_class": item.fatal_class.value, "cap": item.cap, "exempted": item.exempted}
@@ -278,29 +350,28 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
                 ],
             }
         ),
-        "formula": (
-            "raw = min(dot(weights, bands), min(claims, soundness) + 1); "
-            "capped = min(raw, active caps); venue = snap_down onto 1/3/5/6/8/10"
-        ),
+        "formula": formula,
+        "fusion_variant": FUSION_VARIANT if chosen == FUSION_COEFFICIENT_SET else None,
     }
     return OverallScore(
-        value=float(venue),
+        value=reported,
         scale_min=1.0,
         scale_max=10.0,
         method=OverallScoreMethod.declared_formula,
-        coefficient_set=COEFFICIENT_SET,
-        notes=(
-            "apr-iclr-cap-v2 is a declared formula with fatal-flaw caps. "
-            "The venue bin is the largest ICLR bin that does not exceed the capped raw score. "
-            "It is not a fitted ICLR regression."
-        ),
+        coefficient_set=chosen,
+        notes=notes,
         evidence_ids=evidence_ids,
         metadata=metadata,
     )
 
 
-def apply_rating(package: ReviewPackage, *, confidence: int = 3) -> ReviewPackage:
-    scored = rate_venue(package, confidence=confidence)
+def apply_rating(
+    package: ReviewPackage,
+    *,
+    confidence: int = 3,
+    coefficient_set: str | None = None,
+) -> ReviewPackage:
+    scored = rate_venue(package, confidence=confidence, coefficient_set=coefficient_set)
     return package.model_copy(update={"overall_score": scored})
 
 
