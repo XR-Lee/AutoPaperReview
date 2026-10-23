@@ -254,6 +254,16 @@ def _mean_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
     return _bounded_sample_list(raw, "mean_samples", low=1.0, high=10.0, lone="predicted_mean")
 
 
+def _place_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 ladder placements. A lone place value counts as one."""
+    return _bounded_sample_list(raw, "place_samples", low=1.0, high=10.0, lone="place")
+
+
+def _count_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 vote counts. A lone count value counts as one."""
+    return _bounded_sample_list(raw, "count_samples", low=1.0, high=10.0, lone="count")
+
+
 def _clamp_span(value: float, low: float, high: float) -> float:
     return min(high, max(low, value))
 
@@ -314,6 +324,12 @@ def rate_venue(
         _decision_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
     )
     mean_samples = _mean_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    place_samples = _place_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    count_samples = _count_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    raw_placements = raw_decision.get("placements") if isinstance(raw_decision, dict) else None
+    placements = list(raw_placements) if isinstance(raw_placements, list) else []
+    raw_ladder = raw_decision.get("ladder") if isinstance(raw_decision, dict) else None
+    ladder = list(raw_ladder) if isinstance(raw_ladder, list) else []
     signals = RankSignals(
         weighted=weighted,
         gate=gate,
@@ -324,25 +340,46 @@ def rate_venue(
         holistic=None if not decision_samples else sum(decision_samples) / len(decision_samples),
         samples=decision_samples or (),
         mean_samples=mean_samples or (),
+        place_samples=place_samples or (),
+        count_samples=count_samples or (),
         bands_available=bands is not None,
     )
     candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
     scale_max = 10.0
     variant: str | None = None
     if chosen == FUSION_COEFFICIENT_SET:
-        variant = FUSION_VARIANT if FUSION_VARIANT in candidates else "decision"
-        if variant not in candidates:
+        if FUSION_VARIANT in candidates:
+            variant = FUSION_VARIANT
+        elif "mean" in candidates:
+            variant = "mean"
+        else:
+            variant = "decision"
+        if variant not in candidates or "decision" not in candidates:
             raise ValueError(
                 "apr-fusion-v1 requires a decision score; refusing to fall back to dimension bands"
             )
-        if variant == "mean":
+        venue = decision_bin(candidates["decision"])
+        if variant == FUSION_VARIANT:
+            rank_score = round(_clamp_span(candidates["place"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by placement against a fixed ladder of synthetic references "
+                "on 1.0-10.0. The 1-6 decision sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "The venue-scale mean is recorded and is not the rank. "
+                "A verified venue cap is not applied to this rank. "
+                "Dimension bands are not a gate. A missing decision score fails the paper. "
+                "It is not a fitted regression."
+            )
+            formula = (
+                "rank = place; "
+                "rank = mean(ladder placements on 1.0-10.0); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "mean":
             rank_score = round(_clamp_span(candidates["mean"], 1.0, 10.0), 4)
             scale_max = 10.0
-            if "decision" not in candidates:
-                raise ValueError(
-                    "apr-fusion-v1 requires a decision score; refusing to fall back to dimension bands"
-                )
-            venue = decision_bin(candidates["decision"])
             notes = (
                 "apr-fusion-v1 ranks by the mean of independent venue-scale samples on 1.0-10.0. "
                 "The 1-6 decision sets the ICLR bin and is not the rank. "
@@ -360,7 +397,6 @@ def rate_venue(
         else:
             rank_score = round(_clamp_span(candidates["decision"], 1.0, 6.0), 4)
             scale_max = 6.0
-            venue = decision_bin(rank_score)
             notes = (
                 "apr-fusion-v1 ranks by the mean of independent decision samples on a 1.0-6.0 scale. "
                 "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
@@ -413,6 +449,10 @@ def rate_venue(
         "holistic": None if signals.holistic is None else round(signals.holistic, 4),
         "samples": [round(item, 4) for item in signals.samples],
         "mean_samples": [round(item, 4) for item in signals.mean_samples],
+        "place_samples": [round(item, 4) for item in signals.place_samples],
+        "count_samples": [round(item, 4) for item in signals.count_samples],
+        "placements": placements,
+        "ladder": ladder,
         "cap_ids": [item.record_id for item in caps],
         "caps": [
             {"id": item.record_id, "fatal_class": item.fatal_class.value, "cap": item.cap, "exempted": item.exempted}

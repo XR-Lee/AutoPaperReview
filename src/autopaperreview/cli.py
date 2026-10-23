@@ -571,7 +571,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="holistic samples only; skip contributions, ledger, dimensions, and fatal",
     )
-    eval_run.add_argument("--holistic-samples", type=int, default=3)
+    from .model_exec import DEFAULT_HOLISTIC_SAMPLES
+
+    eval_run.add_argument(
+        "--holistic-samples",
+        type=int,
+        default=DEFAULT_HOLISTIC_SAMPLES,
+        help="holistic calls per paper; the default is the locked evaluation K",
+    )
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")
     eval_run.set_defaults(func=command_calibrate_eval_run)

@@ -7,7 +7,8 @@ replace a failed call with the deterministic manuscript adapter.
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
 fatal classification. An optional `holistic` judgment adds K samples of a
-1–6 decision and a 1.0–10.0 venue-scale mean. Excerpts on that rating are optional.
+1–6 decision, a ladder placement against synthetic references, and a 1.0–10.0
+venue-scale mean. The shipped K is one. Excerpts on that rating are optional.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -44,6 +45,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from .i18n import script_matches
 
 from .adapters import ReviewRequest, ReviewResult, _merge_literature
+from .anchors import (
+    ANCHOR_IDS,
+    LOCKED_HOLISTIC_SAMPLES,
+    SYNTHETIC_ANCHORS,
+    anchor_ladder_text,
+    describe_placement,
+)
 from .hashing import sha256_bytes
 from .models import (
     AgendaQuestion,
@@ -211,18 +219,100 @@ class FatalVerifyJudgment(StrictPayload):
         return self
 
 
-class HolisticJudgment(StrictPayload):
-    """One sample: a 1–6 decision and a 1.0–10.0 venue-scale mean.
+_RELATION_ALIASES = {
+    "better": "better",
+    "above": "better",
+    "higher": "better",
+    "worse": "worse",
+    "below": "worse",
+    "lower": "worse",
+    "tie": "tie",
+    "tied": "tie",
+    "same": "tie",
+    "equal": "tie",
+}
+_LEAN_ALIASES = {
+    "low": "low",
+    "lower": "low",
+    "mid": "mid",
+    "middle": "mid",
+    "high": "high",
+    "higher": "high",
+}
 
-    Excerpts are optional and post-hoc. The venue mean is not a rescaling of
-    the decision.
+
+class AnchorComparison(StrictPayload):
+    """One manuscript-to-reference vote. The reference is synthetic."""
+
+    anchor_id: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        updated = dict(value)
+        anchor_id = updated.get("anchor_id")
+        relation = updated.get("relation")
+        if isinstance(anchor_id, str):
+            updated["anchor_id"] = anchor_id.strip().lower()
+        if isinstance(relation, str):
+            updated["relation"] = _RELATION_ALIASES.get(relation.strip().lower(), relation.strip().lower())
+        return updated
+
+
+class HolisticJudgment(StrictPayload):
+    """One sample: ladder votes, a 1–6 decision, and a venue-scale mean.
+
+    The placement is derived from the votes. The decision sets the ICLR bin.
+    The venue mean is recorded and is not the rank. Excerpts are optional.
     """
 
     rationale: str = Field(min_length=1)
     rating: float = Field(ge=1, le=6)
     predicted_mean: float = Field(ge=1, le=10)
+    comparisons: list[AnchorComparison] = Field(min_length=5, max_length=5)
+    gap_lean: str = Field(min_length=1)
     strength_excerpt: str = ""
     weakness_excerpt: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_comparison_map(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        raw = value.get("comparisons")
+        if not isinstance(raw, dict):
+            updated = dict(value)
+        else:
+            rows = []
+            for key, item in raw.items():
+                if isinstance(item, str):
+                    rows.append({"anchor_id": key, "relation": item})
+                else:
+                    rows.append(item)
+            updated = {**value, "comparisons": rows}
+        lean = updated.get("gap_lean")
+        if isinstance(lean, str):
+            updated["gap_lean"] = _LEAN_ALIASES.get(lean.strip().lower(), lean.strip().lower())
+        return updated
+
+    @model_validator(mode="after")
+    def one_of_each_reference(self) -> "HolisticJudgment":
+        found = [item.anchor_id for item in self.comparisons]
+        if len(found) != len(set(found)) or set(found) != set(ANCHOR_IDS):
+            raise ValueError(
+                "comparisons must name each reference once: " + ", ".join(ANCHOR_IDS)
+            )
+        if self.gap_lean not in _LEAN_ALIASES.values():
+            raise ValueError("gap_lean must be low, mid, or high")
+        for item in self.comparisons:
+            if item.relation not in {"better", "tie", "worse"}:
+                raise ValueError(
+                    f"relation for {item.anchor_id} must be better, tie, or worse"
+                )
+        return self
 
 
 class VisualJudgment(StrictPayload):
@@ -350,13 +440,17 @@ _SCHEMA_HINTS = {
         "One verdict per issue in the user message."
     ),
     "holistic": (
-        "Keys: rationale, rating, predicted_mean, strength_excerpt, weakness_excerpt. "
+        "Keys: rationale, rating, predicted_mean, comparisons, gap_lean, strength_excerpt, weakness_excerpt. "
         "rating is an integer 1, 2, 3, 4, 5, or 6. "
         "predicted_mean is a number from 1.0 to 10.0 with one decimal. "
+        "comparisons has one object per reference, with anchor_id and relation. "
+        "anchor_id is one of weak-reject, ordinary-reject, split-decision, ordinary-accept, strong-accept. "
+        "relation is better, tie, or worse. "
+        "gap_lean is low, mid, or high. "
         "There is no example number to copy. "
         "1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, "
         "5 accept, 6 strong accept. 3 and 4 are opposite decisions. "
-        "predicted_mean is the venue-scale mean, not a rescaling of rating. "
+        "predicted_mean is a side estimate, not the placement and not a rescaling of rating. "
         "strength_excerpt and weakness_excerpt are optional and may be empty. "
         "No other keys."
     ),
@@ -1287,17 +1381,29 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 """.strip()
 
 
-HOLISTIC_TASK = """
-## Decision and venue mean
-You are deciding one paper for a top machine-learning conference. Return two numbers for the paper as a whole. Do not average per-axis marks.
+def holistic_task_text() -> str:
+    """Decision plus the synthetic ladder. Positions are not in this text."""
+    head = """
+## Placement, then decision
+You are reviewing one paper for a top machine-learning conference. Order it by where it sits relative to the fixed references below. Do not average per-axis marks. The accept or reject decision is a separate number and does not order papers that share a decision.
 
-Use the following only as questions that inform the decision:
+Use the following only as questions that inform the placement and the decision:
 - Is the technical work sound, and do the experiments or arguments actually support the claims?
 - Can a careful reader follow the paper and repeat the setup from what is written?
 - Does the result matter to the venue, and is it new relative to the prior work the paper itself engages?
 - Are limitations and possible harms stated, rather than skipped?
 
-rating is an integer from 1 to 6. It is the accept or reject decision, not a quality average:
+Read the references from weakest to strongest. Make one cut. The manuscript is better than a prefix of the ladder, may tie the next reference, and is worse than every stronger reference. Do not mark a stronger reference better than a weaker one. Decide the cut before choosing any number. The decision does not choose the cut. Two papers you would both decline still sit on different references when one is closer to a minor rename and the other is closer to a split decision. Use tie only when you would not rank the manuscript apart from that one reference.
+
+relation is one of three words:
+- better: a careful reviewer would rank this manuscript above that reference
+- tie: a careful reviewer would not rank the two apart
+- worse: a careful reviewer would rank this manuscript below that reference
+
+gap_lean is where the manuscript sits inside the open gap at that cut. low is closer to the weaker side, high is closer to the stronger side, and mid is between them. If you tie a reference, send mid.
+
+## Decision
+rating is an integer from 1 to 6. It is only the accept or reject decision:
 
 1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
 2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.
@@ -1310,16 +1416,20 @@ Most submissions are rejected. A competent paper with a real idea and gaps a rev
 
 If the paper is weak and you are unsure, the decision is 3 or below. If the paper is strong and you are unsure, the decision is 4 or above.
 
-predicted_mean is a number from 1.0 to 10.0 with one decimal. It is your estimate of the mean score three careful reviewers would give this paper on the venue's 1–10 scale. This number is what orders papers. It is not a rescaling of rating, and it is not chosen from a short list of favorite values such as 4 or 6. Two papers with the same decision still receive different means when one is closer to changing that decision. A lower mean means you expect a lower average reviewer score.
+predicted_mean is a side estimate of the mean score careful reviewers would give this paper on the venue scale from 1.0 to 10.0, with one decimal. It is not a rescaling of rating, it does not choose the comparisons, and it is not chosen from a short list of favorite values such as 4 or 6.
 
-rationale has four short parts, in this order: what the paper claims; the strongest reason to accept; the strongest reason to decline; which of those two reasons wins, and why this mean is not a round favorite. The decision has to follow which reason wins.
-strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. Both numbers stand without them.
+rationale is one short clause per reference, in ladder order, then which reason wins the decision. The comparisons have to match those clauses.
+strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript.
 Return only the JSON object.
 """.strip()
+    return head + "\n\n## Reference ladder\n" + anchor_ladder_text()
 
-# Independent holistic draws. Temperature is per call so a stage default of 0
-# does not force every sample to the same request body.
-DEFAULT_HOLISTIC_SAMPLES = 3
+
+HOLISTIC_TASK = holistic_task_text()
+
+# One placement call is the locked evaluation. Temperature is per call so a
+# stage default of 0 does not force every sample to the same request body.
+DEFAULT_HOLISTIC_SAMPLES = LOCKED_HOLISTIC_SAMPLES
 DEFAULT_HOLISTIC_TEMPERATURE = 0.7
 
 
@@ -1341,7 +1451,8 @@ def judgment_prompt_fingerprint() -> str:
             HOLISTIC_TASK,
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "venue-mean-v1",
+            "anchor-place-v1",
+            ",".join(f"{anchor.id}={anchor.position}" for anchor in SYNTHETIC_ANCHORS),
         ]
     )
     return digest_excerpt(blob)
@@ -1432,16 +1543,20 @@ def _sample_holistic(
     samples: int,
     temperature: float,
 ) -> dict[str, Any]:
-    """Average K independent ratings. A schema failure retries once, then fails the paper.
+    """K independent placements. A schema failure retries once, then fails the paper.
 
-    There is no dimension-band substitute. Optional excerpts are recorded when
-    they resolve and counted when they do not.
+    There is no dimension-band substitute. The rank is the ladder placement.
+    The decision and the venue mean are stored from the same response.
+    Optional excerpts are recorded when they resolve and counted when they do not.
     """
     if samples < 1:
         session.fail("judgment holistic requires at least one sample")
     user = packet + "\n\n" + HOLISTIC_TASK
     ratings: list[float] = []
     means: list[float] = []
+    places: list[float] = []
+    counts: list[float] = []
+    placements: list[dict[str, Any]] = []
     attached: dict[str, str] = {}
     for _index in range(samples):
         payload = session.complete(
@@ -1453,10 +1568,15 @@ def _sample_holistic(
         assert isinstance(payload, HolisticJudgment)
         ratings.append(round(float(payload.rating), 4))
         means.append(round(float(payload.predicted_mean), 4))
+        relations = {item.anchor_id: item.relation for item in payload.comparisons}
+        described = describe_placement(relations, payload.gap_lean)
+        places.append(float(described["place"]))
+        counts.append(float(described["count"]))
+        placements.append(described)
         attached.update(
             _optional_holistic_evidence(session, request, snapshots, payload, evidence)
         )
-    if len(ratings) != samples or len(means) != samples:
+    if len(ratings) != samples or len(means) != samples or len(places) != samples:
         session.fail(
             "judgment holistic produced no rating; refusing to fall back to dimension bands"
         )
@@ -1465,6 +1585,12 @@ def _sample_holistic(
         "samples": ratings,
         "predicted_mean": round(sum(means) / len(means), 4),
         "mean_samples": means,
+        "place": round(sum(places) / len(places), 4),
+        "place_samples": places,
+        "count": round(sum(counts) / len(counts), 4),
+        "count_samples": counts,
+        "placements": placements,
+        "ladder": [{"id": anchor.id, "position": anchor.position} for anchor in SYNTHETIC_ANCHORS],
         "n": len(ratings),
         "verified": True,
         "strength_evidence_id": attached.get("strength"),

@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
 from ..model_exec import (
+    DEFAULT_HOLISTIC_SAMPLES,
+    DEFAULT_HOLISTIC_TEMPERATURE,
     DEFAULT_MODEL_TIMEOUT_SECONDS,
     TEXT_JUDGMENTS,
     judgment_prompt_fingerprint,
@@ -1399,8 +1401,8 @@ class ExecuteReviewParams(ParamsModel):
     json_object: bool = True
     bilingual: bool = False
     cheap: bool = False
-    holistic_samples: int = Field(default=3, ge=1, le=8)
-    holistic_temperature: float = Field(default=0.7, ge=0, le=2)
+    holistic_samples: int = Field(default=DEFAULT_HOLISTIC_SAMPLES, ge=1, le=8)
+    holistic_temperature: float = Field(default=DEFAULT_HOLISTIC_TEMPERATURE, ge=0, le=2)
 
 
 class ExecuteReviewStage(StageHandler):

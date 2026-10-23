@@ -112,8 +112,9 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["fusion_variant"], "mean")
 
     def test_near_tie_prefers_fewer_samples(self) -> None:
-        self.assertEqual(SHIPPABLE[0], "mean-k1")
-        self.assertEqual(SHIPPABLE[1], "decision-k1")
+        self.assertEqual(SHIPPABLE[0], "place-k1")
+        self.assertEqual(SHIPPABLE[1], "mean-k1")
+        self.assertEqual(SHIPPABLE[2], "decision-k1")
         metrics = {
             "decision-k1": {"spearman": 0.70, "auc": 0.74},
             "decision-k2": {"spearman": 0.71, "auc": 0.75},
@@ -123,6 +124,91 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(report["chosen"], "decision-k1")
         self.assertEqual(report["rule"], "within-0.02-then-cheapest")
         self.assertEqual(select_variant(metrics), "decision-k1")
+
+    def test_ladder_placement_ranks_and_the_decision_sets_the_bin(self) -> None:
+        package = _package("placed", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 3.0,
+                        "predicted_mean": 5.4,
+                        "verified": True,
+                        "samples": [3.0],
+                        "mean_samples": [5.4],
+                        "place_samples": [4.75, 6.25],
+                        "count_samples": [4.6, 6.4],
+                    }
+                },
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.scale_max, 10)
+        self.assertAlmostEqual(scored.value, 5.5)
+        self.assertEqual(scored.metadata["venue_bin"], 5)
+        self.assertAlmostEqual(scored.metadata["candidates"]["place-k1"], 4.75)
+        self.assertAlmostEqual(scored.metadata["candidates"]["place-k2"], 5.5)
+        self.assertAlmostEqual(scored.metadata["candidates"]["count-k1"], 4.6)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k1"], 5.4)
+        self.assertEqual(scored.metadata["candidates"]["decision-k1"], 3.0)
+        self.assertEqual(scored.metadata["fusion_variant"], "place")
+
+    def test_placement_without_a_decision_fails(self) -> None:
+        package = _package("place-only", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {"holistic_rating": {"verified": True, "place_samples": [4.75]}},
+            }
+        )
+        with self.assertRaises(ValueError) as caught:
+            rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertIn("decision", str(caught.exception))
+
+    def test_verified_cap_stays_off_the_placement_rank(self) -> None:
+        package = _package(
+            "placed-cap",
+            _all(8),
+            issues=[_fatal("I-leak", FatalClass.leakage)],
+        ).model_copy(
+            update={
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 5.0,
+                        "verified": True,
+                        "place_samples": [7.2],
+                        "mean_samples": [6.0],
+                    }
+                }
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertAlmostEqual(scored.value, 7.2)
+        self.assertEqual(scored.metadata["venue_bin"], 8)
+        self.assertLess(scored.metadata["candidates"]["decision-k1-capped"], 5.0)
+
+    def test_same_k_prefers_place_over_the_venue_mean(self) -> None:
+        metrics = {
+            "place-k1": {"spearman": 0.70, "auc": 0.80},
+            "mean-k1": {"spearman": 0.71, "auc": 0.81},
+        }
+        report = selection_report(metrics)
+        self.assertEqual(report["chosen"], "place-k1")
+        self.assertEqual(report["rule"], "within-0.02-then-cheapest")
+
+    def test_a_wide_gap_can_keep_the_venue_mean(self) -> None:
+        metrics = {
+            "place-k1": {"spearman": 0.40, "auc": 0.55},
+            "mean-k1": {"spearman": 0.62, "auc": 0.74},
+        }
+        self.assertEqual(select_variant(metrics), "mean-k1")
+
+    def test_vote_count_is_not_a_selection_candidate(self) -> None:
+        metrics = {
+            "place-k1": {"spearman": 0.50, "auc": 0.60},
+            "count-k1": {"spearman": 0.90, "auc": 0.90},
+            "mean-k1": {"spearman": 0.50, "auc": 0.60},
+        }
+        self.assertEqual(select_variant(metrics), "place-k1")
 
     def test_same_k_prefers_the_venue_mean(self) -> None:
         metrics = {
@@ -240,7 +326,27 @@ class HarnessConstraintTests(unittest.TestCase):
         self.assertNotIn("decision-k1", scores)
         self.assertIn("band-continuous", scores)
 
-    def test_holistic_sample_count_defaults_to_three(self) -> None:
+    def test_holistic_sample_count_defaults_to_the_locked_eval(self) -> None:
+        import inspect
+
+        from autopaperreview.anchors import LOCKED_HOLISTIC_SAMPLES
+        from autopaperreview.cli import build_parser
+        from autopaperreview.model_exec import DEFAULT_HOLISTIC_SAMPLES
+        from autopaperreview.public_calibration import _write_project, run_cache
+
         params = ExecuteReviewParams(adapter="autopaperreview.model_exec:OpenAICompatibleAdapter")
-        self.assertEqual(params.holistic_samples, 3)
+        self.assertEqual(LOCKED_HOLISTIC_SAMPLES, 1)
+        self.assertEqual(DEFAULT_HOLISTIC_SAMPLES, LOCKED_HOLISTIC_SAMPLES)
+        self.assertEqual(params.holistic_samples, LOCKED_HOLISTIC_SAMPLES)
+        self.assertEqual(params.holistic_temperature, 0.7)
         self.assertTrue(params.cheap is False)
+        args = build_parser().parse_args(["calibrate-eval", "run", "--cache", "unused"])
+        self.assertEqual(args.holistic_samples, LOCKED_HOLISTIC_SAMPLES)
+        self.assertEqual(
+            inspect.signature(run_cache).parameters["holistic_samples"].default,
+            LOCKED_HOLISTIC_SAMPLES,
+        )
+        self.assertEqual(
+            inspect.signature(_write_project).parameters["holistic_samples"].default,
+            LOCKED_HOLISTIC_SAMPLES,
+        )

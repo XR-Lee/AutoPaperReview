@@ -45,6 +45,10 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
                 "usage_totals": score.get("usage_totals") or {},
                 "holistic": score.get("holistic"),
                 "samples": score.get("samples") or [],
+                "mean_samples": score.get("mean_samples") or [],
+                "place_samples": score.get("place_samples") or [],
+                "count_samples": score.get("count_samples") or [],
+                "placements": score.get("placements") or [],
                 "caps": score.get("caps") or [],
                 "drop_counts": score.get("drop_counts") or {},
             }

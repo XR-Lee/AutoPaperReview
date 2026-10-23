@@ -1,10 +1,10 @@
 """Declared rank signals. Not a fitted regression.
 
-apr-fusion-v1 keeps two numbers from one judgment. The decision is a 1.0–6.0
-accept or reject score and sets the ICLR bin. The venue mean is a 1.0–10.0
-estimate of the average reviewer score and is the preferred rank, because a
-coarse decision throws away order inside one decision. A verified venue cap
-and the seven dimension bands stay off this rank unless a tune-slice
+apr-fusion-v1 keeps a 1–6 decision and a ladder placement from one judgment.
+The decision sets the ICLR bin. The placement is where the paper sits against
+a fixed ladder of synthetic references, on 1.0–10.0, and it is the shipped
+rank. A 1.0–10.0 venue mean from the same call stays eligible. A verified
+venue cap and the seven dimension bands stay off this rank unless a tune-slice
 comparison shows the cap is strictly better on both Spearman and AUC. They
 are recorded so a report can explain the score.
 
@@ -33,17 +33,21 @@ __all__ = [
     "selection_report",
 ]
 
-# The shipped rank at rating time is the venue-scale mean when those samples
-# exist. Tune selection may lock a shorter prefix, or the decision, instead.
-FUSION_VARIANT = "mean"
+# Shipped rank when a ladder placement was stored. A package with only a venue
+# mean, or only a decision, still ranks by that older signal.
+FUSION_VARIANT = "place"
 
-# Eligible core ranks, cheapest first. A venue mean and a decision of the same
-# K cost one shared call, so the mean is listed first and wins a within-0.02 tie.
+# Eligible core ranks. One call produces every family at that K, so order is
+# preference: placement, then venue mean, then decision. A within-0.02 tie
+# keeps the earlier name. count-* is diagnostic and is not listed here.
 SHIPPABLE = (
+    "place-k1",
     "mean-k1",
     "decision-k1",
+    "place-k2",
     "mean-k2",
     "decision-k2",
+    "place-k3",
     "mean-k3",
     "decision-k3",
 )
@@ -67,6 +71,9 @@ DIAGNOSTIC = (
     "decision-k1-capped",
     "decision-k2-capped",
     "decision-k3-capped",
+    "count-k1",
+    "count-k2",
+    "count-k3",
 )
 
 # Decision levels 1, 2, 3, 4 map to four ICLR bins. snap_down of a 1–10 score
@@ -121,6 +128,8 @@ class RankSignals:
     holistic: float | None
     samples: tuple[float, ...] = ()
     mean_samples: tuple[float, ...] = ()
+    place_samples: tuple[float, ...] = ()
+    count_samples: tuple[float, ...] = ()
     bands_available: bool = True
 
 
@@ -177,6 +186,8 @@ def candidate_scores(signals: RankSignals) -> dict[str, float]:
     score.
     """
     scores = _diagnostics(signals)
+    scores.update(_prefix_means(signals.place_samples, "place"))
+    scores.update(_prefix_means(signals.count_samples, "count"))
     scores.update(_prefix_means(signals.mean_samples, "mean"))
     samples = _decision_samples(signals)
     if not samples:
@@ -205,10 +216,10 @@ def selection_report(metrics: dict[str, dict[str, float | None]]) -> dict[str, o
     A candidate is eligible when its Spearman is within ``NEAR_TOLERANCE`` of
     the best Spearman and its AUC is within ``NEAR_TOLERANCE`` of the best
     AUC. The bests may come from different candidates. The cheapest eligible
-    candidate wins. At the same K the venue mean is cheaper than the decision
-    because they share a call and the mean is the preferred rank. If none are
-    eligible, the higher Spearman wins, then the higher AUC, then the cheaper
-    candidate.
+    candidate wins. At the same K the placement is preferred to the venue
+    mean, and the venue mean is preferred to the decision, because they share
+    a call. If none are eligible, the higher Spearman wins, then the higher
+    AUC, then the cheaper candidate.
 
     ``<name>-capped`` replaces that choice only when both metrics are strictly
     higher. An equal cap is explanatory and stays off the rank.

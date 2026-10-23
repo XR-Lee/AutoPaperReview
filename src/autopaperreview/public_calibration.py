@@ -28,6 +28,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .adapters import digest_packet_text, load_review_adapter
+from .anchors import LOCKED_HOLISTIC_SAMPLES
 from .pipeline import PipelineError, run_pipeline
 from .rating import snap_down
 from .rubrics import COEFFICIENT_SET, ICLR_BINS
@@ -1063,7 +1064,7 @@ def _write_project(
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
     cheap: bool = False,
-    holistic_samples: int = 3,
+    holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
 ) -> None:
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
@@ -1309,7 +1310,7 @@ def run_cache(
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
     cheap: bool = False,
-    holistic_samples: int = 3,
+    holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
     only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -1406,6 +1407,10 @@ def run_cache(
                 "holistic": metadata.get("holistic"),
                 "samples": list(metadata.get("samples") or []),
                 "mean_samples": list(metadata.get("mean_samples") or []),
+                "place_samples": list(metadata.get("place_samples") or []),
+                "count_samples": list(metadata.get("count_samples") or []),
+                "placements": list(metadata.get("placements") or []),
+                "ladder": list(metadata.get("ladder") or []),
                 "candidates": metadata.get("candidates") or {},
                 "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})
                 if review_stage is not None
