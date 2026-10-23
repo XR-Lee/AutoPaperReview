@@ -350,6 +350,8 @@ class BilingualReportStageTests(unittest.TestCase):
             if reportlab_available():
                 self.assertTrue((workspace / "review_report.pdf").is_file())
                 self.assertTrue(summary["pdf"])
+            self.assertFalse(summary["annotated_pdf"])
+            self.assertFalse((workspace / "annotated_manuscript.pdf").exists())
 
 
 class EvidenceLinkTests(unittest.TestCase):

@@ -68,6 +68,19 @@ PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/related_work/re
 
 The run directory is the project id. Source and configuration hashes stay on the manifest. Repeating the command reuses a stage when its own signature and output hashes still match, so an export-gate edit reruns the report and keeps ingest, rendered pages, search, and judgments.
 
+## Annotated manuscript PDF
+
+Cited evidence is drawn on a copy of the source PDF: a highlight colored by role (strength, weakness, question, neutral), a margin tag such as `E7`, and a comment popup authored by `APR reviewer`. The comment names the review field, for example `Weakness 1 (major)`, and a one- or two-sentence note. An index page at the end lists every cited id and links to it. A quote that cannot be found is kept as a page-level note and as an index row.
+
+Re-annotate a finished run without calling the model. The default output is `<run-directory>/annotated_manuscript.pdf`. When the target is `review.toml`, the same file is also copied next to that config. `--output` writes only the path you name.
+
+```bash
+autopaperreview annotate path/to/review.toml --pdf path/to/manuscript.pdf
+autopaperreview annotate path/to/run_dir --pdf path/to/manuscript.pdf --output path/to/annotated_manuscript.pdf
+```
+
+PyMuPDF comes with `pip install 'autopaperreview[pdf]'`. Without a sibling `manuscript.pdf`, the report stage still writes the Markdown and review PDF and skips manuscript annotation.
+
 Each run records a normalized configuration snapshot, source hash, handler version, stage signature, command input hashes, and relative output artifacts under the configured run root.
 
 ## Start a review project
@@ -148,6 +161,7 @@ autopaperreview init       Create a minimal project
 autopaperreview validate   Validate TOML, DAG, plugins, and local paths
 autopaperreview run        Run or resume the pipeline
 autopaperreview inspect    Print a run manifest
+autopaperreview annotate   Add evidence highlights, margin tags, and comments to a manuscript PDF
 autopaperreview migrate    Import legacy review JSON
 autopaperreview schema     Export canonical JSON Schema
 autopaperreview templates  Export packaged prompt templates

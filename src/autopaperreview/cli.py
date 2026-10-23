@@ -230,8 +230,48 @@ def command_calibrate_eval_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_annotate(args: argparse.Namespace) -> int:
+    from .pdf_annotate import annotate_pdf, pymupdf_available, resolve_annotation_request
+
+    if not pymupdf_available():
+        raise RuntimeError(
+            "annotated PDF export requires PyMuPDF; pip install 'autopaperreview[pdf]'"
+        )
+    request = resolve_annotation_request(
+        Path(args.target),
+        pdf=Path(args.pdf) if args.pdf else None,
+        package=Path(args.package) if args.package else None,
+        output=Path(args.output) if args.output else None,
+    )
+    package = ReviewPackage.model_validate_json(request.package_path.read_text(encoding="utf-8"))
+    placements = annotate_pdf(request.pdf_path, package, request.output_path)
+    project_copy = None
+    if args.output is None and request.project_dir is not None:
+        copy_path = request.project_dir / "annotated_manuscript.pdf"
+        distinct = copy_path.resolve() not in {request.output_path.resolve(), request.pdf_path.resolve()}
+        if distinct:
+            copy_path.write_bytes(request.output_path.read_bytes())
+            project_copy = str(copy_path)
+    highlighted = sum(1 for item in placements if item.placement != "page-note")
+    page_notes = sum(1 for item in placements if item.placement == "page-note")
+    _print_json(
+        {
+            "status": "success",
+            "output": str(request.output_path),
+            "project_copy": project_copy,
+            "source_pdf": str(request.pdf_path),
+            "package": str(request.package_path),
+            "placed": len(placements),
+            "highlighted": highlighted,
+            "page_notes": page_notes,
+            "items": [item.as_dict() for item in placements],
+        }
+    )
+    return 0
+
+
 def command_doctor(args: argparse.Namespace) -> int:
-    modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa", "pypdfium2"]
+    modules = ["docling", "pydantic_ai", "opentelemetry", "openreview", "paperqa", "pypdfium2", "pymupdf"]
     commands = ["docker", "pandoc", "pdftotext", "promptfoo"]
     optional_modules = {}
     for name in modules:
@@ -503,6 +543,22 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="print a run manifest")
     inspect.add_argument("path")
     inspect.set_defaults(func=command_inspect)
+
+    annotate = subparsers.add_parser(
+        "annotate",
+        help="add evidence highlights, margin tags, and comments to a manuscript PDF",
+    )
+    annotate.add_argument(
+        "target",
+        help="run directory, review.toml, run_manifest.json, or a review package JSON",
+    )
+    annotate.add_argument("--pdf", help="manuscript PDF; discovered from the run when omitted")
+    annotate.add_argument("--package", help="review package JSON; defaults to the report output")
+    annotate.add_argument(
+        "--output",
+        help="annotated PDF path; default is <run>/annotated_manuscript.pdf",
+    )
+    annotate.set_defaults(func=command_annotate)
 
     plugins = subparsers.add_parser("plugins", help="list registered stage types")
     plugins.set_defaults(func=command_plugins)

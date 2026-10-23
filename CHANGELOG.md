@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Annotated manuscript PDFs now carry a role-colored highlight, a visible margin tag such as `E7`, and a PDF comment from `APR reviewer` for every cited evidence id. An appended evidence-index page links each id to that spot. A quote that is not in the PDF becomes a page-level note and is still listed in the index. `autopaperreview annotate` rewrites that file from a finished run without calling the model. The report stage writes the same file when a sibling PDF and PyMuPDF are present. Report handler version is 12, and the report signature records whether PyMuPDF is installed, so a later `run` refreshes the report export only.
 - Dimension scoring now appends the packaged `sar_bands_v1` clause list. The schema example is not a default clause. Excerpt checks still prefer an exact copy and also accept a passage whose only difference is whitespace or a line break. The stored quote is the manuscript span.
 - A fatal class is stored only when its excerpt resolves and a second judgment, which sees that excerpt and the class definition, says the excerpt states the class. `missing_closest_neighbor` is still owned by related-work search.
 - The OpenAI-compatible adapter timeout defaults to 900 seconds. The same default covers visual inspection and related-work confirmation.

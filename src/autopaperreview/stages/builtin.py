@@ -982,13 +982,18 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "11"
+    version = "12"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
+        from ..pdf_annotate import pymupdf_available
+
         return {
             "default_language": context.loaded_config.config.project.default_language,
             "routes": _route_fingerprint(context),
+            # Installing PyMuPDF changes the annotated manuscript, so the report
+            # cache must miss when that optional library appears or disappears.
+            "manuscript_annotation": pymupdf_available(),
         }
 
     def _package(self, context: StageContext) -> ReviewPackage:
@@ -1062,6 +1067,20 @@ class ReportStage(StageHandler):
             )
             (project_dir / "review_report.pdf").write_bytes(pdf_path.read_bytes())
             pdf_written = True
+        annotated_pdf = False
+        highlighted = 0
+        page_notes = 0
+        annotated_path: Path | None = None
+        from ..pdf_annotate import annotate_pdf, pymupdf_available
+
+        manuscript_pdf = sibling_pdf(context.source_path)
+        if manuscript_pdf is not None and pymupdf_available():
+            annotated_path = context.stage_dir / "annotated_manuscript.pdf"
+            placements = annotate_pdf(manuscript_pdf, package, annotated_path)
+            (project_dir / "annotated_manuscript.pdf").write_bytes(annotated_path.read_bytes())
+            annotated_pdf = True
+            highlighted = sum(1 for item in placements if item.placement != "page-note")
+            page_notes = sum(1 for item in placements if item.placement == "page-note")
         _write_json(
             summary_path,
             {
@@ -1072,6 +1091,9 @@ class ReportStage(StageHandler):
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
                 "pdf": pdf_written,
+                "annotated_pdf": annotated_pdf,
+                "annotated_pdf_highlighted": highlighted,
+                "annotated_pdf_page_notes": page_notes,
             },
         )
         artifacts = [
@@ -1079,6 +1101,8 @@ class ReportStage(StageHandler):
             _artifact(markdown_path, context, "review.report.markdown"),
             _artifact(summary_path, context, "review.summary"),
         ]
+        if annotated_path is not None:
+            artifacts.append(_artifact(annotated_path, context, "review.annotated_pdf"))
         return StageOutcome(
             artifacts=artifacts,
             metadata={
@@ -1087,6 +1111,9 @@ class ReportStage(StageHandler):
                 "languages": list(languages),
                 "bilingual": len(languages) > 1,
                 "pdf": pdf_written,
+                "annotated_pdf": annotated_pdf,
+                "annotated_pdf_highlighted": highlighted,
+                "annotated_pdf_page_notes": page_notes,
             },
         )
 
