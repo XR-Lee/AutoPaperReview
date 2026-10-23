@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `apr-fusion-v1` now ranks by the mean of K decision samples on a 1.0–6.0 scale. The integer is the decision: 1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, 5 accept, 6 strong accept. One decimal only orders papers that share a decision. ICLR bins map those six levels onto 1/3/5/6/8/10, so levels 1–4 no longer collapse onto one bin. Dimension bands stay diagnostic. A verified venue cap is recorded and does not change the shipped rank unless tune selection shows it is strictly better on both Spearman and AUC. `scripts/rank_eval.py` may keep a shorter sample prefix when it is within 0.02 of the best Spearman and the best AUC.
 - Dimension scoring now appends the packaged `sar_bands_v1` clause list. The schema example is not a default clause. Excerpt checks still prefer an exact copy and also accept a passage whose only difference is whitespace or a line break. The stored quote is the manuscript span.
 - A fatal class is stored only when its excerpt resolves and a second judgment, which sees that excerpt and the class definition, says the excerpt states the class. `missing_closest_neighbor` is still owned by related-work search.
 - The OpenAI-compatible adapter timeout defaults to 900 seconds. The same default covers visual inspection and related-work confirmation.

@@ -7,7 +7,7 @@ replace a failed call with the deterministic manuscript adapter.
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
 fatal classification. An optional `holistic` judgment adds K samples of one
-1.0–10.0 rating. The mean is the rating. Excerpts on that rating are optional.
+1.0–6.0 decision score. The mean is the rating. Excerpts on that rating are optional.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -212,9 +212,9 @@ class FatalVerifyJudgment(StrictPayload):
 
 
 class HolisticJudgment(StrictPayload):
-    """One sample of the overall rating. Excerpts are optional and post-hoc."""
+    """One sample of the 1.0–6.0 decision score. Excerpts are optional and post-hoc."""
 
-    rating: float = Field(ge=1, le=10)
+    rating: float = Field(ge=1, le=6)
     rationale: str = Field(min_length=1)
     strength_excerpt: str = ""
     weakness_excerpt: str = ""
@@ -345,10 +345,11 @@ _SCHEMA_HINTS = {
         "One verdict per issue in the user message."
     ),
     "holistic": (
-        '{"rating":6.5,"rationale":"...","strength_excerpt":"","weakness_excerpt":""} '
-        "rating is a number from 1.0 to 10.0. One decimal place is allowed. "
-        "1-2 strong reject, 3-4 reject, 5 borderline reject, 6 borderline accept, "
-        "7-8 accept, 9-10 strong accept. Do not use 4 or 5 as a default. "
+        '{"rating":4.0,"rationale":"...","strength_excerpt":"","weakness_excerpt":""} '
+        "rating is a number from 1.0 to 6.0. One decimal place is allowed. "
+        "1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, "
+        "5 accept, 6 strong accept. 3 and 4 are opposite decisions. "
+        "Do not use 3 as a default. "
         "strength_excerpt and weakness_excerpt are optional and may be empty."
     ),
     "visual": (
@@ -1279,22 +1280,29 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 
 
 HOLISTIC_TASK = """
-## Overall recommendation
-You are reviewing for a top machine-learning venue. Give one score for the paper as a decision, not a pile of sub-scores.
-Weigh technical quality, clarity, significance, originality, reproducibility, and how the work sits against prior work.
-Keep a high bar. Only a paper you would argue for belongs at the top of the scale.
-If the paper is weak and you are unsure, score it as a reject. If the paper is strong and you are unsure, score it as an accept. Do not park in the middle to avoid deciding.
+## Decision score
+You are deciding one paper for a top machine-learning conference. Return a single score for the paper as a whole. Do not average per-axis marks, and do not add a second number.
 
-rating is a number from 1.0 to 10.0. One decimal place is allowed, and that is how you separate two close papers.
-1.0-2.0 is a strong reject: a broken claim, a known result, or an evaluation that does not support the result.
-3.0-4.0 is a reject: there is a clear reason to decline.
-5.0 is a borderline reject: the reasons to decline are stronger.
-6.0 is a borderline accept: the reasons to accept are stronger.
-7.0-8.0 is an accept: sound, useful, and above the bar.
-9.0-10.0 is a strong accept: the result matters and the support is tight.
-Use the whole scale. A score of 4 is a reject, not a default. 5 and 6 are different decisions.
+Use the following only as questions that inform that one score:
+- Is the technical work sound, and do the experiments or arguments actually support the claims?
+- Can a careful reader follow the paper and repeat the setup from what is written?
+- Does the result matter to the venue, and is it new relative to the prior work the paper itself engages?
+- Are limitations and possible harms stated, rather than skipped?
 
-rationale is a short review: what the paper does, the strongest reason to accept, and the strongest reason to decline.
+rating is a number from 1.0 to 6.0. One decimal place is allowed. The decimal only orders two papers that share a decision. The integer is the decision:
+
+1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
+2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.
+3 — borderline reject. The paper is competent, and the reasons to decline outweigh the reasons to accept.
+4 — borderline accept. The paper is competent, and the reasons to accept outweigh the reasons to decline.
+5 — accept. The paper is sound and useful, and you would defend it in a discussion.
+6 — strong accept. The result matters and the support is tight.
+
+3 and 4 are opposite decisions. 3.5 is still a reject: the case for declining is slightly stronger. It is not a neutral shelf. A paper with a real contribution and gaps a reviewer could ask the authors to fix is a 4, not a 3. A flaw that decides the outcome is a 2, not a 3. Use 1 and 6 for extreme cases, not as decoration.
+
+If the paper is weak and you are unsure, score 3 or below. If the paper is strong and you are unsure, score 4 or above.
+
+rationale has four short parts, in this order: what the paper claims; the strongest reason to accept; the strongest reason to decline; which of those two reasons wins. The rating has to follow that last part.
 strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. The rating stands without them.
 Return only the JSON object.
 """.strip()
@@ -1323,7 +1331,7 @@ def judgment_prompt_fingerprint() -> str:
             HOLISTIC_TASK,
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "holistic-k-v1",
+            "decision-scale-v1",
         ]
     )
     return digest_excerpt(blob)

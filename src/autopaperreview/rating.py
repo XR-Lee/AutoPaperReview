@@ -215,21 +215,28 @@ def _read_related_work_comparison(package: ReviewPackage) -> dict[str, Any] | No
     return comparison
 
 
-def _holistic_rating(package: ReviewPackage) -> float | None:
-    raw = package.metadata.get("holistic_rating")
-    if not isinstance(raw, dict) or raw.get("verified") is not True:
+def _decision_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–6.0 samples. A lone rating counts as one sample."""
+    if raw.get("verified") is not True:
         return None
-    rating = raw.get("rating")
-    if isinstance(rating, bool) or not isinstance(rating, (int, float)):
-        return None
-    value = float(rating)
-    if value < 1.0 or value > 10.0:
-        return None
-    return value
+    raw_samples = raw.get("samples")
+    values: list[float] = []
+    if isinstance(raw_samples, list) and raw_samples:
+        source: list[Any] = list(raw_samples)
+    else:
+        source = [raw.get("rating")]
+    for item in source:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        value = float(item)
+        if value < 1.0 or value > 6.0:
+            return None
+        values.append(value)
+    return tuple(values)
 
 
-def _clamp_rank(value: float) -> float:
-    return min(10.0, max(1.0, value))
+def _clamp_decision(value: float) -> float:
+    return min(6.0, max(1.0, value))
 
 
 def rate_venue(
@@ -241,7 +248,13 @@ def rate_venue(
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
-    from .fusion import FUSION_COEFFICIENT_SET, FUSION_VARIANT, RankSignals, candidate_scores
+    from .fusion import (
+        FUSION_COEFFICIENT_SET,
+        FUSION_VARIANT,
+        RankSignals,
+        candidate_scores,
+        decision_bin,
+    )
 
     chosen = coefficient_set or COEFFICIENT_SET
     if chosen not in {COEFFICIENT_SET, FUSION_COEFFICIENT_SET}:
@@ -277,6 +290,10 @@ def rate_venue(
         claims = bands[SarDimension.claims_supported]
         soundness = bands[SarDimension.experimental_soundness]
     venue = snap_down(capped) if bands is not None else 1
+    raw_decision = package.metadata.get("holistic_rating")
+    decision_samples = (
+        _decision_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    )
     signals = RankSignals(
         weighted=weighted,
         gate=gate,
@@ -284,29 +301,33 @@ def rate_venue(
         soundness=soundness,
         band_mean=band_mean,
         venue_cap=venue_cap,
-        holistic=_holistic_rating(package),
+        holistic=None if not decision_samples else sum(decision_samples) / len(decision_samples),
+        samples=decision_samples or (),
         bands_available=bands is not None,
     )
     candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
+    scale_max = 10.0
     if chosen == FUSION_COEFFICIENT_SET:
         if FUSION_VARIANT not in candidates:
             raise ValueError(
-                "apr-fusion-v1 requires a holistic rating; refusing to fall back to dimension bands"
+                "apr-fusion-v1 requires a decision score; refusing to fall back to dimension bands"
             )
-        rank_score = round(_clamp_rank(candidates[FUSION_VARIANT]), 4)
-        venue = snap_down(rank_score)
+        rank_score = round(_clamp_decision(candidates[FUSION_VARIANT]), 4)
+        venue = decision_bin(rank_score)
         reported = rank_score
+        scale_max = 6.0
         notes = (
-            "apr-fusion-v1 ranks by the mean of the holistic samples on a 1.0-10.0 scale. "
-            "A verified venue cap is a downward adjustment and nothing else. "
-            "Dimension bands are not a gate. A missing holistic rating fails the paper. "
-            "It is not a fitted regression. venue_bin is snap_down of the rank score."
+            "apr-fusion-v1 ranks by the mean of independent decision samples on a 1.0-6.0 scale. "
+            "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+            "A verified venue cap is not applied to this rank. "
+            "Dimension bands are not a gate. A missing decision score fails the paper. "
+            "It is not a fitted regression."
         )
         formula = (
             f"rank = {FUSION_VARIANT}; "
-            "rank = mean(holistic samples); "
-            "a verified venue cap may only lower the rank; "
-            "venue_bin = snap_down(rank)"
+            "rank = mean(decision samples on 1.0-6.0); "
+            "venue_bin maps levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+            "a verified venue cap does not change this rank"
         )
     else:
         rank_score = round(capped, 4)
@@ -343,7 +364,8 @@ def rate_venue(
         "venue_bin": int(venue),
         "rank_score": rank_score,
         "candidates": candidates,
-        "holistic": signals.holistic,
+        "holistic": None if signals.holistic is None else round(signals.holistic, 4),
+        "samples": [round(item, 4) for item in signals.samples],
         "cap_ids": [item.record_id for item in caps],
         "caps": [
             {"id": item.record_id, "fatal_class": item.fatal_class.value, "cap": item.cap, "exempted": item.exempted}
@@ -374,7 +396,7 @@ def rate_venue(
     return OverallScore(
         value=reported,
         scale_min=1.0,
-        scale_max=10.0,
+        scale_max=scale_max,
         method=OverallScoreMethod.declared_formula,
         coefficient_set=chosen,
         notes=notes,

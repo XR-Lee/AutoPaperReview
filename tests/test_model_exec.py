@@ -1302,7 +1302,7 @@ class HolisticSampleTests(unittest.TestCase):
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
             self.assertEqual(_judgment_name(payload), "holistic")
             self.assertEqual(payload["temperature"], 0.7)
-            rating = (6.0, 7.0, 8.0)[attempt - 1]
+            rating = (3.0, 4.0, 5.0)[attempt - 1]
             excerpt = "this sentence was not written in the manuscript" if attempt == 1 else ""
             return _chat(
                 json.dumps(
@@ -1326,8 +1326,8 @@ class HolisticSampleTests(unittest.TestCase):
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
             package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
             rating = package["metadata"]["holistic_rating"]
-            self.assertEqual(rating["samples"], [6.0, 7.0, 8.0])
-            self.assertEqual(rating["rating"], 7.0)
+            self.assertEqual(rating["samples"], [3.0, 4.0, 5.0])
+            self.assertEqual(rating["rating"], 4.0)
             self.assertTrue(rating["verified"])
             review = manifest.stage("review")
             assert review is not None
@@ -1360,7 +1360,7 @@ class HolisticSampleTests(unittest.TestCase):
             return _chat(
                 json.dumps(
                     {
-                        "rating": 6.5,
+                        "rating": 4.5,
                         "rationale": "Synthetic cohort is a borderline accept.",
                         "strength_excerpt": "",
                         "weakness_excerpt": "",

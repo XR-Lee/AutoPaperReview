@@ -44,6 +44,7 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
                 "candidates": score.get("candidates") or {},
                 "usage_totals": score.get("usage_totals") or {},
                 "holistic": score.get("holistic"),
+                "samples": score.get("samples") or [],
                 "caps": score.get("caps") or [],
                 "drop_counts": score.get("drop_counts") or {},
             }
@@ -132,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if chosen:
         print(f"selected={chosen}")
+        if report and report.get("rule"):
+            print(f"rule={report['rule']}")
+        if report and report.get("cap_adopted"):
+            print("cap_adopted=yes")
         if len(tied) > 1:
             print("tied=" + ",".join(str(name) for name in tied))
     drops: dict[str, int] = {}
