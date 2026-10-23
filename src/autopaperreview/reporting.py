@@ -103,6 +103,11 @@ def _fusion_rank_note(meta: dict[str, object], language: str, rank_value: float,
     """One sentence on the shipped rank. The bin sentence stays with the decision."""
     variant = str(meta.get("fusion_variant") or "")
     if language == "zh-Hans":
+        if variant == "mean-k3":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（三次会场均分估计的 1–10 均值）。档位来自 1–6 决定分。"
+            )
         if variant == "isolate-k1":
             return (
                 f" 排序分 {rank_value:.2f}"
@@ -116,6 +121,11 @@ def _fusion_rank_note(meta: dict[str, object], language: str, rank_value: float,
         if scale_max > 6:
             return f" 排序分 {rank_value:.2f}（1–10 会场均分估计）。档位来自 1–6 决定分。"
         return f" 排序分 {rank_value:.2f}（1–6 决定分，不是 1–10）。"
+    if variant == "mean-k3":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean of three venue-mean samples. "
+            "The bin comes from the 1–6 decision."
+        )
     if variant == "isolate-k1":
         return (
             f" Rank score {rank_value:.2f} on a 1–10 scale from two isolated reference comparisons. "

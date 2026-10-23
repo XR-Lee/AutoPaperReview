@@ -359,6 +359,8 @@ def rate_venue(
     if chosen == FUSION_COEFFICIENT_SET:
         if FUSION_VARIANT in candidates:
             variant = FUSION_VARIANT
+        elif "isolate-k1" in candidates:
+            variant = "isolate-k1"
         elif "place" in candidates:
             variant = "place"
         elif "mean" in candidates:
@@ -370,8 +372,26 @@ def rate_venue(
                 "apr-fusion-v1 requires a decision score; refusing to fall back to dimension bands"
             )
         venue = decision_bin(candidates["decision"])
-        if variant == FUSION_VARIANT:
-            rank_score = round(_clamp_span(candidates[FUSION_VARIANT], 1.0, 10.0), 4)
+        if variant == "mean-k3":
+            rank_score = round(_clamp_span(candidates["mean-k3"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by mean-k3, the mean of three independent venue-scale "
+                "samples on 1.0-10.0. Each sample estimates the mean official rating. "
+                "The 1-6 decision sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "A verified venue cap is not applied to this rank. Dimension bands are not a "
+                "gate. A missing decision score fails the paper. A fourth sample is not this "
+                "candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = mean-k3; "
+                "rank = mean(first three venue-scale samples on 1.0-10.0); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "isolate-k1":
+            rank_score = round(_clamp_span(candidates["isolate-k1"], 1.0, 10.0), 4)
             scale_max = 10.0
             notes = (
                 "apr-fusion-v1 ranks by isolate-k1, the mean of two implied scores from one "

@@ -113,12 +113,48 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["candidates"]["decision-k1"], 3)
         self.assertEqual(scored.metadata["fusion_variant"], "mean")
 
+    def test_three_venue_means_are_the_locked_rank(self) -> None:
+        package = _package("panel", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 3.6667,
+                        "predicted_mean": 6.1,
+                        "verified": True,
+                        "samples": [3.0, 4.0, 4.0],
+                        "mean_samples": [5.0, 6.2, 7.1],
+                        "isolate_samples": [2.0],
+                    }
+                },
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.scale_max, 10)
+        self.assertAlmostEqual(scored.value, 6.1)
+        self.assertEqual(scored.metadata["venue_bin"], 6)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k1"], 5.0)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k2"], 5.6)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k3"], 6.1)
+        self.assertEqual(scored.metadata["candidates"]["decision-k1"], 3.0)
+        self.assertEqual(scored.metadata["fusion_variant"], "mean-k3")
+        self.assertIn("mean-k3", scored.metadata["formula"])
+        self.assertAlmostEqual(scored.metadata["candidates"]["isolate-k1"], 2.0)
+        from autopaperreview.reporting import _fusion_rank_note
+
+        note = _fusion_rank_note(scored.metadata, "en", scored.value, scored.scale_max)
+        self.assertIn("three venue-mean samples", note)
+        self.assertIn("1–6 decision", note)
+        zh = _fusion_rank_note(scored.metadata, "zh-Hans", scored.value, scored.scale_max)
+        self.assertIn("三次会场均分", zh)
+
     def test_near_tie_prefers_fewer_samples(self) -> None:
-        self.assertEqual(LOCKED_CANDIDATE, "isolate-k1")
+        self.assertEqual(LOCKED_CANDIDATE, "mean-k3")
         self.assertEqual(FUSION_VARIANT, LOCKED_CANDIDATE)
-        self.assertEqual(SHIPPABLE[0], "isolate-k1")
-        self.assertEqual(SHIPPABLE[1], "place-k1")
-        self.assertEqual(SHIPPABLE[2], "mean-k1")
+        self.assertEqual(SHIPPABLE[0], "mean-k1")
+        self.assertLess(SHIPPABLE.index("mean-k1"), SHIPPABLE.index("isolate-k1"))
+        self.assertLess(SHIPPABLE.index("mean-k1"), SHIPPABLE.index("mean-k3"))
+        self.assertLess(SHIPPABLE.index("isolate-k1"), SHIPPABLE.index("place-k1"))
         metrics = {
             "decision-k1": {"spearman": 0.70, "auc": 0.74},
             "decision-k2": {"spearman": 0.71, "auc": 0.75},
@@ -246,23 +282,23 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["venue_bin"], 8)
         self.assertLess(scored.metadata["candidates"]["decision-k1-capped"], 5.0)
 
-    def test_same_k_prefers_the_isolated_pair_over_the_venue_mean(self) -> None:
+    def test_same_k_prefers_the_venue_mean_over_the_isolated_pair(self) -> None:
         metrics = {
-            "isolate-k1": {"spearman": 0.70, "auc": 0.80},
-            "mean-k1": {"spearman": 0.71, "auc": 0.81},
+            "isolate-k1": {"spearman": 0.71, "auc": 0.81},
+            "mean-k1": {"spearman": 0.70, "auc": 0.80},
         }
         report = selection_report(metrics)
-        self.assertEqual(report["chosen"], "isolate-k1")
-        self.assertEqual(report["preregistered"], "isolate-k1")
+        self.assertEqual(report["chosen"], "mean-k1")
+        self.assertEqual(report["preregistered"], "mean-k3")
         self.assertEqual(report["rule"], "within-0.02-then-cheapest")
 
-    def test_same_k_prefers_place_over_the_venue_mean(self) -> None:
+    def test_same_k_prefers_the_venue_mean_over_placement(self) -> None:
         metrics = {
-            "place-k1": {"spearman": 0.70, "auc": 0.80},
-            "mean-k1": {"spearman": 0.71, "auc": 0.81},
+            "place-k1": {"spearman": 0.71, "auc": 0.81},
+            "mean-k1": {"spearman": 0.70, "auc": 0.80},
         }
         report = selection_report(metrics)
-        self.assertEqual(report["chosen"], "place-k1")
+        self.assertEqual(report["chosen"], "mean-k1")
         self.assertEqual(report["rule"], "within-0.02-then-cheapest")
 
     def test_a_wide_gap_can_keep_the_venue_mean(self) -> None:
@@ -278,7 +314,7 @@ class FusionFormulaTests(unittest.TestCase):
             "count-k1": {"spearman": 0.90, "auc": 0.90},
             "mean-k1": {"spearman": 0.50, "auc": 0.60},
         }
-        self.assertEqual(select_variant(metrics), "place-k1")
+        self.assertEqual(select_variant(metrics), "mean-k1")
 
     def test_same_k_prefers_the_venue_mean(self) -> None:
         metrics = {
@@ -399,16 +435,17 @@ class HarnessConstraintTests(unittest.TestCase):
     def test_holistic_sample_count_defaults_to_the_locked_eval(self) -> None:
         import inspect
 
-        from autopaperreview.anchors import LOCKED_HOLISTIC_SAMPLES
+        from autopaperreview.anchors import LOCKED_HOLISTIC_SAMPLES, LOCKED_HOLISTIC_TEMPERATURE
         from autopaperreview.cli import build_parser
         from autopaperreview.model_exec import DEFAULT_HOLISTIC_SAMPLES
         from autopaperreview.public_calibration import _write_project, run_cache
 
         params = ExecuteReviewParams(adapter="autopaperreview.model_exec:OpenAICompatibleAdapter")
-        self.assertEqual(LOCKED_HOLISTIC_SAMPLES, 1)
+        self.assertEqual(LOCKED_HOLISTIC_SAMPLES, 3)
         self.assertEqual(DEFAULT_HOLISTIC_SAMPLES, LOCKED_HOLISTIC_SAMPLES)
         self.assertEqual(params.holistic_samples, LOCKED_HOLISTIC_SAMPLES)
-        self.assertEqual(params.holistic_temperature, 0.7)
+        self.assertEqual(params.holistic_temperature, LOCKED_HOLISTIC_TEMPERATURE)
+        self.assertEqual(LOCKED_HOLISTIC_TEMPERATURE, 0.7)
         self.assertTrue(params.cheap is False)
         args = build_parser().parse_args(["calibrate-eval", "run", "--cache", "unused"])
         self.assertEqual(args.holistic_samples, LOCKED_HOLISTIC_SAMPLES)

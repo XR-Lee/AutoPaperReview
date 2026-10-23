@@ -1,14 +1,14 @@
-"""Two isolated poles for the locked rank.
+"""Locked rank constants, plus the previous pole scale.
 
-The references are fictional descriptions written for this scale. They are not
-papers. Each prompt quotes one reference and does not include numeric
-positions. Positions are a declared scale: 2.5 and 8.5, with a gap of 6.
-They are not fit to a tune slice.
+``mean-k3`` is the preregistered rank. Three separate calls each estimate the
+mean official rating on 1.0–10.0. The shipped rank is the mean of those three
+estimates. The calls run together. The sample count and the temperature are
+declared here. They are not fit on a tune slice. The 1–6 decision is stored
+from the same calls and sets the bin. It is not the rank.
 
-The locked candidate is ``isolate-k1``. One pair of calls compares the
-manuscript to weak-reject and, separately, to strong-accept. The shipped
-rank is the mean of those two implied scores. A later pair is stored and is
-not the candidate.
+The pole helpers remain so the previous implied-score formula stays defined.
+A package that stored only that pair still ranks from the stored samples.
+New runs do not ask for a margin.
 """
 
 from __future__ import annotations
@@ -23,9 +23,10 @@ RELATIONS = frozenset({"better", "tie", "worse"})
 POLE_GAP = 6.0
 MARGIN_MAX = POLE_GAP
 
-# One pair. Matches the locked tune and holdout evaluation.
-LOCKED_HOLISTIC_SAMPLES = 1
-LOCKED_CANDIDATE = "isolate-k1"
+# Three draws of the venue mean. Matches the locked evaluation.
+LOCKED_HOLISTIC_SAMPLES = 3
+LOCKED_HOLISTIC_TEMPERATURE = 0.7
+LOCKED_CANDIDATE = "mean-k3"
 
 
 @dataclass(frozen=True)

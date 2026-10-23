@@ -6,10 +6,10 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. An optional `holistic` judgment adds K pairs of
-isolated comparisons, one against weak-reject and one against strong-accept,
-plus a 1–6 decision on the strong-accept call. The shipped K is one pair,
-and the shipped rank is the mean of that pair's implied scores.
+fatal classification. An optional `holistic` judgment adds K estimates of
+the mean official rating on 1.0–10.0, plus a 1–6 decision on each call.
+The shipped K is 3. The calls run together. The shipped rank is the mean
+of those three estimates. The decision sets the bin and is not the rank.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -51,14 +51,7 @@ from .adapters import ReviewRequest, ReviewResult, _merge_literature
 from .anchors import (
     LOCKED_CANDIDATE,
     LOCKED_HOLISTIC_SAMPLES,
-    MARGIN_MAX,
-    RELATIONS,
-    SYNTHETIC_ANCHORS,
-    anchor_by_id,
-    anchor_prompt_text,
-    implied_score,
-    isolate_score,
-    normalize_margin,
+    LOCKED_HOLISTIC_TEMPERATURE,
 )
 from .hashing import sha256_bytes
 from .models import (
@@ -227,48 +220,22 @@ class FatalVerifyJudgment(StrictPayload):
         return self
 
 
-_RELATION_ALIASES = {
-    "better": "better",
-    "above": "better",
-    "higher": "better",
-    "worse": "worse",
-    "below": "worse",
-    "lower": "worse",
-    "tie": "tie",
-    "tied": "tie",
-    "same": "tie",
-    "equal": "tie",
-}
-class IsolatedComparison(StrictPayload):
-    """One manuscript-to-reference comparison. The reference is synthetic."""
+class HolisticJudgment(StrictPayload):
+    """One venue-mean estimate plus the 1–6 decision. The decision is not the rank."""
 
     rationale: str = Field(min_length=1)
-    relation: str = Field(min_length=1)
-    margin: float = Field(ge=0, le=MARGIN_MAX)
+    rating: float = Field(ge=1, le=6)
+    predicted_mean: float = Field(ge=1, le=10)
 
     @model_validator(mode="before")
     @classmethod
-    def canonicalize(cls, value: Any) -> Any:
+    def reject_bool_scores(cls, value: Any) -> Any:
         if not isinstance(value, dict):
             return value
-        updated = dict(value)
-        relation = updated.get("relation")
-        if isinstance(relation, str):
-            updated["relation"] = _RELATION_ALIASES.get(relation.strip().lower(), relation.strip().lower())
-        return updated
-
-    @model_validator(mode="after")
-    def margin_matches_relation(self) -> "IsolatedComparison":
-        if self.relation not in RELATIONS:
-            raise ValueError("relation must be better, tie, or worse")
-        normalize_margin(self.relation, self.margin)
-        return self
-
-
-class IsolatedDecision(IsolatedComparison):
-    """The strong-accept comparison plus the 1–6 decision. The decision is not the rank."""
-
-    rating: float = Field(ge=1, le=6)
+        for key in ("rating", "predicted_mean"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        return value
 
 
 class VisualJudgment(StrictPayload):
@@ -355,9 +322,7 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     "dimensions": DimensionJudgment,
     "fatal": FatalJudgment,
     "fatal-verify": FatalVerifyJudgment,
-    "holistic": IsolatedDecision,
-    "holistic-weak-reject": IsolatedComparison,
-    "holistic-strong-accept": IsolatedDecision,
+    "holistic": HolisticJudgment,
     "visual": VisualJudgment,
     "zh-Hans": ZhHansJudgment,
 }
@@ -397,31 +362,11 @@ _SCHEMA_HINTS = {
         "holds is true only when the excerpt itself states the class. "
         "One verdict per issue in the user message."
     ),
-    "holistic-weak-reject": (
-        "Keys: rationale, relation, margin. "
-        "relation is better, tie, or worse. "
-        "margin is a number from 0 to 6. "
-        "A tie has margin 0. better or worse has a margin above 0. "
-        "There is no example margin to copy. "
-        "No other keys."
-    ),
-    "holistic-strong-accept": (
-        "Keys: rationale, relation, margin, rating. "
-        "relation is better, tie, or worse. "
-        "margin is a number from 0 to 6. "
-        "A tie has margin 0. better or worse has a margin above 0. "
-        "rating is an integer 1, 2, 3, 4, 5, or 6. "
-        "There is no example margin or rating to copy. "
-        "1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, "
-        "5 accept, 6 strong accept. 3 and 4 are opposite decisions. "
-        "The margin is not a rescaling of rating. "
-        "No other keys."
-    ),
     "holistic": (
-        "Keys: rationale, relation, margin, rating. "
-        "relation is better, tie, or worse. "
-        "margin is a number from 0 to 6. "
+        "Keys: rationale, rating, predicted_mean. "
         "rating is an integer 1, 2, 3, 4, 5, or 6. "
+        "predicted_mean is a number from 1.0 to 10.0. "
+        "There is no example score to copy. "
         "No other keys."
     ),
     "visual": (
@@ -1373,90 +1318,46 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 """.strip()
 
 
-_DECISION_TEXT = """
-## Decision
-Choose rating only after relation and margin are fixed. Do not edit the margin so that it matches rating.
-rating is an integer from 1 to 6. It is only the accept or reject decision:
+HOLISTIC_TASK = """
+## Venue mean
+You are predicting the mean official rating of one paper at a top machine-learning conference. Score the manuscript against the scale below. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
 
+predicted_mean is the mean of the official ratings careful reviewers would give. Those ratings are chosen from 1, 3, 5, 6, 8, and 10. The mean of several reviewers often falls between those choices. Report that mean, from 1.0 to 10.0 with one decimal. Do not round it back to the nearest official choice. This number orders papers. It is the reviewers' mean, not your harshest reading, and it is not a rescaling of rating.
+
+Judge the comparison the manuscript reports. An attractive idea whose comparison does not show a gain a reviewer would rely on is a reject. A modest idea whose comparison shows a gain a reviewer would rely on is an accept. Do not save the top of the scale for a paper that changes the field. A paper you would accept and cite sits near 7 or 8.
+
+Place the mean on this scale:
+- near 3: a clear reject. The comparison does not test the claim, or it shows no gain.
+- near 4: a reject. There is a real attempt, and a gap decides the paper. A typical rejected paper is near 4, not near 1.
+- 5.0 to 5.4: borderline reject. The paper is competent, and you would not argue to accept it.
+- 5.6 to 6.4: borderline accept. The paper is competent, and you would argue to accept it.
+- near 7 or 8: an accept. The gain is one a reviewer would rely on and cite. A typical accepted paper is here, not near 9.
+- near 9: a strong accept. Rare. The support is tight and the result matters.
+
+There is no midpoint between a borderline reject and a borderline accept. The reject side stops at 5.4. The accept side starts at 5.6. Use 5.4 or 5.6 only when the paper sits on that line. A paper you would clearly reject is near 4 or below. A paper you would clearly accept is near 7 or above. Do not use 4.0, 5.0, 6.0, or 7.0 as a default. If the paper is not exactly on an anchor, move by a tenth. Use 1 and 10 only for an extreme case.
+
+A paper with a gain a reviewer would rely on scores higher than a paper whose gain is almost reliable. That paper scores higher than a paper whose comparison does not test the claim. Keep that order. Two papers you would both reject still get different means when one is closer to a reliable gain. Two papers you would both accept still get different means when one is closer to a result you would cite. Most submissions are rejected.
+
+rationale is three short clauses, in this order: the comparison the manuscript reports; whether a reviewer would rely on that gain; which side of the line that fact puts the mean on. Set predicted_mean only after those clauses. Do not edit it toward a round favorite.
+
+rating is an integer from 1 to 6, chosen after predicted_mean. It is only the accept or reject decision. It must agree with the mean, and it is not the rank.
 1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
 2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.
 3 — borderline reject. The paper is competent, and the reasons to decline outweigh the reasons to accept.
 4 — borderline accept. The paper is competent, and the reasons to accept outweigh the reasons to decline.
 5 — accept. The paper is sound and useful, and you would defend it in a discussion.
 6 — strong accept. The result matters and the support is tight.
-
+A mean at or below 5.4 takes rating 1, 2, or 3. A mean at or above 5.6 takes rating 4, 5, or 6.
 3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.
-If the paper is weak and you are unsure, the decision is 3 or below. If the paper is strong and you are unsure, the decision is 4 or above.
 Return only the JSON object.
 """.strip()
 
-_OPPOSITE_CASE = {
-    "weak-reject": (
-        "a careful reviewer would accept the manuscript because its own comparison shows a gain they would rely on"
-    ),
-    "strong-accept": (
-        "a careful reviewer would reject the manuscript because its own comparison does not show a gain they would rely on"
-    ),
-}
 
-
-def isolated_task_text(anchor_id: str, *, decision: bool) -> str:
-    """One reference, with positions omitted. The decision is only on the strong pole."""
-    anchor = anchor_by_id(anchor_id)
-    if anchor_id == "weak-reject":
-        reserve = (
-            "Do not reserve worse for a manuscript with no experiment. "
-            "A comparison that does not show a gain you would rely on is worse than this reference or tied with it."
-        )
-        distance = (
-            "When relation is better, a small margin means the gain is only just reliable. "
-            "A margin near 6 means the gain is one a reviewer would accept the manuscript for."
-        )
-    else:
-        reserve = (
-            "Do not reserve better for a manuscript that changes the field. "
-            "A comparison that shows a gain you would rely on is better than this reference or tied with it."
-        )
-        distance = (
-            "When relation is worse, a small margin means the gain is almost one you would rely on. "
-            "A margin near 6 means the gain is not established."
-        )
-    head = f"""
-## One comparison
-You are reviewing one paper for a top machine-learning conference.
-Compare this manuscript to the single fictional reference below. The reference is not a real submission and it is not this manuscript.
-Judge the empirical result, not how attractive the idea is. An attractive idea with a gain you would not rely on is close to a reject for that result. A modest idea with a gain you would rely on is close to an accept for that result.
-
-{reserve}
-
-relation is one of three words:
-- better: a careful reviewer would rank this manuscript above the reference
-- tie: a careful reviewer would not rank the two apart
-- worse: a careful reviewer would rank this manuscript below the reference
-
-margin is how far apart they are, from 0 to 6, one decimal.
-0 is a tie. Use 0 only when relation is tie.
-1 is a small gap a second reviewer might reverse.
-6 means the manuscript is the opposite case: {_OPPOSITE_CASE[anchor_id]}.
-A margin of 3 is not a neutral answer. Use it only when the manuscript sits about halfway between this reference and that opposite case.
-If the manuscript resembles the reference, the margin is near 0.
-{distance}
-Do not report a venue rating in the margin.
-
-rationale is two short clauses: the manuscript fact that sets the relation, then the fact that sets the margin.
-""".strip()
-    if decision:
-        head += "\n\n" + _DECISION_TEXT
-    else:
-        head += "\n\nReturn only the JSON object."
-    return head + "\n\n## Reference\n" + anchor_prompt_text(anchor)
-
-
-# One pair is the locked evaluation. Temperature is per call so a stage
+# Three samples are the locked evaluation. Temperature is per call so a stage
 # default of 0 does not force every sample to the same request body.
-# The two calls in a pair run together.
+# The calls run together. Each call sees only its own request.
 DEFAULT_HOLISTIC_SAMPLES = LOCKED_HOLISTIC_SAMPLES
-DEFAULT_HOLISTIC_TEMPERATURE = 0.7
+DEFAULT_HOLISTIC_TEMPERATURE = LOCKED_HOLISTIC_TEMPERATURE
 
 
 def rubric_prompt_text() -> str:
@@ -1474,12 +1375,10 @@ def judgment_prompt_fingerprint() -> str:
         [
             rubric_prompt_text(),
             FATAL_CLASS_DEFINITIONS,
-            isolated_task_text("weak-reject", decision=False),
-            isolated_task_text("strong-accept", decision=True),
+            HOLISTIC_TASK,
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "isolate-poles-v1",
-            ",".join(f"{anchor.id}={anchor.position}" for anchor in SYNTHETIC_ANCHORS),
+            "venue-mean-k3-v1",
         ]
     )
     return digest_excerpt(blob)
@@ -1527,51 +1426,6 @@ def _fatal_verify_user(items: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _pole_record(anchor_id: str, payload: IsolatedComparison) -> dict[str, Any]:
-    anchor = anchor_by_id(anchor_id)
-    return {
-        "id": anchor.id,
-        "position": anchor.position,
-        "relation": payload.relation,
-        "margin": round(float(payload.margin), 4),
-        "implied": implied_score(anchor.position, payload.relation, payload.margin),
-    }
-
-
-def _isolated_pair(
-    session: ModelSession,
-    weak_user: str,
-    strong_user: str,
-    temperature: float,
-) -> tuple[IsolatedComparison, IsolatedDecision]:
-    """Run the two pole calls together. A schema failure retries once inside each call."""
-    jobs: dict[str, tuple[str, type[IsolatedComparison]]] = {
-        "holistic-weak-reject": (weak_user, IsolatedComparison),
-        "holistic-strong-accept": (strong_user, IsolatedDecision),
-    }
-    results: dict[str, IsolatedComparison] = {}
-    errors: list[Exception] = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {
-            pool.submit(session.complete, name, user, schema, temperature=temperature): name
-            for name, (user, schema) in jobs.items()
-        }
-        for future in as_completed(futures):
-            try:
-                payload = future.result()
-            except Exception as exc:
-                errors.append(exc)
-                continue
-            assert isinstance(payload, IsolatedComparison)
-            results[futures[future]] = payload
-    if errors:
-        raise errors[0]
-    weak = results["holistic-weak-reject"]
-    strong = results["holistic-strong-accept"]
-    assert isinstance(strong, IsolatedDecision)
-    return weak, strong
-
-
 def _sample_holistic(
     session: ModelSession,
     packet: str,
@@ -1579,39 +1433,55 @@ def _sample_holistic(
     samples: int,
     temperature: float,
 ) -> dict[str, Any]:
-    """K isolated pairs. The locked rank is the first pair. There is no band substitute."""
+    """K venue-mean calls, run together. The locked rank is the mean of the first three.
+
+    There is no band substitute. A missing sample fails the paper.
+    """
     if samples < 1:
         session.fail("judgment holistic requires at least one sample")
-    weak_anchor = anchor_by_id("weak-reject")
-    strong_anchor = anchor_by_id("strong-accept")
-    weak_user = packet + "\n\n" + isolated_task_text(weak_anchor.id, decision=False)
-    strong_user = packet + "\n\n" + isolated_task_text(strong_anchor.id, decision=True)
+    user = packet + "\n\n" + HOLISTIC_TASK
     session.authorize()
-    ratings: list[float] = []
-    isolates: list[float] = []
-    poles: list[dict[str, Any]] = []
-    for index in range(samples):
-        weak_payload, strong_payload = _isolated_pair(session, weak_user, strong_user, temperature)
-        anchors = [
-            _pole_record(weak_anchor.id, weak_payload),
-            _pole_record(strong_anchor.id, strong_payload),
-        ]
-        score = isolate_score([float(item["implied"]) for item in anchors])
-        ratings.append(round(float(strong_payload.rating), 4))
-        isolates.append(score)
-        poles.append({"sample": index, "isolate": score, "anchors": anchors})
-    if len(ratings) != samples or len(isolates) != samples:
+    ratings: list[float | None] = [None] * samples
+    means: list[float | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> HolisticJudgment:
+        payload = session.complete(
+            f"holistic-{index + 1}",
+            user,
+            HolisticJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, HolisticJudgment):
+            session.fail("judgment holistic returned an unexpected payload")
+        return payload
+
+    # Three concurrent calls keep the paper's wall clock near one call.
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            ratings[index] = round(float(payload.rating), 4)
+            means[index] = round(float(payload.predicted_mean), 4)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in ratings) or any(item is None for item in means):
         session.fail(
             "judgment holistic produced no rating; refusing to fall back to dimension bands"
         )
+    rating_values = [float(item) for item in ratings if item is not None]
+    mean_values = [float(item) for item in means if item is not None]
     return {
-        "rating": round(sum(ratings) / len(ratings), 4),
-        "samples": ratings,
-        "isolate": isolates[0],
-        "isolate_samples": isolates,
-        "poles": poles,
-        "ladder": [{"id": anchor.id, "position": anchor.position} for anchor in SYNTHETIC_ANCHORS],
-        "n": len(isolates),
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "predicted_mean": round(sum(mean_values) / len(mean_values), 4),
+        "mean_samples": mean_values,
+        "n": len(mean_values),
         "verified": True,
         "locked_candidate": LOCKED_CANDIDATE,
     }

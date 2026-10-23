@@ -1297,40 +1297,156 @@ class ExcerptMatchTests(unittest.TestCase):
         self.assertIsNone(joined)
 
 
-def _pole_content(name: str, *, margin: float, relation: str, rating: float = 4) -> str:
-    payload: dict[str, object] = {
-        "rationale": "Synthetic cohort differs from this fictional reference on the empirical gain.",
-        "relation": relation,
-        "margin": margin,
-    }
-    if name == "holistic-strong-accept":
-        payload["rating"] = rating
-    return json.dumps(payload)
+def _mean_content(*, predicted_mean: float, rating: float) -> str:
+    return json.dumps(
+        {
+            "rationale": "The synthetic comparison shows a gain a reviewer would rely on, so the mean is on the accept side.",
+            "rating": rating,
+            "predicted_mean": predicted_mean,
+        }
+    )
 
 
 class HolisticSampleTests(unittest.TestCase):
-    def test_a_pair_scores_the_mean_and_a_second_pair_stays_stored(self) -> None:
+    def test_three_means_average_and_a_shorter_run_stays_short(self) -> None:
+        pending = [(4.2, 3.0), (6.0, 4.0), (7.2, 5.0)]
+        lock = threading.Lock()
+
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
             name = _judgment_name(payload)
+            self.assertEqual(name, "holistic")
             self.assertEqual(payload["temperature"], 0.7)
             user = payload["messages"][1]["content"]
-            self.assertIn("## Reference", user)
-            self.assertNotIn("2.5", user)
-            self.assertNotIn("8.5", user)
-            if name == "holistic-weak-reject":
-                self.assertIn("weak-reject", user)
-                self.assertNotIn("strong-accept", user)
-                self.assertNotIn("borderline", user)
-                margin = 4.0 if attempt == 1 else 1.0
-                return _chat(_pole_content(name, margin=margin, relation="better"))
-            if name == "holistic-strong-accept":
-                self.assertIn("strong-accept", user)
-                self.assertNotIn("weak-reject", user)
-                self.assertIn("borderline reject", user)
-                margin = 2.0 if attempt == 1 else 5.0
-                rating = 4.0 if attempt == 1 else 2.0
-                return _chat(_pole_content(name, margin=margin, relation="worse", rating=rating))
-            raise AssertionError(name)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertNotIn("weak-reject", user)
+            self.assertNotIn("strong-accept", user)
+            self.assertNotIn("## Reference", user)
+            with lock:
+                predicted_mean, rating = pending.pop()
+            return _chat(_mean_content(predicted_mean=predicted_mean, rating=rating))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=3,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(sorted(rating["mean_samples"]), [4.2, 6.0, 7.2])
+            self.assertEqual(sorted(rating["samples"]), [3.0, 4.0, 5.0])
+            self.assertAlmostEqual(rating["predicted_mean"], (4.2 + 6.0 + 7.2) / 3)
+            self.assertAlmostEqual(rating["rating"], 4.0)
+            self.assertEqual(rating["n"], 3)
+            self.assertEqual(rating["locked_candidate"], "mean-k3")
+            self.assertNotIn("isolate_samples", rating)
+            self.assertNotIn("poles", rating)
+            self.assertTrue(rating["verified"])
+            self.assertEqual(server.counts, {"holistic": 3})
+
+    def test_venue_mean_calls_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 3:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("venue-mean calls did not overlap")
+            return _chat(_mean_content(predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=3,
+            )
+            run_pipeline(config)
+            self.assertEqual(server.counts, {"holistic": 3})
+
+    def test_schema_failure_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat("not-json")
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=3,
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("holistic", str(caught.exception))
+            self.assertEqual(server.counts["holistic"], 6)
+
+    def test_cheap_mode_calls_only_the_venue_means(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "holistic":
+                raise AssertionError(name)
+            user = payload["messages"][1]["content"]
+            if "predicted_mean" not in user:
+                raise AssertionError("holistic prompt is missing the venue mean")
+            return _chat(_mean_content(predicted_mean=6.4, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=3,
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"holistic": 3})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+
+    def test_omitted_sample_count_is_three_means(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "holistic")
+            return _chat(_mean_content(predicted_mean=4.8, rating=3))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts["holistic"], 3)
+            self.assertEqual(rating["mean_samples"], [4.8, 4.8, 4.8])
+            self.assertEqual(rating["locked_candidate"], "mean-k3")
+
+    def test_two_samples_keep_their_own_mean(self) -> None:
+        pending = [5.2, 6.8]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "holistic")
+            with lock:
+                predicted_mean = pending.pop()
+            return _chat(_mean_content(predicted_mean=predicted_mean, rating=4))
 
         with ChatServer(reply) as server, tempfile_dir() as workspace:
             config = _write_project(
@@ -1343,144 +1459,9 @@ class HolisticSampleTests(unittest.TestCase):
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
             package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
             rating = package["metadata"]["holistic_rating"]
-            self.assertEqual(rating["samples"], [4.0, 2.0])
-            self.assertEqual(rating["rating"], 3.0)
-            self.assertEqual(rating["isolate_samples"], [6.5, 3.5])
-            self.assertEqual(rating["isolate"], 6.5)
-            self.assertEqual(rating["locked_candidate"], "isolate-k1")
-            self.assertEqual(rating["poles"][0]["anchors"][0]["implied"], 6.5)
-            self.assertEqual(rating["poles"][1]["anchors"][1]["implied"], 3.5)
-            self.assertEqual(rating["ladder"][0]["id"], "weak-reject")
-            self.assertTrue(rating["verified"])
-            self.assertEqual(
-                server.counts,
-                {"holistic-weak-reject": 2, "holistic-strong-accept": 2},
-            )
-
-    def test_pole_calls_overlap(self) -> None:
-        release = threading.Event()
-        seen: list[str] = []
-        gate = threading.Lock()
-
-        def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            del attempt
-            name = _judgment_name(payload)
-            with gate:
-                seen.append(name)
-                if len(seen) >= 2:
-                    release.set()
-            if not release.wait(3):
-                raise AssertionError("pole calls did not overlap")
-            if name == "holistic-weak-reject":
-                return _chat(_pole_content(name, margin=1, relation="better"))
-            return _chat(_pole_content(name, margin=1, relation="worse", rating=3))
-
-        with ChatServer(reply) as server, tempfile_dir() as workspace:
-            config = _write_project(
-                workspace,
-                base_url=server.base_url,
-                judgments=["holistic"],
-                holistic_samples=1,
-            )
-            run_pipeline(config)
-            self.assertEqual(
-                server.counts,
-                {"holistic-weak-reject": 1, "holistic-strong-accept": 1},
-            )
-
-    def test_schema_failure_fails_the_paper(self) -> None:
-        def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            del payload, attempt
-            return _chat("not-json")
-
-        with ChatServer(reply) as server, tempfile_dir() as workspace:
-            config = _write_project(
-                workspace,
-                base_url=server.base_url,
-                judgments=["holistic"],
-                holistic_samples=1,
-            )
-            with self.assertRaises(PipelineError) as caught:
-                run_pipeline(config)
-            self.assertIn("holistic", str(caught.exception))
-            self.assertEqual(server.counts["holistic-weak-reject"], 2)
-            self.assertEqual(server.counts["holistic-strong-accept"], 2)
-
-    def test_cheap_mode_calls_only_the_pole_pair(self) -> None:
-        def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            del attempt
-            name = _judgment_name(payload)
-            if not name.startswith("holistic-"):
-                raise AssertionError(name)
-            user = payload["messages"][1]["content"]
-            if "## Reference" not in user:
-                raise AssertionError("holistic prompt is missing its reference")
-            if name == "holistic-weak-reject":
-                return _chat(_pole_content(name, margin=4, relation="better"))
-            return _chat(_pole_content(name, margin=2, relation="worse", rating=4))
-
-        with ChatServer(reply) as server, tempfile_dir() as workspace:
-            config = _write_project(
-                workspace,
-                base_url=server.base_url,
-                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
-                cheap=True,
-                holistic_samples=1,
-            )
-            manifest = run_pipeline(config)
-            self.assertEqual(
-                server.counts,
-                {"holistic-weak-reject": 1, "holistic-strong-accept": 1},
-            )
-            review = manifest.stage("review")
-            assert review is not None
-            self.assertEqual(review.metadata["judgments"], ["holistic"])
-
-    def test_omitted_sample_count_is_one_pair(self) -> None:
-        def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            del attempt
-            name = _judgment_name(payload)
-            if name == "holistic-weak-reject":
-                return _chat(_pole_content(name, margin=1, relation="worse"))
-            return _chat(_pole_content(name, margin=6, relation="worse", rating=2))
-
-        with ChatServer(reply) as server, tempfile_dir() as workspace:
-            config = _write_project(
-                workspace,
-                base_url=server.base_url,
-                judgments=["holistic"],
-            )
-            manifest = run_pipeline(config)
-            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
-            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
-            rating = package["metadata"]["holistic_rating"]
-            self.assertEqual(server.counts["holistic-weak-reject"], 1)
-            self.assertEqual(server.counts["holistic-strong-accept"], 1)
-            # worse than 2.5 by 1 -> 1.5; worse than 8.5 by 6 -> 2.5; mean 2.0
-            self.assertEqual(rating["isolate_samples"], [2.0])
-
-    def test_opposite_poles_still_average(self) -> None:
-        def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            del attempt
-            name = _judgment_name(payload)
-            if name == "holistic-weak-reject":
-                return _chat(_pole_content(name, margin=1.5, relation="worse"))
-            return _chat(_pole_content(name, margin=1.5, relation="better", rating=5))
-
-        with ChatServer(reply) as server, tempfile_dir() as workspace:
-            config = _write_project(
-                workspace,
-                base_url=server.base_url,
-                judgments=["holistic"],
-                holistic_samples=1,
-            )
-            manifest = run_pipeline(config)
-            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
-            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
-            rating = package["metadata"]["holistic_rating"]
-            self.assertEqual(rating["isolate_samples"], [5.5])
-            self.assertEqual(rating["poles"][0]["anchors"][0]["implied"], 1.0)
-            self.assertEqual(rating["poles"][0]["anchors"][1]["implied"], 10.0)
+            self.assertEqual(server.counts["holistic"], 2)
+            self.assertEqual(sorted(rating["mean_samples"]), [5.2, 6.8])
+            self.assertAlmostEqual(rating["predicted_mean"], 6.0)
 
 
 class tempfile_dir:

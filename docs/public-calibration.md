@@ -6,9 +6,9 @@ The comparison is not a claim about any hosted reviewer's published correlation.
 
 ## Locked fusion candidate
 
-`apr-fusion-v1` ships one preregistered rank, `isolate-k1`. It is the mean of two implied scores from a single pair of calls. One call compares the manuscript only to the fictional weak-reject reference. The other compares it only to the fictional strong-accept reference. The calls run together. Each returns a relation and a margin. The implied score is that reference's declared position plus the margin when the manuscript is better, minus the margin when it is worse, and the position itself on a tie, clamped to 1.0–10.0. The positions are 2.5 and 8.5. The margin stops at 6, the gap between those positions. The 1–6 decision is stored from the strong-accept call and sets the ICLR bin. It is not the rank.
+`apr-fusion-v1` ships one preregistered rank, `mean-k3`. It is the mean of three venue-scale samples on 1.0–10.0. Each sample is a separate call that estimates the mean of the official ratings and also returns a 1–6 decision. The calls run together and do not see each other. They score the manuscript against a fixed scale. They do not compare it to a reference and they do not return a margin. The decision sets the ICLR bin. It is not the rank. The temperature is 0.7. A fourth sample is stored if one is requested and is not this candidate.
 
-Do not replace `isolate-k1` with another candidate after seeing tune or held-out metrics. `scripts/rank_eval.py` defaults to `--mode locked`, which reports the shipped rank. The same default K is 1, so the pair is not repeated. Dimension bands stay on the package and stay off this rank.
+Do not replace `mean-k3` with another candidate after seeing tune or held-out metrics. `scripts/rank_eval.py` defaults to `--mode locked`, which reports the shipped rank. The default K is 3 (`LOCKED_HOLISTIC_SAMPLES`). Dimension bands stay on the package and stay off this rank. A package that has only an older isolated pair, a ladder placement, a shorter venue mean, or a decision still ranks by that older signal.
 
 ## What is measured
 

@@ -1,4 +1,4 @@
-"""Isolated pole comparisons. No manuscript text."""
+"""Venue-mean rank and the previous pole scale. No manuscript text."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from autopaperreview.anchors import (
     LADDER_CEILING,
     LADDER_FLOOR,
     LOCKED_CANDIDATE,
+    LOCKED_HOLISTIC_SAMPLES,
+    LOCKED_HOLISTIC_TEMPERATURE,
     MARGIN_MAX,
     SYNTHETIC_ANCHORS,
     anchor_prompt_text,
@@ -19,12 +21,31 @@ from autopaperreview.anchors import (
     isolate_score,
     normalize_margin,
 )
-from autopaperreview.model_exec import (
-    IsolatedComparison,
-    IsolatedDecision,
-    _SCHEMA_HINTS,
-    isolated_task_text,
-)
+from autopaperreview.model_exec import HOLISTIC_TASK, HolisticJudgment, _SCHEMA_HINTS
+
+
+class LockedRankTests(unittest.TestCase):
+    def test_the_locked_rank_is_three_venue_means(self) -> None:
+        self.assertEqual(LOCKED_CANDIDATE, "mean-k3")
+        self.assertEqual(LOCKED_HOLISTIC_SAMPLES, 3)
+        self.assertEqual(LOCKED_HOLISTIC_TEMPERATURE, 0.7)
+
+    def test_prompt_scores_the_manuscript_and_hides_references(self) -> None:
+        self.assertIn("predicted_mean", HOLISTIC_TASK)
+        self.assertIn("borderline reject", HOLISTIC_TASK)
+        self.assertIn("5.4", HOLISTIC_TASK)
+        self.assertIn("5.6", HOLISTIC_TASK)
+        self.assertNotIn("weak-reject", HOLISTIC_TASK)
+        self.assertNotIn("strong-accept", HOLISTIC_TASK)
+        self.assertNotIn("margin", HOLISTIC_TASK.lower())
+        self.assertNotIn("openreview.net", HOLISTIC_TASK)
+        self.assertIsNone(re.search(r"(?i)\bsub\d{3,6}\b", HOLISTIC_TASK))
+        hint = _SCHEMA_HINTS["holistic"]
+        self.assertIn("predicted_mean", hint)
+        self.assertNotIn("5.5", hint)
+        self.assertNotIn("2.5", hint)
+        self.assertNotIn("8.5", hint)
+        self.assertNotIn("{", hint)
 
 
 class PoleScaleTests(unittest.TestCase):
@@ -35,38 +56,10 @@ class PoleScaleTests(unittest.TestCase):
         self.assertEqual(positions[1] - positions[0], MARGIN_MAX)
         self.assertEqual(positions[0] - LADDER_FLOOR, 1.5)
         self.assertEqual(LADDER_CEILING - positions[-1], 1.5)
-        self.assertEqual(LOCKED_CANDIDATE, "isolate-k1")
-
-    def test_prompt_text_names_one_reference_and_hides_positions(self) -> None:
         for anchor in SYNTHETIC_ANCHORS:
             text = anchor_prompt_text(anchor)
             self.assertIsNone(re.search(r"\d", text))
-            self.assertNotIn("openreview.net", text)
-            self.assertIsNone(re.search(r"(?i)\bsub\d{3,6}\b", text))
-            self.assertIn(anchor.id, text)
-            self.assertIn(anchor.text, text)
             self.assertNotIn(str(anchor.position), text)
-            task = isolated_task_text(anchor.id, decision=anchor.id == "strong-accept")
-            self.assertNotIn("2.5", task)
-            self.assertNotIn("8.5", task)
-            other = next(item for item in SYNTHETIC_ANCHORS if item.id != anchor.id)
-            self.assertNotIn(other.id, task)
-            self.assertNotIn(other.text, task)
-        weak = isolated_task_text("weak-reject", decision=False)
-        strong = isolated_task_text("strong-accept", decision=True)
-        self.assertNotIn("borderline", weak)
-        self.assertIn("borderline reject", strong)
-        self.assertNotIn("predicted_mean", strong)
-
-    def test_schema_hints_have_no_copied_score(self) -> None:
-        weak = _SCHEMA_HINTS["holistic-weak-reject"]
-        strong = _SCHEMA_HINTS["holistic-strong-accept"]
-        self.assertNotIn("rating", weak)
-        self.assertIn("rating", strong)
-        for hint in (weak, strong):
-            self.assertNotIn("5.5", hint)
-            self.assertNotIn("2.5", hint)
-            self.assertNotIn("predicted_mean", hint)
 
 
 class IsolateScoreTests(unittest.TestCase):
@@ -113,29 +106,29 @@ class IsolateScoreTests(unittest.TestCase):
             isolate_score([5.0])
 
 
-class IsolatedSchemaTests(unittest.TestCase):
-    def test_relation_aliases_canonicalize(self) -> None:
-        parsed = IsolatedComparison.model_validate(
-            {"rationale": "The gain is one a reviewer would rely on.", "relation": "Above", "margin": 4}
-        )
-        self.assertEqual(parsed.relation, "better")
-        decision = IsolatedDecision.model_validate(
+class VenueMeanSchemaTests(unittest.TestCase):
+    def test_a_venue_mean_and_a_decision_are_stored(self) -> None:
+        parsed = HolisticJudgment.model_validate(
             {
-                "rationale": "The gain is not established.",
-                "relation": "below",
-                "margin": 2,
-                "rating": 3,
+                "rationale": "The comparison shows a gain a reviewer would rely on.",
+                "rating": 4,
+                "predicted_mean": 6.4,
             }
         )
-        self.assertEqual(decision.relation, "worse")
-        self.assertEqual(decision.rating, 3)
+        self.assertEqual(parsed.rating, 4)
+        self.assertEqual(parsed.predicted_mean, 6.4)
 
-    def test_inconsistent_margin_is_rejected(self) -> None:
+    def test_a_bool_or_an_extra_key_is_rejected(self) -> None:
         with self.assertRaises(ValidationError):
-            IsolatedComparison.model_validate(
-                {"rationale": "Tied with the reference.", "relation": "tie", "margin": 1}
+            HolisticJudgment.model_validate(
+                {"rationale": "A gain.", "rating": True, "predicted_mean": 6.0}
             )
         with self.assertRaises(ValidationError):
-            IsolatedDecision.model_validate(
-                {"rationale": "Better than the reference.", "relation": "better", "margin": 0, "rating": 5}
+            HolisticJudgment.model_validate(
+                {
+                    "rationale": "A gain.",
+                    "rating": 4,
+                    "predicted_mean": 6.0,
+                    "margin": 1,
+                }
             )
