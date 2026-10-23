@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from autopaperreview.fusion import SHIPPABLE, select_variant
+from autopaperreview.fusion import DIAGNOSTIC, SHIPPABLE, selection_report
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
@@ -45,6 +45,7 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
                 "usage_totals": score.get("usage_totals") or {},
                 "holistic": score.get("holistic"),
                 "caps": score.get("caps") or [],
+                "drop_counts": score.get("drop_counts") or {},
             }
         )
     return rows
@@ -86,7 +87,15 @@ def main(argv: list[str] | None = None) -> int:
         value = (record.get("candidates") or {}).get(name)
         return None if value is None else float(value)
 
-    names: tuple[str, ...] = ("shipped",) if args.mode == "locked" else SHIPPABLE
+    if args.mode == "locked":
+        names: tuple[str, ...] = ("shipped",)
+    else:
+        present = [
+            name
+            for name in DIAGNOSTIC
+            if any((record.get("candidates") or {}).get(name) is not None for record in records)
+        ]
+        names = (*SHIPPABLE, *present)
     table = candidate_table(records, score_of, names, resamples=args.resamples)
     summary = {
         name: {
@@ -95,11 +104,19 @@ def main(argv: list[str] | None = None) -> int:
         }
         for name, row in table.items()
     }
-    chosen = None if args.mode == "locked" else select_variant(summary)
+    report = None if args.mode == "locked" else selection_report(summary)
+    chosen = None if report is None else report["chosen"]
+    tied = [] if report is None else list(report["tied"])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(
-            {"chosen": chosen, "n": len(records), "metrics": table, "rows": records},
+            {
+                "chosen": chosen,
+                "tied": tied,
+                "n": len(records),
+                "metrics": table,
+                "rows": records,
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -115,6 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     if chosen:
         print(f"selected={chosen}")
+        if len(tied) > 1:
+            print("tied=" + ",".join(str(name) for name in tied))
+    drops: dict[str, int] = {}
+    for record in records:
+        for key, count in (record.get("drop_counts") or {}).items():
+            drops[str(key)] = drops.get(str(key), 0) + int(count)
+    if drops:
+        print("drops " + " ".join(f"{key}={drops[key]}" for key in sorted(drops)))
     return 0
 
 

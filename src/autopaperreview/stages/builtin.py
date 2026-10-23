@@ -16,7 +16,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
-from ..model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS, TEXT_JUDGMENTS, judgment_prompt_fingerprint, public_base_url
+from ..model_exec import (
+    DEFAULT_MODEL_TIMEOUT_SECONDS,
+    TEXT_JUDGMENTS,
+    judgment_prompt_fingerprint,
+    public_base_url,
+    resolve_review_judgments,
+)
 from ..artifacts import artifact_from_path
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
@@ -1370,6 +1376,13 @@ class NoveltyStage(StageHandler):
         )
 
 
+def _resolved_review_judgments(params: ExecuteReviewParams) -> list[str]:
+    requested = list(params.judgments)
+    if not requested and not params.cheap:
+        requested = list(TEXT_JUDGMENTS)
+    return resolve_review_judgments(requested, cheap=params.cheap)
+
+
 class ExecuteReviewParams(ParamsModel):
     adapter: str
     fixture_path: str | None = None
@@ -1385,6 +1398,9 @@ class ExecuteReviewParams(ParamsModel):
     temperature: float = 0
     json_object: bool = True
     bilingual: bool = False
+    cheap: bool = False
+    holistic_samples: int = Field(default=3, ge=1, le=8)
+    holistic_temperature: float = Field(default=0.7, ge=0, le=2)
 
 
 class ExecuteReviewStage(StageHandler):
@@ -1404,17 +1420,27 @@ class ExecuteReviewStage(StageHandler):
         }
         if params.fixture_path:
             material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
-        if params.base_url or params.model or params.allow_remote or params.judgments or params.packet_routes:
+        if (
+            params.base_url
+            or params.model
+            or params.allow_remote
+            or params.judgments
+            or params.packet_routes
+            or params.cheap
+        ):
             material["model_execution"] = {
                 "base_url": None if params.base_url is None else public_base_url(params.base_url),
                 "model": params.model,
                 "allow_remote": params.allow_remote,
                 "api_key_env": params.api_key_env,
-                "judgments": list(params.judgments) or list(TEXT_JUDGMENTS),
+                "judgments": _resolved_review_judgments(params),
                 "packet_routes": dict(sorted(params.packet_routes.items())),
                 "temperature": params.temperature,
                 "json_object": params.json_object,
                 "bilingual": params.bilingual,
+                "cheap": params.cheap,
+                "holistic_samples": params.holistic_samples,
+                "holistic_temperature": params.holistic_temperature,
             }
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
@@ -1467,12 +1493,15 @@ class ExecuteReviewStage(StageHandler):
                 "model": params.model,
                 "api_key_env": params.api_key_env,
                 "allow_remote": params.allow_remote,
-                "judgments": list(params.judgments),
+                "judgments": _resolved_review_judgments(params),
                 "packet_routes": dict(params.packet_routes),
                 "timeout_seconds": params.timeout_seconds,
                 "temperature": params.temperature,
                 "json_object": params.json_object,
                 "bilingual": params.bilingual,
+                "cheap": params.cheap,
+                "holistic_samples": params.holistic_samples,
+                "holistic_temperature": params.holistic_temperature,
                 "stage_signature": (
                     context.manifest.stage(context.stage.id).signature
                     if context.manifest.stage(context.stage.id) is not None

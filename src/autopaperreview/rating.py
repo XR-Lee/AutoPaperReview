@@ -241,55 +241,71 @@ def rate_venue(
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
-    comparison = _read_related_work_comparison(package)
-    bands = _bands(package)
-    caps = active_caps(package)
-    _apply_ceilings(bands, package, caps)
-    # math.fsum, not sum(). CPython 3.11 adds these products left to right, so a
-    # uniform 6 is 5.999999999999998 and snap_down returns 5 (a uniform 3
-    # becomes 2.999999999999999 and returns 1). 3.12+ sum() uses Neumaier
-    # summation and stays on the bin. fsum matches that result on 3.11/3.12/3.13.
-    weighted = math.fsum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
-    gate = min(
-        bands[SarDimension.claims_supported],
-        bands[SarDimension.experimental_soundness],
-    )
-    raw = min(weighted, gate + 1.0)
-    venue_cap = effective_venue_cap(caps)
-    capped = raw if venue_cap is None else min(raw, float(venue_cap))
-    venue = snap_down(capped)
     from .fusion import FUSION_COEFFICIENT_SET, FUSION_VARIANT, RankSignals, candidate_scores
 
     chosen = coefficient_set or COEFFICIENT_SET
     if chosen not in {COEFFICIENT_SET, FUSION_COEFFICIENT_SET}:
         raise ValueError(f"unknown coefficient set {chosen}")
+    comparison = _read_related_work_comparison(package)
+    caps = active_caps(package)
+    venue_cap = effective_venue_cap(caps)
+    bands = None
+    if not (chosen == FUSION_COEFFICIENT_SET and not package.dimension_scores):
+        bands = _bands(package)
+        _apply_ceilings(bands, package, caps)
+    # math.fsum, not sum(). CPython 3.11 adds these products left to right, so a
+    # uniform 6 is 5.999999999999998 and snap_down returns 5 (a uniform 3
+    # becomes 2.999999999999999 and returns 1). 3.12+ sum() uses Neumaier
+    # summation and stays on the bin. fsum matches that result on 3.11/3.12/3.13.
+    if bands is None:
+        weighted = 0.0
+        gate = 0.0
+        raw = 0.0
+        capped = 0.0
+        band_mean = 0.0
+        claims = 0.0
+        soundness = 0.0
+    else:
+        weighted = math.fsum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
+        gate = min(
+            bands[SarDimension.claims_supported],
+            bands[SarDimension.experimental_soundness],
+        )
+        raw = min(weighted, gate + 1.0)
+        capped = raw if venue_cap is None else min(raw, float(venue_cap))
+        band_mean = sum(bands.values()) / len(bands)
+        claims = bands[SarDimension.claims_supported]
+        soundness = bands[SarDimension.experimental_soundness]
+    venue = snap_down(capped) if bands is not None else 1
     signals = RankSignals(
         weighted=weighted,
         gate=gate,
-        claims=bands[SarDimension.claims_supported],
-        soundness=bands[SarDimension.experimental_soundness],
-        band_mean=sum(bands.values()) / len(bands),
+        claims=claims,
+        soundness=soundness,
+        band_mean=band_mean,
         venue_cap=venue_cap,
         holistic=_holistic_rating(package),
+        bands_available=bands is not None,
     )
     candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
     if chosen == FUSION_COEFFICIENT_SET:
         if FUSION_VARIANT not in candidates:
-            raise ValueError(f"unknown fusion variant {FUSION_VARIANT}")
+            raise ValueError(
+                "apr-fusion-v1 requires a holistic rating; refusing to fall back to dimension bands"
+            )
         rank_score = round(_clamp_rank(candidates[FUSION_VARIANT]), 4)
         venue = snap_down(rank_score)
         reported = rank_score
         notes = (
-            "apr-fusion-v1 blends a verified holistic ICLR rating with the dimension term. "
-            "The dimension term keeps min(weighted, min(claims, soundness) + 1). "
-            "A verified fatal cap ceilings the rank. "
-            "The weakest-link ceiling also binds the blend when both critical bands are 4 or below. "
+            "apr-fusion-v1 ranks by the mean of the holistic samples on a 1.0-10.0 scale. "
+            "A verified venue cap is a downward adjustment and nothing else. "
+            "Dimension bands are not a gate. A missing holistic rating fails the paper. "
             "It is not a fitted regression. venue_bin is snap_down of the rank score."
         )
         formula = (
             f"rank = {FUSION_VARIANT}; "
-            "band = min(dot(weights, bands), min(claims, soundness) + 1); "
-            "verified caps ceiling the rank; "
+            "rank = mean(holistic samples); "
+            "a verified venue cap may only lower the rank; "
             "venue_bin = snap_down(rank)"
         )
     else:
@@ -334,7 +350,9 @@ def rate_venue(
             for item in caps
         ],
         "exemption_ids": exemption_ids,
-        "bands_after_ceiling": {dimension.value: bands[dimension] for dimension in bands},
+        "bands_after_ceiling": (
+            {} if bands is None else {dimension.value: bands[dimension] for dimension in bands}
+        ),
         "visual_status": visual_status,
         "related_work_comparison": (
             None

@@ -205,6 +205,8 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
         allow_remote=args.allow_remote,
         coefficient_set=args.coefficient_set,
         with_holistic=args.with_holistic,
+        cheap=args.cheap,
+        holistic_samples=args.holistic_samples,
         only_ids=_load_only_ids(args.only_ids, args.split),
     )
     if result["awaiting_judgment"]:
@@ -564,6 +566,12 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--requires-network", action="store_true")
     eval_run.add_argument("--coefficient-set", default="apr-iclr-cap-v2")
     eval_run.add_argument("--with-holistic", action="store_true")
+    eval_run.add_argument(
+        "--cheap",
+        action="store_true",
+        help="holistic samples only; skip contributions, ledger, dimensions, and fatal",
+    )
+    eval_run.add_argument("--holistic-samples", type=int, default=3)
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")
     eval_run.set_defaults(func=command_calibrate_eval_run)

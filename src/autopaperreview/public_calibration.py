@@ -1062,6 +1062,8 @@ def _write_project(
     allow_remote: bool = False,
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
+    cheap: bool = False,
+    holistic_samples: int = 3,
 ) -> None:
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
@@ -1128,25 +1130,36 @@ def _write_project(
             review_params.append(f"model = {_toml_string(model)}")
             review_params.append(f"api_key_env = {_toml_string(api_key_env)}")
             review_params.append(f"allow_remote = {'true' if allow_remote else 'false'}")
-            judgment_names = ["contributions", "ledger", "dimensions", "fatal"]
-            if with_holistic:
-                judgment_names.append("holistic")
+            from .rubrics import FUSION_COEFFICIENT_SET
+
+            include_holistic = with_holistic or cheap or coefficient_set == FUSION_COEFFICIENT_SET
+            if cheap:
+                judgment_names = ["holistic"]
+            else:
+                judgment_names = ["contributions", "ledger", "dimensions", "fatal"]
+                if include_holistic:
+                    judgment_names.append("holistic")
             review_params.append("judgments = [" + ", ".join(f'"{item}"' for item in judgment_names) + "]")
+            if cheap:
+                review_params.append("cheap = true")
+            if include_holistic:
+                review_params.append(f"holistic_samples = {int(holistic_samples)}")
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
         if adapter == MODEL_ADAPTER:
-            review_params.extend(
-                [
-                    "",
-                    "[stages.params.packet_routes]",
+            if cheap:
+                route_lines = ['holistic = "M0"']
+            else:
+                route_lines = [
                     'contributions = "M0"',
                     'ledger = "M0"',
                     'dimensions = "M2"',
                     'fatal = "M2"',
-                    *(['holistic = "M0"'] if with_holistic else []),
                 ]
-            )
+                if include_holistic:
+                    route_lines.append('holistic = "M0"')
+            review_params.extend(["", "[stages.params.packet_routes]", *route_lines])
         review_params.append("")
         related_params = [
             "[[stages]]",
@@ -1295,6 +1308,8 @@ def run_cache(
     allow_remote: bool = False,
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
+    cheap: bool = False,
+    holistic_samples: int = 3,
     only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -1302,6 +1317,8 @@ def run_cache(
     cache = assert_local_only(cache, root=root)
     if related_work not in {"off", "agent", "live"}:
         raise PublicCalibrationError("related_work must be off, agent, or live")
+    if holistic_samples < 1 or holistic_samples > 8:
+        raise PublicCalibrationError("holistic_samples must be an integer from 1 to 8")
     spec = _resolve_adapter(mode, adapter)
     if spec == MODEL_ADAPTER and (not base_url or not model):
         raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
@@ -1355,6 +1372,8 @@ def run_cache(
                 allow_remote=allow_remote,
                 coefficient_set=coefficient_set,
                 with_holistic=with_holistic,
+                cheap=cheap,
+                holistic_samples=holistic_samples,
             )
             manifest = run_pipeline(project / "review.toml")
             package_path = project / ".runs" / manifest.run_id / "stages" / "rate" / "package.json"
@@ -1386,6 +1405,9 @@ def run_cache(
                 "capped": metadata.get("capped"),
                 "holistic": metadata.get("holistic"),
                 "candidates": metadata.get("candidates") or {},
+                "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})
+                if review_stage is not None
+                else {},
                 "fusion_variant": metadata.get("fusion_variant"),
                 "dimensions": dimension_scores,
                 "bands_after_ceiling": metadata.get("bands_after_ceiling") or {},

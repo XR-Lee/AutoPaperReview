@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from autopaperreview.fusion import RankSignals, candidate_scores, select_variant
+from autopaperreview.fusion import SHIPPABLE, RankSignals, candidate_scores, select_variant, selection_report
 from autopaperreview.model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from autopaperreview.models import FatalClass
 from autopaperreview.public_calibration import strip_venue_status_lines
@@ -15,71 +15,75 @@ from autopaperreview.stages.builtin import ExecuteReviewParams
 from tests.test_rating import _all, _fatal, _package
 
 
+def _with_holistic(package, rating: float):
+    return package.model_copy(update={"metadata": {"holistic_rating": {"rating": rating, "verified": True}}})
+
+
 class FusionFormulaTests(unittest.TestCase):
-    def test_one_low_band_does_not_flatten_the_holistic_signal(self) -> None:
-        package = _package("soft", _all(8))
-        package = package.model_copy(
+    def test_saturated_soundness_does_not_flatten_the_holistic_rank(self) -> None:
+        package = _with_holistic(
+            _package("soft", {**_all(8), "soundness": 4, "claims": 2}),
+            9,
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.value, 9)
+        self.assertEqual(scored.metadata["venue_bin"], 8)
+        self.assertEqual(scored.metadata["candidates"]["holistic"], 9)
+        self.assertEqual(scored.metadata["candidates"]["holistic-capped"], 9)
+        self.assertLess(scored.metadata["candidates"]["band-continuous"], 5)
+        self.assertEqual(scored.coefficient_set, FUSION_COEFFICIENT_SET)
+
+    def test_verified_cap_is_the_only_downward_adjustment(self) -> None:
+        package = _with_holistic(
+            _package("capped", _all(8), issues=[_fatal("I-leak", FatalClass.leakage)]),
+            9,
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.value, 3)
+        self.assertEqual(scored.metadata["venue_bin"], 3)
+        self.assertEqual(scored.metadata["candidates"]["holistic"], 9)
+        self.assertEqual(scored.metadata["candidates"]["holistic-capped"], 3)
+
+    def test_missing_holistic_rating_fails_instead_of_using_bands(self) -> None:
+        package = _package("missing", {**_all(8), "soundness": 4})
+        with self.assertRaises(ValueError) as caught:
+            rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertIn("holistic", str(caught.exception))
+
+    def test_cheap_package_ranks_without_dimension_bands(self) -> None:
+        package = _package("cheap", _all(8)).model_copy(
             update={
-                "dimension_scores": _package(
-                    "soft",
-                    {**_all(8), "soundness": 4},
-                ).dimension_scores,
-                "metadata": {"holistic_rating": {"rating": 9, "verified": True}},
+                "dimension_scores": [],
+                "metadata": {"holistic_rating": {"rating": 7.5, "verified": True, "samples": [7, 8, 7.5]}},
             }
         )
         scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
-        self.assertGreater(scored.value, 5)
-        self.assertLess(scored.value, 9)
-        self.assertEqual(scored.metadata["venue_bin"], 6)
-        self.assertEqual(scored.coefficient_set, FUSION_COEFFICIENT_SET)
-
-    def test_both_critical_bands_low_restore_the_weakest_link(self) -> None:
-        package = _package("both", {**_all(8), "claims": 4, "soundness": 4})
-        package = package.model_copy(
-            update={"metadata": {"holistic_rating": {"rating": 9, "verified": True}}}
-        )
-        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
-        self.assertLessEqual(scored.value, scored.metadata["gate"] + 1)
-
-    def test_verified_cap_ceilings_the_blend(self) -> None:
-        package = _package("capped", _all(8), issues=[_fatal("I-leak", FatalClass.leakage)])
-        package = package.model_copy(
-            update={"metadata": {"holistic_rating": {"rating": 9, "verified": True}}}
-        )
-        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
-        self.assertLessEqual(scored.value, 3)
-        self.assertEqual(scored.metadata["venue_bin"], 3)
+        self.assertEqual(scored.value, 7.5)
+        self.assertNotIn("band-continuous", scored.metadata["candidates"])
 
     def test_cap_v2_value_stays_the_integer_bin(self) -> None:
         scored = rate_venue(_package("high", _all(8)))
         self.assertEqual(scored.value, 8)
         self.assertEqual(scored.metadata["venue_bin"], 8)
 
-    def test_selector_keeps_the_dimension_term_inside_a_small_gap(self) -> None:
+    def test_exact_tie_uses_declared_priority_not_list_order(self) -> None:
+        self.assertEqual(SHIPPABLE[0], "holistic-capped")
         metrics = {
-            "band-continuous": {"spearman": 0.70, "auc": 0.80},
-            "blend-60-gated": {"spearman": 0.71, "auc": 0.81},
-            "band-bin": {"spearman": 0.20, "auc": 0.55},
-            "mean-gated": {"spearman": 0.40, "auc": 0.60},
-            "holistic-gated": {"spearman": 0.50, "auc": 0.60},
-            "blend-50-gated": {"spearman": 0.60, "auc": 0.70},
-            "blend-70-gated": {"spearman": 0.69, "auc": 0.79},
-            "blend-60-hardgate": {"spearman": 0.30, "auc": 0.50},
+            "holistic": {"spearman": 0.50, "auc": 0.60},
+            "holistic-capped": {"spearman": 0.50, "auc": 0.60},
         }
-        self.assertEqual(select_variant(metrics), "band-continuous")
+        report = selection_report(metrics)
+        self.assertEqual(report["chosen"], "holistic")
+        self.assertEqual(report["tied"], ["holistic", "holistic-capped"])
+        self.assertEqual(select_variant(metrics), "holistic")
 
-    def test_selector_takes_a_real_gain(self) -> None:
+    def test_selector_takes_the_higher_spearman(self) -> None:
         metrics = {
-            "band-continuous": {"spearman": 0.40, "auc": 0.70},
-            "blend-60-gated": {"spearman": 0.72, "auc": 0.78},
-            "band-bin": {"spearman": 0.10, "auc": 0.50},
-            "mean-gated": {"spearman": 0.40, "auc": 0.60},
-            "holistic-gated": {"spearman": 0.55, "auc": 0.62},
-            "blend-50-gated": {"spearman": 0.60, "auc": 0.74},
-            "blend-70-gated": {"spearman": 0.68, "auc": 0.76},
-            "blend-60-hardgate": {"spearman": 0.42, "auc": 0.71},
+            "holistic": {"spearman": 0.40, "auc": 0.90},
+            "holistic-capped": {"spearman": 0.72, "auc": 0.70},
         }
-        self.assertEqual(select_variant(metrics), "blend-60-gated")
+        self.assertEqual(select_variant(metrics), "holistic-capped")
+        self.assertEqual(selection_report(metrics)["tied"], ["holistic-capped"])
 
 
 class RankMetricTests(unittest.TestCase):
@@ -113,16 +117,38 @@ class HarnessConstraintTests(unittest.TestCase):
         self.assertNotIn("Published as", stripped)
         self.assertIn("Synthetic cohort result holds.", stripped)
 
-    def test_candidate_map_names_the_shipped_blend(self) -> None:
+    def test_candidate_map_keeps_the_holistic_rank_above_a_diagnostic_band(self) -> None:
         signals = RankSignals(
             weighted=6.0,
-            gate=6.0,
-            claims=6.0,
-            soundness=6.0,
+            gate=4.0,
+            claims=4.0,
+            soundness=4.0,
             band_mean=6.0,
             venue_cap=None,
             holistic=8.0,
         )
         scores = candidate_scores(signals)
-        self.assertIn("blend-60-gated", scores)
-        self.assertGreater(scores["blend-60-gated"], scores["band-continuous"])
+        self.assertEqual(scores["holistic"], 8.0)
+        self.assertEqual(scores["holistic-capped"], 8.0)
+        self.assertLess(scores["band-continuous"], scores["holistic"])
+        self.assertNotIn("blend-60-gated", scores)
+
+    def test_missing_holistic_omits_shippable_scores(self) -> None:
+        signals = RankSignals(
+            weighted=6.0,
+            gate=4.0,
+            claims=4.0,
+            soundness=4.0,
+            band_mean=6.0,
+            venue_cap=None,
+            holistic=None,
+        )
+        scores = candidate_scores(signals)
+        self.assertNotIn("holistic", scores)
+        self.assertNotIn("holistic-capped", scores)
+        self.assertIn("band-continuous", scores)
+
+    def test_holistic_sample_count_defaults_to_three(self) -> None:
+        params = ExecuteReviewParams(adapter="autopaperreview.model_exec:OpenAICompatibleAdapter")
+        self.assertEqual(params.holistic_samples, 3)
+        self.assertTrue(params.cheap is False)

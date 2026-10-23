@@ -1,12 +1,13 @@
 """Declared rank signals. Not a fitted regression.
 
-The dimension formula stays ``min(weighted, min(claims, soundness) + 1)`` with
-verified fatal caps. A holistic rating is a second signal. Blends let that
-rating move the rank. The weakest-link ceiling still binds the blend when both
-critical bands are low, or whenever a verified venue cap is active.
+apr-fusion-v1 ranks by the holistic rating. A verified venue cap is the only
+downward adjustment. Dimension bands stay on the package as diagnostics. They
+do not gate this rank: a saturated soundness clause must not flatten every
+paper onto one score.
 
-Weights and the candidate list are fixed in this module. A tune-slice comparison
-may choose one candidate. It does not estimate a coefficient.
+apr-iclr-cap-v2 is unchanged and still uses its own weakest-link gate. It is
+not a fusion candidate. A missing holistic rating is not filled in from the
+dimension term.
 """
 
 from __future__ import annotations
@@ -15,11 +16,40 @@ from dataclasses import dataclass
 
 from .rubrics import FUSION_COEFFICIENT_SET
 
-__all__ = ["FUSION_COEFFICIENT_SET"]
-# Locked after the tune-slice comparison. The selector may replace this name.
-FUSION_VARIANT = "blend-60-gated"
+__all__ = [
+    "FUSION_COEFFICIENT_SET",
+    "FUSION_VARIANT",
+    "SHIPPABLE",
+    "RankSignals",
+    "candidate_scores",
+    "DIAGNOSTIC",
+    "select_variant",
+    "selection_report",
+]
 
-HOLISTIC_WEIGHTS = (0.5, 0.6, 0.7)
+# Pre-registered until a tune-slice comparison locks a different shippable name.
+FUSION_VARIANT = "holistic-capped"
+
+# Exact metric ties break by this priority, then by name. List order is not a vote.
+# A smaller number is the simpler candidate.
+TIE_PRIORITY = {
+    "holistic": 0,
+    "holistic-capped": 1,
+}
+
+# holistic-capped is listed first on purpose. An exact tie must still return
+# holistic, which is the simpler signal, so selection is not list order.
+SHIPPABLE = (
+    "holistic-capped",
+    "holistic",
+)
+
+# Printed by rank_eval and never selected. They show whether dimension bands still move.
+DIAGNOSTIC = (
+    "band-continuous",
+    "band-bin",
+    "mean-gated",
+)
 
 
 @dataclass(frozen=True)
@@ -33,10 +63,11 @@ class RankSignals:
     band_mean: float
     venue_cap: int | None
     holistic: float | None
+    bands_available: bool = True
 
 
 def band_term(signals: RankSignals) -> float:
-    """Existing weakest-link term, before the venue cap."""
+    """Diagnostic weakest-link term. Not the fusion rank."""
     return min(signals.weighted, signals.gate + 1.0)
 
 
@@ -46,91 +77,60 @@ def _with_cap(value: float, venue_cap: int | None) -> float:
     return min(value, float(venue_cap))
 
 
-def corroborated_low(signals: RankSignals) -> bool:
-    """Both critical bands are in the bottom two clauses.
+def _diagnostics(signals: RankSignals) -> dict[str, float]:
+    from .rating import snap_down
 
-    One stuck soundness clause does not by itself flatten a second signal.
-    Both critical bands at 2 or 4, or a verified venue cap, does.
-    """
-    return signals.claims <= 4.0 and signals.soundness <= 4.0
-
-
-def _finish(value: float, signals: RankSignals, *, hard_gate: bool) -> float:
-    rank = value
-    if hard_gate or corroborated_low(signals) or signals.venue_cap is not None:
-        rank = min(rank, signals.gate + 1.0)
-    return _with_cap(rank, signals.venue_cap)
-
-
-def band_continuous(signals: RankSignals) -> float:
-    return _with_cap(band_term(signals), signals.venue_cap)
-
-
-def mean_gated(signals: RankSignals) -> float:
-    return _with_cap(min(signals.band_mean, signals.gate + 1.0), signals.venue_cap)
-
-
-def _blend(signals: RankSignals, holistic_weight: float, *, hard_gate: bool) -> float:
-    band = band_term(signals)
-    if signals.holistic is None:
-        mixed = band
-    else:
-        mixed = holistic_weight * signals.holistic + (1.0 - holistic_weight) * band
-    return _finish(mixed, signals, hard_gate=hard_gate)
+    if not signals.bands_available:
+        return {}
+    continuous = _with_cap(band_term(signals), signals.venue_cap)
+    mean_gated = _with_cap(min(signals.band_mean, signals.gate + 1.0), signals.venue_cap)
+    return {
+        "band-bin": float(snap_down(continuous)),
+        "band-continuous": continuous,
+        "mean-gated": mean_gated,
+        "precap-weighted": signals.weighted,
+        "band-mean": signals.band_mean,
+    }
 
 
 def candidate_scores(signals: RankSignals) -> dict[str, float]:
-    """Every declared candidate, including diagnostics that the selector will not ship."""
-    from .rating import snap_down
+    """Shippable ranks plus diagnostic dimension terms.
 
-    scores = {
-        "band-bin": float(snap_down(band_continuous(signals))),
-        "band-continuous": band_continuous(signals),
-        "mean-gated": mean_gated(signals),
-        "holistic-gated": _blend(signals, 1.0, hard_gate=True),
-        "precap-weighted": signals.weighted,
-        "band-mean": signals.band_mean,
-        "holistic-only": signals.holistic if signals.holistic is not None else band_continuous(signals),
-    }
-    for weight in HOLISTIC_WEIGHTS:
-        label = f"blend-{int(weight * 100)}-gated"
-        scores[label] = _blend(signals, weight, hard_gate=False)
-    scores["blend-60-hardgate"] = _blend(signals, 0.6, hard_gate=True)
+    Shippable keys are omitted when the holistic rating is missing. Callers
+    must fail that paper. They must not substitute a dimension score.
+    """
+    scores = _diagnostics(signals)
+    if signals.holistic is None:
+        return scores
+    scores["holistic"] = signals.holistic
+    scores["holistic-capped"] = _with_cap(signals.holistic, signals.venue_cap)
     return scores
 
 
-# The gate or a verified cap is part of each of these. Diagnostics are not.
-SHIPPABLE = (
-    "band-bin",
-    "band-continuous",
-    "mean-gated",
-    "holistic-gated",
-    "blend-50-gated",
-    "blend-60-gated",
-    "blend-70-gated",
-    "blend-60-hardgate",
-)
+def _metric_key(metrics: dict[str, dict[str, float | None]], name: str) -> tuple[float, float]:
+    row = metrics.get(name) or {}
+    spearman = row.get("spearman")
+    auc = row.get("auc")
+    return (
+        float(spearman) if isinstance(spearman, (int, float)) else -1.0,
+        float(auc) if isinstance(auc, (int, float)) else -1.0,
+    )
+
+
+def selection_report(metrics: dict[str, dict[str, float | None]]) -> dict[str, object]:
+    """Tune-slice selection: highest Spearman, then highest AUC.
+
+    Exact equality is a tie. The tie breaks by ``TIE_PRIORITY`` (simpler
+    candidate first), then by name. The returned ``tied`` list is every
+    shippable name with that same Spearman and AUC, so a tie is visible.
+    """
+    best = max(_metric_key(metrics, name) for name in SHIPPABLE)
+    tied = [name for name in SHIPPABLE if _metric_key(metrics, name) == best]
+    ordered = sorted(tied, key=lambda name: (TIE_PRIORITY.get(name, 99), name))
+    return {"chosen": ordered[0], "tied": ordered}
 
 
 def select_variant(metrics: dict[str, dict[str, float | None]]) -> str:
-    """Pick a shippable candidate from tune-slice metrics.
-
-    Highest Spearman, then highest AUC. ``band-continuous`` wins a tie inside
-    0.02 on both, so a noisy blend does not replace the dimension formula.
-    """
-
-    def sort_key(name: str) -> tuple[float, float]:
-        row = metrics.get(name) or {}
-        spearman = row.get("spearman")
-        auc = row.get("auc")
-        return (
-            float(spearman) if isinstance(spearman, (int, float)) else -1.0,
-            float(auc) if isinstance(auc, (int, float)) else -1.0,
-        )
-
-    best = max(SHIPPABLE, key=sort_key)
-    base = sort_key("band-continuous")
-    top = sort_key(best)
-    if best != "band-continuous" and top[0] - base[0] < 0.02 and top[1] - base[1] < 0.02:
-        return "band-continuous"
-    return best
+    chosen = selection_report(metrics)["chosen"]
+    assert isinstance(chosen, str)
+    return chosen

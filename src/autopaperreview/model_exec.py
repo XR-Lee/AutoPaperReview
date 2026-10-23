@@ -6,7 +6,8 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. An optional `holistic` judgment adds one ICLR rating.
+fatal classification. An optional `holistic` judgment adds K samples of one
+1.0–10.0 rating. The mean is the rating. Excerpts on that rating are optional.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -30,8 +31,10 @@ import json
 import os
 import socket
 import time
+import unicodedata
 import urllib.error
 import urllib.request
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -209,10 +212,12 @@ class FatalVerifyJudgment(StrictPayload):
 
 
 class HolisticJudgment(StrictPayload):
-    rating: int = Field(ge=1, le=10)
-    strength_excerpt: str = Field(min_length=1)
-    weakness_excerpt: str = Field(min_length=1)
+    """One sample of the overall rating. Excerpts are optional and post-hoc."""
+
+    rating: float = Field(ge=1, le=10)
     rationale: str = Field(min_length=1)
+    strength_excerpt: str = ""
+    weakness_excerpt: str = ""
 
 
 class VisualJudgment(StrictPayload):
@@ -340,11 +345,11 @@ _SCHEMA_HINTS = {
         "One verdict per issue in the user message."
     ),
     "holistic": (
-        '{"rating":6,"strength_excerpt":"copied passage","weakness_excerpt":"copied passage",'
-        '"rationale":"..."} '
-        "rating is an integer from 1 to 10 on the ICLR review scale: "
-        "1 strong reject, 3 reject, 5 marginally below, 6 marginally above, 8 accept, 10 strong accept. "
-        "2, 4, 7, and 9 are allowed between those anchors. Do not default to 3, 5, or 6."
+        '{"rating":6.5,"rationale":"...","strength_excerpt":"","weakness_excerpt":""} '
+        "rating is a number from 1.0 to 10.0. One decimal place is allowed. "
+        "1-2 strong reject, 3-4 reject, 5 borderline reject, 6 borderline accept, "
+        "7-8 accept, 9-10 strong accept. Do not use 4 or 5 as a default. "
+        "strength_excerpt and weakness_excerpt are optional and may be empty."
     ),
     "visual": (
         '{"findings":[{"id":"V1","page":1,"bbox":[0,0,1,1],'
@@ -500,35 +505,140 @@ def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes
         return response.read()
 
 
-def _collapse_whitespace(text: str) -> tuple[str, list[int]]:
-    """Collapse each whitespace run to one space. Origins point at the source characters."""
+# Below this similarity, a fuzzy window is a different sentence and is dropped.
+EXCERPT_FUZZY_THRESHOLD = 0.90
+EXCERPT_FUZZY_MIN_CHARS = 24
+
+_DASH_TRANSLATION = str.maketrans(
+    {
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2015": "-",
+        "\u2212": "-",
+    }
+)
+_QUOTE_TRANSLATION = str.maketrans(
+    {
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u00ab": '"',
+        "\u00bb": '"',
+    }
+)
+_LIGATURES = {
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+}
+
+
+def _normalize_with_origins(text: str) -> tuple[str, list[int]]:
+    """NFKC, ligatures, line-break hyphens, and collapsed whitespace.
+
+    Each output character keeps the index of the source character it came from.
+    A dropped soft hyphen or a hyphen at a line break has no output character.
+    """
+    raw = text.translate(_DASH_TRANSLATION).translate(_QUOTE_TRANSLATION)
+    expanded: list[str] = []
+    expanded_origins: list[int] = []
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if char == "-" and index + 1 < len(raw):
+            cursor = index + 1
+            while cursor < len(raw) and raw[cursor].isspace():
+                cursor += 1
+            if cursor > index + 1 and cursor < len(raw) and raw[cursor].isalpha():
+                index = cursor
+                continue
+        if char == "\u00ad":
+            index += 1
+            continue
+        piece = _LIGATURES.get(char) or unicodedata.normalize("NFKC", char)
+        for out_char in piece:
+            expanded.append(out_char)
+            expanded_origins.append(index)
+        index += 1
     chars: list[str] = []
     origins: list[int] = []
     pending: int | None = None
-    for index, char in enumerate(text):
+    for char, origin in zip(expanded, expanded_origins):
         if char.isspace():
             if chars and pending is None:
-                pending = index
+                pending = origin
             continue
         if pending is not None:
             chars.append(" ")
             origins.append(pending)
             pending = None
         chars.append(char)
-        origins.append(index)
+        origins.append(origin)
     return "".join(chars), origins
 
 
-def _whitespace_span(needle: str, source: str) -> tuple[int, int] | None:
-    collapsed_needle, _origins = _collapse_whitespace(needle.strip())
-    collapsed_source, origins = _collapse_whitespace(source)
-    if not collapsed_needle or not origins:
+def _fuzzy_normalized_span(
+    needle: str,
+    source: str,
+    origins: list[int],
+) -> tuple[int, int] | None:
+    if len(needle) < EXCERPT_FUZZY_MIN_CHARS:
         return None
-    start = collapsed_source.find(collapsed_needle)
-    if start < 0:
+    needle_words = needle.split(" ")
+    if len(needle_words) < 4:
         return None
-    end = start + len(collapsed_needle)
+    words: list[tuple[str, int, int]] = []
+    cursor = 0
+    for part in source.split(" "):
+        if not part:
+            continue
+        start = source.find(part, cursor)
+        words.append((part, start, start + len(part)))
+        cursor = start + len(part)
+    width = len(needle_words)
+    best: tuple[float, int, int] | None = None
+    for size in range(max(4, width - 1), width + 2):
+        if size > len(words):
+            continue
+        for offset in range(len(words) - size + 1):
+            window = " ".join(word for word, _start, _end in words[offset : offset + size])
+            ratio = SequenceMatcher(None, needle, window).ratio()
+            if ratio < EXCERPT_FUZZY_THRESHOLD:
+                continue
+            span = (words[offset][1], words[offset + size - 1][2])
+            if best is None or ratio > best[0] or (ratio == best[0] and span[0] < best[1]):
+                best = (ratio, span[0], span[1])
+    if best is None:
+        return None
+    start, end = best[1], best[2]
+    if end <= start or end > len(origins):
+        return None
     return origins[start], origins[end - 1] + 1
+
+
+def _resolve_span(excerpt: str, source: str) -> tuple[int, int, bool] | None:
+    """Return source offsets and whether the excerpt was an exact substring."""
+    if excerpt in source:
+        start = source.find(excerpt)
+        return start, start + len(excerpt), True
+    needle, _needle_origins = _normalize_with_origins(excerpt.strip())
+    normalized, origins = _normalize_with_origins(source)
+    if needle and needle in normalized and origins:
+        start = normalized.find(needle)
+        end = start + len(needle)
+        return origins[start], origins[end - 1] + 1, False
+    fuzzy = _fuzzy_normalized_span(needle, normalized, origins)
+    if fuzzy is None:
+        return None
+    return fuzzy[0], fuzzy[1], False
 
 
 def locate_excerpt(
@@ -538,28 +648,19 @@ def locate_excerpt(
     manuscript_sha: str,
     snapshots: list[Any],
 ) -> Anchor | None:
-    """Resolve an excerpt. Exact match wins; otherwise whitespace runs may differ.
+    """Resolve an excerpt against the manuscript, then retrieved snapshots.
 
-    The stored excerpt is the manuscript or snapshot span, so later checks see
-    the source text rather than the model's line breaks.
+    Exact text wins. Otherwise the matcher normalizes Unicode, ligatures,
+    line-break hyphenation, and whitespace, then accepts a fuzzy word window
+    at or above ``EXCERPT_FUZZY_THRESHOLD``. The stored excerpt is the source
+    span, so later checks see the manuscript rather than the model's line breaks.
     """
     if not excerpt or not excerpt.strip():
         return None
-    if excerpt in manuscript:
-        start = manuscript.find(excerpt)
-        return Anchor(
-            kind=AnchorKind.text_offset,
-            display=f"manuscript[{start}:{start + len(excerpt)}]",
-            artifact_sha256=manuscript_sha,
-            encoding="utf-8",
-            start=start,
-            end=start + len(excerpt),
-            excerpt=excerpt,
-        )
-    span = _whitespace_span(excerpt, manuscript)
+    span = _resolve_span(excerpt, manuscript)
     if span is not None:
-        start, end = span
-        canonical = manuscript[start:end]
+        start, end, exact = span
+        canonical = excerpt if exact else manuscript[start:end]
         return Anchor(
             kind=AnchorKind.text_offset,
             display=f"manuscript[{start}:{end}]",
@@ -571,24 +672,16 @@ def locate_excerpt(
         )
     for snapshot in snapshots:
         body = getattr(snapshot, "excerpt", None) or ""
-        if excerpt in body:
-            return Anchor(
-                kind=AnchorKind.external_snapshot,
-                display=snapshot.id,
-                snapshot_id=snapshot.id,
-                artifact_sha256=snapshot.sha256,
-                excerpt=excerpt,
-            )
-        span = _whitespace_span(excerpt, body)
+        span = _resolve_span(excerpt, body)
         if span is None:
             continue
-        start, end = span
+        start, end, exact = span
         return Anchor(
             kind=AnchorKind.external_snapshot,
             display=snapshot.id,
             snapshot_id=snapshot.id,
             artifact_sha256=snapshot.sha256,
-            excerpt=body[start:end],
+            excerpt=excerpt if exact else body[start:end],
         )
     return None
 
@@ -734,11 +827,22 @@ class ModelSession:
             "result_cache": "stage_signature",
             "model_exchanges": list(self.exchanges),
             "rejected_count": len(self.rejected),
+            "drop_counts": _drop_counts(self.rejected),
             "usage_totals": dict(self.usage_totals),
         }
 
-    def reject(self, judgment: str, item_id: str, reason: str) -> None:
-        self.rejected.append({"judgment": judgment, "id": item_id, "reason": reason})
+    def reject(
+        self,
+        judgment: str,
+        item_id: str,
+        reason: str,
+        *,
+        category: str | None = None,
+    ) -> None:
+        row = {"judgment": judgment, "id": item_id, "reason": reason}
+        if category:
+            row["category"] = category
+        self.rejected.append(row)
 
     def write_index(self) -> None:
         directory = self.scratch / "model"
@@ -773,13 +877,19 @@ class ModelSession:
         schema: type[BaseModel],
         *,
         context: dict[str, Any] | None = None,
+        temperature: float | None = None,
     ) -> BaseModel:
         self.authorize()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _system_prompt(_schema_key(judgment))},
             {"role": "user", "content": user_content},
         ]
-        text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
+        text = self._exchange(
+            judgment,
+            messages,
+            attempt=self._next_attempt(judgment),
+            temperature=temperature,
+        )
         try:
             model = schema.model_validate(_parse_object(text), context=context)
         except (ValueError, ValidationError) as first_error:
@@ -794,7 +904,12 @@ class ModelSession:
                     ),
                 },
             ]
-            text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
+            text = self._exchange(
+                judgment,
+                messages,
+                attempt=self._next_attempt(judgment),
+                temperature=temperature,
+            )
             try:
                 model = schema.model_validate(_parse_object(text), context=context)
             except (ValueError, ValidationError) as second_error:
@@ -837,11 +952,18 @@ class ModelSession:
         self._last_text = text
         return model
 
-    def _exchange(self, judgment: str, messages: list[dict[str, Any]], *, attempt: int) -> str:
+    def _exchange(
+        self,
+        judgment: str,
+        messages: list[dict[str, Any]],
+        *,
+        attempt: int,
+        temperature: float | None = None,
+    ) -> str:
         secret = _env_secret(self.api_key_env)
         body: dict[str, Any] = {
             "model": self.model_name,
-            "temperature": self.temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "messages": messages,
         }
         if self.json_object:
@@ -998,11 +1120,58 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
         "timeout_seconds": float(metadata.get("timeout_seconds") or DEFAULT_MODEL_TIMEOUT_SECONDS),
         "temperature": float(metadata.get("temperature") or 0),
         "json_object": bool(metadata.get("json_object", True)),
-        "judgments": judgments,
+        "judgments": resolve_review_judgments(judgments, cheap=bool(metadata.get("cheap"))),
+        "cheap": bool(metadata.get("cheap")),
+        "holistic_samples": _bounded_int(
+            metadata.get("holistic_samples"),
+            default=DEFAULT_HOLISTIC_SAMPLES,
+            low=1,
+            high=8,
+        ),
+        "holistic_temperature": _bounded_float(
+            metadata.get("holistic_temperature"),
+            default=DEFAULT_HOLISTIC_TEMPERATURE,
+            low=0.0,
+            high=2.0,
+        ),
         "packet_routes": {str(key): str(value) for key, value in packet_routes.items()},
         "stage_signature": str(metadata.get("stage_signature") or ""),
         "bilingual": bool(metadata.get("bilingual")),
     }
+
+
+_CHEAP_SKIP = frozenset({"contributions", "ledger", "dimensions", "fatal"})
+
+
+def resolve_review_judgments(requested: list[str], *, cheap: bool) -> list[str]:
+    """Cheap mode keeps the holistic rating and drops the passes that do not rank."""
+    if not cheap:
+        return requested
+    base = requested or list(TEXT_JUDGMENTS)
+    kept = [item for item in base if item not in _CHEAP_SKIP]
+    if "holistic" not in kept:
+        kept.append("holistic")
+    return kept
+
+
+def _bounded_int(value: object, *, default: int, low: int, high: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return min(high, max(low, number))
+
+
+def _bounded_float(value: object, *, default: float, low: float, high: float) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return min(high, max(low, number))
 
 
 def _route_ids(route_id: str | None, routes: list[ReviewRoute]) -> list[str]:
@@ -1038,6 +1207,18 @@ def _first_read(claim: str, explanation: str, excerpt: str, *, blocking: bool) -
     )
 
 
+_SESSION_SETTINGS_EXCLUDED = frozenset(
+    {
+        "judgments",
+        "packet_routes",
+        "bilingual",
+        "cheap",
+        "holistic_samples",
+        "holistic_temperature",
+    }
+)
+
+
 class OpenAICompatibleAdapter:
     """Call an OpenAI-compatible chat endpoint for the text judgments in one stage.
 
@@ -1059,7 +1240,7 @@ class OpenAICompatibleAdapter:
             **{
                 key: value
                 for key, value in settings.items()
-                if key not in {"judgments", "packet_routes", "bilingual"}
+                if key not in _SESSION_SETTINGS_EXCLUDED
             },
         )
         snapshots = list(request.literature.retrieved_snapshots) if request.literature else []
@@ -1098,15 +1279,30 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 
 
 HOLISTIC_TASK = """
-## Overall ICLR rating
-Give the rating you would type on the ICLR review form after reading the manuscript.
-1 is a strong reject, 3 is a reject, 5 is marginally below the acceptance threshold, 6 is marginally above, 8 is an accept, and 10 is a strong accept.
-Integers 2, 4, 7, and 9 are allowed when the paper sits between those anchors.
-Do not default to 3, 5, or 6. Decide from the manuscript.
-strength_excerpt is one sentence the paper states that is a real strength.
-weakness_excerpt is one sentence the paper states that limits that strength.
-Copy both from the manuscript. A line break may be written as a space.
+## Overall recommendation
+You are reviewing for a top machine-learning venue. Give one score for the paper as a decision, not a pile of sub-scores.
+Weigh technical quality, clarity, significance, originality, reproducibility, and how the work sits against prior work.
+Keep a high bar. Only a paper you would argue for belongs at the top of the scale.
+If the paper is weak and you are unsure, score it as a reject. If the paper is strong and you are unsure, score it as an accept. Do not park in the middle to avoid deciding.
+
+rating is a number from 1.0 to 10.0. One decimal place is allowed, and that is how you separate two close papers.
+1.0-2.0 is a strong reject: a broken claim, a known result, or an evaluation that does not support the result.
+3.0-4.0 is a reject: there is a clear reason to decline.
+5.0 is a borderline reject: the reasons to decline are stronger.
+6.0 is a borderline accept: the reasons to accept are stronger.
+7.0-8.0 is an accept: sound, useful, and above the bar.
+9.0-10.0 is a strong accept: the result matters and the support is tight.
+Use the whole scale. A score of 4 is a reject, not a default. 5 and 6 are different decisions.
+
+rationale is a short review: what the paper does, the strongest reason to accept, and the strongest reason to decline.
+strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. The rating stands without them.
+Return only the JSON object.
 """.strip()
+
+# Independent holistic draws. Temperature is per call so a stage default of 0
+# does not force every sample to the same request body.
+DEFAULT_HOLISTIC_SAMPLES = 3
+DEFAULT_HOLISTIC_TEMPERATURE = 0.7
 
 
 def rubric_prompt_text() -> str:
@@ -1125,8 +1321,9 @@ def judgment_prompt_fingerprint() -> str:
             rubric_prompt_text(),
             FATAL_CLASS_DEFINITIONS,
             HOLISTIC_TASK,
-            "excerpt-whitespace-v1",
+            "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
+            "holistic-k-v1",
         ]
     )
     return digest_excerpt(blob)
@@ -1174,17 +1371,22 @@ def _fatal_verify_user(items: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _holistic_anchors(
-    payload: HolisticJudgment,
+def _optional_holistic_evidence(
+    session: ModelSession,
     request: ReviewRequest,
     snapshots: list[Any],
-) -> tuple[dict[str, Anchor], list[tuple[str, str]]]:
-    found: dict[str, Anchor] = {}
-    missing: list[tuple[str, str]] = []
+    payload: HolisticJudgment,
+    evidence: list[EvidenceRecord],
+) -> dict[str, str]:
+    """Attach excerpts that resolve. A miss is a counted drop, not a failed rating."""
+    found: dict[str, str] = {}
+    seen = {item.id for item in evidence}
     for name, excerpt in (
         ("strength", payload.strength_excerpt),
         ("weakness", payload.weakness_excerpt),
     ):
+        if not excerpt.strip():
+            continue
         anchor = locate_excerpt(
             excerpt,
             manuscript=request.source_text,
@@ -1192,43 +1394,68 @@ def _holistic_anchors(
             snapshots=snapshots,
         )
         if anchor is None:
-            missing.append((name, _UNRESOLVED_ANCHOR))
-        else:
-            found[name] = anchor
-    return found, missing
+            session.reject("holistic", name, _UNRESOLVED_ANCHOR, category="holistic_excerpt")
+            continue
+        evidence_id = f"E-holistic-{name}"
+        if evidence_id not in seen:
+            evidence.append(_evidence(evidence_id, anchor.excerpt or excerpt, anchor, request.manuscript))
+            seen.add(evidence_id)
+        found[name] = evidence_id
+    return found
 
 
-def _accept_holistic(
+def _sample_holistic(
     session: ModelSession,
     request: ReviewRequest,
     snapshots: list[Any],
-    payload: HolisticJudgment,
+    packet: str,
     evidence: list[EvidenceRecord],
-) -> dict[str, Any] | None:
-    """Keep a holistic rating only when both excerpts resolve. A failure does not fail the stage."""
-    found, missing = _holistic_anchors(payload, request, snapshots)
-    if missing:
-        message = "Unresolved holistic excerpts. Return the same JSON object.\n" + "\n".join(
-            f"- {name}: {reason}" for name, reason in missing
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """Average K independent ratings. A schema failure retries once, then fails the paper.
+
+    There is no dimension-band substitute. Optional excerpts are recorded when
+    they resolve and counted when they do not.
+    """
+    if samples < 1:
+        session.fail("judgment holistic requires at least one sample")
+    user = packet + "\n\n" + HOLISTIC_TASK
+    ratings: list[float] = []
+    attached: dict[str, str] = {}
+    for _index in range(samples):
+        payload = session.complete(
+            "holistic",
+            user,
+            HolisticJudgment,
+            temperature=temperature,
         )
-        payload = session.continue_with_error("holistic", message, HolisticJudgment)
         assert isinstance(payload, HolisticJudgment)
-        found, missing = _holistic_anchors(payload, request, snapshots)
-        if missing:
-            for name, reason in missing:
-                session.reject("holistic", name, reason)
-            return None
-    ids: dict[str, str] = {}
-    for name, anchor in found.items():
-        evidence_id = f"E-holistic-{name}"
-        evidence.append(_evidence(evidence_id, anchor.excerpt or "", anchor, request.manuscript))
-        ids[name] = evidence_id
+        ratings.append(round(float(payload.rating), 4))
+        attached.update(
+            _optional_holistic_evidence(session, request, snapshots, payload, evidence)
+        )
+    if len(ratings) != samples:
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
     return {
-        "rating": int(payload.rating),
+        "rating": round(sum(ratings) / len(ratings), 4),
+        "samples": ratings,
+        "n": len(ratings),
         "verified": True,
-        "strength_evidence_id": ids["strength"],
-        "weakness_evidence_id": ids["weakness"],
+        "strength_evidence_id": attached.get("strength"),
+        "weakness_evidence_id": attached.get("weakness"),
     }
+
+
+def _drop_counts(rejected: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in rejected:
+        key = str(item.get("category") or item.get("judgment") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _anchor_retry_message(missing: list[tuple[str, str]]) -> str:
@@ -1429,6 +1656,7 @@ def _run_judgments(
                     "contributions",
                     item.id,
                     "excerpt does not occur in the manuscript or a retrieved snapshot",
+                    category="contribution_excerpt",
                 )
                 continue
             evidence_id = f"E-{item.id}"
@@ -1484,7 +1712,12 @@ def _run_judgments(
         assert isinstance(payload, LedgerJudgment)
         for item in payload.ledger:
             if item.id in known_claims:
-                session.reject("ledger", item.id, "ledger id collides with an accepted claim")
+                session.reject(
+                    "ledger",
+                    item.id,
+                    "ledger id collides with an accepted claim",
+                    category="ledger_id",
+                )
                 continue
             anchor = locate_excerpt(
                 item.excerpt,
@@ -1497,6 +1730,7 @@ def _run_judgments(
                     "ledger",
                     item.id,
                     "excerpt does not occur in the manuscript or a retrieved snapshot",
+                    category="ledger_excerpt",
                 )
                 continue
             evidence_id = f"E-{item.id}"
@@ -1519,6 +1753,7 @@ def _run_judgments(
                     "ledger",
                     item.id,
                     "agenda item cites a ledger claim that was not accepted",
+                    category="ledger_agenda",
                 )
                 continue
             agenda.append(
@@ -1556,7 +1791,7 @@ def _run_judgments(
             )
             if missing:
                 for name, reason in missing:
-                    session.reject("dimensions", name, reason)
+                    session.reject("dimensions", name, reason, category="dimension_excerpt")
                 detail = "; ".join(f"{name}: {reason}" for name, reason in missing)
                 session.fail(
                     "judgment dimensions failed after one retry: unresolved anchors: " + detail
@@ -1572,13 +1807,19 @@ def _run_judgments(
         anchored: list[tuple[FatalItem, Anchor]] = []
         for item in payload.classifications:
             if item.issue_id not in known_issues:
-                session.reject("fatal", item.issue_id, "fatal classification names an unknown issue")
+                session.reject(
+                    "fatal",
+                    item.issue_id,
+                    "fatal classification names an unknown issue",
+                    category="fatal_unknown",
+                )
                 continue
             if item.fatal_class == FatalClass.missing_closest_neighbor:
                 session.reject(
                     "fatal",
                     item.issue_id,
                     "related-work search owns missing_closest_neighbor",
+                    category="fatal_class",
                 )
                 continue
             anchor = locate_excerpt(
@@ -1592,6 +1833,7 @@ def _run_judgments(
                     "fatal",
                     item.issue_id,
                     "excerpt does not occur in the manuscript or a retrieved snapshot",
+                    category="fatal_excerpt",
                 )
                 continue
             anchored.append((item, anchor))
@@ -1609,7 +1851,12 @@ def _run_judgments(
         updates: dict[str, FatalItem] = {}
         for item, anchor in anchored:
             if not verified.get(item.issue_id, False):
-                session.reject("fatal", item.issue_id, "fatal class was not verified from its excerpt")
+                session.reject(
+                    "fatal",
+                    item.issue_id,
+                    "fatal class was not verified from its excerpt",
+                    category="fatal_unverified",
+                )
                 continue
             evidence_id = f"E-fatal-{item.issue_id}"
             evidence.append(
@@ -1637,9 +1884,15 @@ def _run_judgments(
 
     if "holistic" in judgments:
         _route_id, packet = packet_for("holistic")
-        holistic_payload = session.complete("holistic", packet + "\n\n" + HOLISTIC_TASK, HolisticJudgment)
-        assert isinstance(holistic_payload, HolisticJudgment)
-        holistic_meta = _accept_holistic(session, request, snapshots, holistic_payload, evidence)
+        holistic_meta = _sample_holistic(
+            session,
+            request,
+            snapshots,
+            packet,
+            evidence,
+            samples=int(settings["holistic_samples"]),
+            temperature=float(settings["holistic_temperature"]),
+        )
 
     if settings["bilingual"]:
         issues, claims, scores = _apply_zh_hans(session, issues, claims, scores)

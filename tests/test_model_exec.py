@@ -25,6 +25,7 @@ from autopaperreview.model_exec import (
     OpenAICompatibleAdapter,
     OpenAICompatibleVisionInspector,
     endpoint_kind,
+    locate_excerpt,
 )
 from autopaperreview.models import ReviewRoute, RouteKind
 from autopaperreview.pipeline import PipelineError, run_pipeline
@@ -270,6 +271,8 @@ def _write_project(
     packet_routes: dict[str, str] | None = None,
     bilingual: bool = False,
     with_report: bool = False,
+    cheap: bool = False,
+    holistic_samples: int | None = None,
 ) -> Path:
     (workspace / "manuscript.txt").write_text(MANUSCRIPT, encoding="utf-8")
     prompts = workspace / "prompts"
@@ -282,6 +285,8 @@ def _write_project(
     route_table = "\n".join(f'{name} = "{route}"' for name, route in routes.items())
     judgment_list = ", ".join(f'"{item}"' for item in judgments)
     bilingual_line = "bilingual = true\n" if bilingual else ""
+    cheap_line = "cheap = true\n" if cheap else ""
+    samples_line = f"holistic_samples = {holistic_samples}\n" if holistic_samples is not None else ""
     report = ""
     if with_report:
         report = """
@@ -337,7 +342,7 @@ requires_network = {"true" if requires_network else "false"}
 network_scope = "fulltext"
 judgments = [{judgment_list}]
 timeout_seconds = 10
-{bilingual_line}
+{bilingual_line}{cheap_line}{samples_line}
 [stages.params.packet_routes]
 {route_table}
 {report}
@@ -1245,6 +1250,137 @@ class DnsClassificationTests(unittest.TestCase):
         self.assertIn("allow_remote", str(mixed.exception))
         self.assertIn("allow_remote", str(missing.exception))
         self.assertEqual(calls, [])
+
+
+class ExcerptMatchTests(unittest.TestCase):
+    def test_line_break_hyphen_ligature_and_fuzzy_window_resolve(self) -> None:
+        digest = "a" * 64
+        hyphenated = "The experi-\nment uses eight images from one specimen."
+        ligature = "The ﬁnal count is eight images from one specimen."
+        fuzzy_source = "Synthetic cohort uses eight images from one specimen in total."
+        hyphen = locate_excerpt(
+            "The experiment uses eight images from one specimen.",
+            manuscript=hyphenated,
+            manuscript_sha=digest,
+            snapshots=[],
+        )
+        lig = locate_excerpt(
+            "The final count is eight images from one specimen.",
+            manuscript=ligature,
+            manuscript_sha=digest,
+            snapshots=[],
+        )
+        fuzzy = locate_excerpt(
+            "Synthetic cohort uses eigth images from one specimen in total.",
+            manuscript=fuzzy_source,
+            manuscript_sha=digest,
+            snapshots=[],
+        )
+        missed = locate_excerpt(
+            "This sentence was never written in the source text today.",
+            manuscript=fuzzy_source,
+            manuscript_sha=digest,
+            snapshots=[],
+        )
+        joined = locate_excerpt(
+            "wellknown result",
+            manuscript="A well-known result stays hyphenated.",
+            manuscript_sha=digest,
+            snapshots=[],
+        )
+        assert hyphen is not None and lig is not None and fuzzy is not None
+        self.assertIn("experi", hyphen.excerpt or "")
+        self.assertIn("ment", hyphen.excerpt or "")
+        self.assertIn("count is eight", lig.excerpt or "")
+        self.assertIn("eight images", fuzzy.excerpt or "")
+        self.assertIsNone(missed)
+        self.assertIsNone(joined)
+
+
+class HolisticSampleTests(unittest.TestCase):
+    def test_samples_average_and_a_bad_excerpt_does_not_drop_the_rating(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            self.assertEqual(_judgment_name(payload), "holistic")
+            self.assertEqual(payload["temperature"], 0.7)
+            rating = (6.0, 7.0, 8.0)[attempt - 1]
+            excerpt = "this sentence was not written in the manuscript" if attempt == 1 else ""
+            return _chat(
+                json.dumps(
+                    {
+                        "rating": rating,
+                        "rationale": "Synthetic cohort is a clear decision.",
+                        "strength_excerpt": excerpt,
+                        "weakness_excerpt": "",
+                    }
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=3,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(rating["samples"], [6.0, 7.0, 8.0])
+            self.assertEqual(rating["rating"], 7.0)
+            self.assertTrue(rating["verified"])
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["drop_counts"], {"holistic_excerpt": 1})
+            self.assertEqual(server.counts, {"holistic": 3})
+
+    def test_schema_failure_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat("not-json")
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("holistic", str(caught.exception))
+            self.assertEqual(server.counts["holistic"], 2)
+
+    def test_cheap_mode_calls_only_the_holistic_judgment(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "holistic":
+                raise AssertionError(name)
+            return _chat(
+                json.dumps(
+                    {
+                        "rating": 6.5,
+                        "rationale": "Synthetic cohort is a borderline accept.",
+                        "strength_excerpt": "",
+                        "weakness_excerpt": "",
+                    }
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=1,
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"holistic": 1})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
 
 
 class tempfile_dir:
