@@ -117,10 +117,14 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     bin_value = meta.get("venue_bin", score.value)
     rank_note = ""
     if score.coefficient_set == "apr-fusion-v1":
-        rank_note = (
-            f" 排序分 {float(meta.get('rank_score', score.value)):.2f}"
-            "（1–6 决定分，不是 1–10）。"
-        )
+        rank_value = float(meta.get("rank_score", score.value))
+        if float(score.scale_max) > 6:
+            rank_note = (
+                f" 排序分 {rank_value:.2f}"
+                "（1–10 会场均分估计）。档位来自 1–6 决定分。"
+            )
+        else:
+            rank_note = f" 排序分 {rank_value:.2f}（1–6 决定分，不是 1–10）。"
     if language == "zh-Hans":
         return [
             f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{float(bin_value):.0f}**。"
@@ -134,9 +138,14 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
         ]
     rank_note_en = ""
     if score.coefficient_set == "apr-fusion-v1":
-        rank_note_en = (
-            f" Rank score {float(meta.get('rank_score', score.value)):.2f} on a 1–6 decision scale."
-        )
+        rank_value = float(meta.get("rank_score", score.value))
+        if float(score.scale_max) > 6:
+            rank_note_en = (
+                f" Rank score {rank_value:.2f} on a 1–10 venue-mean scale. "
+                "The bin comes from the 1–6 decision."
+            )
+        else:
+            rank_note_en = f" Rank score {rank_value:.2f} on a 1–6 decision scale."
     return [
         f"Declared rating `{score.coefficient_set}`: ICLR bin **{float(bin_value):.0f}**. "
         f"This is not a fitted regression.{rank_note_en}",

@@ -1405,6 +1405,7 @@ def run_cache(
                 "capped": metadata.get("capped"),
                 "holistic": metadata.get("holistic"),
                 "samples": list(metadata.get("samples") or []),
+                "mean_samples": list(metadata.get("mean_samples") or []),
                 "candidates": metadata.get("candidates") or {},
                 "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})
                 if review_stage is not None

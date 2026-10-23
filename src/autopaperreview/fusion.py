@@ -1,10 +1,12 @@
 """Declared rank signals. Not a fitted regression.
 
-apr-fusion-v1 ranks by a decision score on a 1.0–6.0 scale. The integer is
-the accept or reject decision. One decimal only orders papers that share a
-decision. A verified venue cap and the seven dimension bands stay off this
-rank unless a tune-slice comparison shows the cap is strictly better on both
-Spearman and AUC. They are recorded so a report can explain the score.
+apr-fusion-v1 keeps two numbers from one judgment. The decision is a 1.0–6.0
+accept or reject score and sets the ICLR bin. The venue mean is a 1.0–10.0
+estimate of the average reviewer score and is the preferred rank, because a
+coarse decision throws away order inside one decision. A verified venue cap
+and the seven dimension bands stay off this rank unless a tune-slice
+comparison shows the cap is strictly better on both Spearman and AUC. They
+are recorded so a report can explain the score.
 
 apr-iclr-cap-v2 is unchanged and still uses its own weakest-link gate. It is
 not a fusion candidate. A missing decision score is not filled in from the
@@ -31,14 +33,18 @@ __all__ = [
     "selection_report",
 ]
 
-# The shipped rank at rating time is the mean of the samples that were drawn.
-# Tune selection may then lock a shorter prefix of those samples.
-FUSION_VARIANT = "decision"
+# The shipped rank at rating time is the venue-scale mean when those samples
+# exist. Tune selection may lock a shorter prefix, or the decision, instead.
+FUSION_VARIANT = "mean"
 
-# Eligible core ranks, cheapest first. List order is not a vote.
+# Eligible core ranks, cheapest first. A venue mean and a decision of the same
+# K cost one shared call, so the mean is listed first and wins a within-0.02 tie.
 SHIPPABLE = (
+    "mean-k1",
     "decision-k1",
+    "mean-k2",
     "decision-k2",
+    "mean-k3",
     "decision-k3",
 )
 
@@ -114,6 +120,7 @@ class RankSignals:
     venue_cap: int | None
     holistic: float | None
     samples: tuple[float, ...] = ()
+    mean_samples: tuple[float, ...] = ()
     bands_available: bool = True
 
 
@@ -152,25 +159,34 @@ def _decision_samples(signals: RankSignals) -> tuple[float, ...]:
     return (float(signals.holistic),)
 
 
-def candidate_scores(signals: RankSignals) -> dict[str, float]:
-    """Core decision ranks, their bins, and diagnostic dimension terms.
-
-    Shippable keys are omitted when no decision sample exists. Callers must
-    fail that paper. They must not substitute a dimension score.
-    """
-    scores = _diagnostics(signals)
-    samples = _decision_samples(signals)
+def _prefix_means(samples: tuple[float, ...], stem: str) -> dict[str, float]:
+    scores: dict[str, float] = {}
     if not samples:
         return scores
     for width in range(1, min(3, len(samples)) + 1):
-        mean = sum(samples[:width]) / width
+        scores[f"{stem}-k{width}"] = sum(samples[:width]) / width
+    scores[stem] = sum(samples) / len(samples)
+    return scores
+
+
+def candidate_scores(signals: RankSignals) -> dict[str, float]:
+    """Venue-mean ranks, decision ranks, their bins, and diagnostic bands.
+
+    Shippable keys are omitted when that family has no sample. Callers must
+    fail a paper that has neither family. They must not substitute a dimension
+    score.
+    """
+    scores = _diagnostics(signals)
+    scores.update(_prefix_means(signals.mean_samples, "mean"))
+    samples = _decision_samples(signals)
+    if not samples:
+        return scores
+    scores.update(_prefix_means(samples, "decision"))
+    for width in range(1, min(3, len(samples)) + 1):
         name = f"decision-k{width}"
-        scores[name] = mean
-        scores[f"{name}-capped"] = cap_decision(mean, signals.venue_cap)
-        scores[f"{name}-bin"] = float(decision_bin(mean))
-    overall = sum(samples) / len(samples)
-    scores["decision"] = overall
-    scores["decision-capped"] = cap_decision(overall, signals.venue_cap)
+        scores[f"{name}-capped"] = cap_decision(scores[name], signals.venue_cap)
+        scores[f"{name}-bin"] = float(decision_bin(scores[name]))
+    scores["decision-capped"] = cap_decision(scores["decision"], signals.venue_cap)
     return scores
 
 
@@ -184,13 +200,15 @@ def _pair(metrics: dict[str, dict[str, float | None]], name: str) -> tuple[float
 
 
 def selection_report(metrics: dict[str, dict[str, float | None]]) -> dict[str, object]:
-    """Tune-slice selection among decision-k1, decision-k2, and decision-k3.
+    """Tune-slice selection among the venue-mean and decision prefixes.
 
     A candidate is eligible when its Spearman is within ``NEAR_TOLERANCE`` of
     the best Spearman and its AUC is within ``NEAR_TOLERANCE`` of the best
     AUC. The bests may come from different candidates. The cheapest eligible
-    candidate wins. If none are eligible, the higher Spearman wins, then the
-    higher AUC, then the cheaper candidate.
+    candidate wins. At the same K the venue mean is cheaper than the decision
+    because they share a call and the mean is the preferred rank. If none are
+    eligible, the higher Spearman wins, then the higher AUC, then the cheaper
+    candidate.
 
     ``<name>-capped`` replaces that choice only when both metrics are strictly
     higher. An equal cap is explanatory and stays off the rank.

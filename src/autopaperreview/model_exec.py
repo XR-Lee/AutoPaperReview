@@ -6,8 +6,8 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. An optional `holistic` judgment adds K samples of one
-1.0–6.0 decision score. The mean is the rating. Excerpts on that rating are optional.
+fatal classification. An optional `holistic` judgment adds K samples of a
+1–6 decision and a 1.0–10.0 venue-scale mean. Excerpts on that rating are optional.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -212,10 +212,15 @@ class FatalVerifyJudgment(StrictPayload):
 
 
 class HolisticJudgment(StrictPayload):
-    """One sample of the 1.0–6.0 decision score. Excerpts are optional and post-hoc."""
+    """One sample: a 1–6 decision and a 1.0–10.0 venue-scale mean.
 
-    rating: float = Field(ge=1, le=6)
+    Excerpts are optional and post-hoc. The venue mean is not a rescaling of
+    the decision.
+    """
+
     rationale: str = Field(min_length=1)
+    rating: float = Field(ge=1, le=6)
+    predicted_mean: float = Field(ge=1, le=10)
     strength_excerpt: str = ""
     weakness_excerpt: str = ""
 
@@ -345,12 +350,15 @@ _SCHEMA_HINTS = {
         "One verdict per issue in the user message."
     ),
     "holistic": (
-        '{"rating":4.0,"rationale":"...","strength_excerpt":"","weakness_excerpt":""} '
-        "rating is a number from 1.0 to 6.0. One decimal place is allowed. "
+        "Keys: rationale, rating, predicted_mean, strength_excerpt, weakness_excerpt. "
+        "rating is an integer 1, 2, 3, 4, 5, or 6. "
+        "predicted_mean is a number from 1.0 to 10.0 with one decimal. "
+        "There is no example number to copy. "
         "1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, "
         "5 accept, 6 strong accept. 3 and 4 are opposite decisions. "
-        "Do not use 3 as a default. "
-        "strength_excerpt and weakness_excerpt are optional and may be empty."
+        "predicted_mean is the venue-scale mean, not a rescaling of rating. "
+        "strength_excerpt and weakness_excerpt are optional and may be empty. "
+        "No other keys."
     ),
     "visual": (
         '{"findings":[{"id":"V1","page":1,"bbox":[0,0,1,1],'
@@ -1280,16 +1288,16 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 
 
 HOLISTIC_TASK = """
-## Decision score
-You are deciding one paper for a top machine-learning conference. Return a single score for the paper as a whole. Do not average per-axis marks, and do not add a second number.
+## Decision and venue mean
+You are deciding one paper for a top machine-learning conference. Return two numbers for the paper as a whole. Do not average per-axis marks.
 
-Use the following only as questions that inform that one score:
+Use the following only as questions that inform the decision:
 - Is the technical work sound, and do the experiments or arguments actually support the claims?
 - Can a careful reader follow the paper and repeat the setup from what is written?
 - Does the result matter to the venue, and is it new relative to the prior work the paper itself engages?
 - Are limitations and possible harms stated, rather than skipped?
 
-rating is a number from 1.0 to 6.0. One decimal place is allowed. The decimal only orders two papers that share a decision. The integer is the decision:
+rating is an integer from 1 to 6. It is the accept or reject decision, not a quality average:
 
 1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
 2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.
@@ -1298,12 +1306,14 @@ rating is a number from 1.0 to 6.0. One decimal place is allowed. The decimal on
 5 — accept. The paper is sound and useful, and you would defend it in a discussion.
 6 — strong accept. The result matters and the support is tight.
 
-3 and 4 are opposite decisions. 3.5 is still a reject: the case for declining is slightly stronger. It is not a neutral shelf. A paper with a real contribution and gaps a reviewer could ask the authors to fix is a 4, not a 3. A flaw that decides the outcome is a 2, not a 3. Use 1 and 6 for extreme cases, not as decoration.
+Most submissions are rejected. A competent paper with a real idea and gaps a reviewer would still ask the authors to fix is a 3 when you would not argue to accept it. A 4 means you would argue to accept it. Do not treat 4 as the ordinary score for a finished paper. 3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.
 
-If the paper is weak and you are unsure, score 3 or below. If the paper is strong and you are unsure, score 4 or above.
+If the paper is weak and you are unsure, the decision is 3 or below. If the paper is strong and you are unsure, the decision is 4 or above.
 
-rationale has four short parts, in this order: what the paper claims; the strongest reason to accept; the strongest reason to decline; which of those two reasons wins. The rating has to follow that last part.
-strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. The rating stands without them.
+predicted_mean is a number from 1.0 to 10.0 with one decimal. It is your estimate of the mean score three careful reviewers would give this paper on the venue's 1–10 scale. This number is what orders papers. It is not a rescaling of rating, and it is not chosen from a short list of favorite values such as 4 or 6. Two papers with the same decision still receive different means when one is closer to changing that decision. A lower mean means you expect a lower average reviewer score.
+
+rationale has four short parts, in this order: what the paper claims; the strongest reason to accept; the strongest reason to decline; which of those two reasons wins, and why this mean is not a round favorite. The decision has to follow which reason wins.
+strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. Both numbers stand without them.
 Return only the JSON object.
 """.strip()
 
@@ -1331,7 +1341,7 @@ def judgment_prompt_fingerprint() -> str:
             HOLISTIC_TASK,
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "decision-scale-v1",
+            "venue-mean-v1",
         ]
     )
     return digest_excerpt(blob)
@@ -1431,6 +1441,7 @@ def _sample_holistic(
         session.fail("judgment holistic requires at least one sample")
     user = packet + "\n\n" + HOLISTIC_TASK
     ratings: list[float] = []
+    means: list[float] = []
     attached: dict[str, str] = {}
     for _index in range(samples):
         payload = session.complete(
@@ -1441,16 +1452,19 @@ def _sample_holistic(
         )
         assert isinstance(payload, HolisticJudgment)
         ratings.append(round(float(payload.rating), 4))
+        means.append(round(float(payload.predicted_mean), 4))
         attached.update(
             _optional_holistic_evidence(session, request, snapshots, payload, evidence)
         )
-    if len(ratings) != samples:
+    if len(ratings) != samples or len(means) != samples:
         session.fail(
             "judgment holistic produced no rating; refusing to fall back to dimension bands"
         )
     return {
         "rating": round(sum(ratings) / len(ratings), 4),
         "samples": ratings,
+        "predicted_mean": round(sum(means) / len(means), 4),
+        "mean_samples": means,
         "n": len(ratings),
         "verified": True,
         "strength_evidence_id": attached.get("strength"),

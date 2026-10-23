@@ -87,8 +87,33 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.value, 8)
         self.assertEqual(scored.metadata["venue_bin"], 8)
 
+    def test_venue_mean_ranks_and_the_decision_sets_the_bin(self) -> None:
+        package = _package("both", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 3.5,
+                        "predicted_mean": 5.15,
+                        "verified": True,
+                        "samples": [3, 4],
+                        "mean_samples": [4.2, 6.1],
+                    }
+                },
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.scale_max, 10)
+        self.assertAlmostEqual(scored.value, 5.15)
+        self.assertEqual(scored.metadata["venue_bin"], 6)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k1"], 4.2)
+        self.assertAlmostEqual(scored.metadata["candidates"]["mean-k2"], 5.15)
+        self.assertEqual(scored.metadata["candidates"]["decision-k1"], 3)
+        self.assertEqual(scored.metadata["fusion_variant"], "mean")
+
     def test_near_tie_prefers_fewer_samples(self) -> None:
-        self.assertEqual(SHIPPABLE[0], "decision-k1")
+        self.assertEqual(SHIPPABLE[0], "mean-k1")
+        self.assertEqual(SHIPPABLE[1], "decision-k1")
         metrics = {
             "decision-k1": {"spearman": 0.70, "auc": 0.74},
             "decision-k2": {"spearman": 0.71, "auc": 0.75},
@@ -97,6 +122,22 @@ class FusionFormulaTests(unittest.TestCase):
         report = selection_report(metrics)
         self.assertEqual(report["chosen"], "decision-k1")
         self.assertEqual(report["rule"], "within-0.02-then-cheapest")
+        self.assertEqual(select_variant(metrics), "decision-k1")
+
+    def test_same_k_prefers_the_venue_mean(self) -> None:
+        metrics = {
+            "mean-k1": {"spearman": 0.70, "auc": 0.80},
+            "decision-k1": {"spearman": 0.71, "auc": 0.81},
+        }
+        report = selection_report(metrics)
+        self.assertEqual(report["chosen"], "mean-k1")
+        self.assertEqual(report["rule"], "within-0.02-then-cheapest")
+
+    def test_a_wide_gap_can_keep_the_decision(self) -> None:
+        metrics = {
+            "mean-k1": {"spearman": 0.40, "auc": 0.55},
+            "decision-k1": {"spearman": 0.62, "auc": 0.74},
+        }
         self.assertEqual(select_variant(metrics), "decision-k1")
 
     def test_a_wide_gap_keeps_the_stronger_sample_count(self) -> None:

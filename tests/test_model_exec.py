@@ -1303,11 +1303,13 @@ class HolisticSampleTests(unittest.TestCase):
             self.assertEqual(_judgment_name(payload), "holistic")
             self.assertEqual(payload["temperature"], 0.7)
             rating = (3.0, 4.0, 5.0)[attempt - 1]
+            predicted = (4.2, 5.0, 6.4)[attempt - 1]
             excerpt = "this sentence was not written in the manuscript" if attempt == 1 else ""
             return _chat(
                 json.dumps(
                     {
                         "rating": rating,
+                        "predicted_mean": predicted,
                         "rationale": "Synthetic cohort is a clear decision.",
                         "strength_excerpt": excerpt,
                         "weakness_excerpt": "",
@@ -1328,6 +1330,8 @@ class HolisticSampleTests(unittest.TestCase):
             rating = package["metadata"]["holistic_rating"]
             self.assertEqual(rating["samples"], [3.0, 4.0, 5.0])
             self.assertEqual(rating["rating"], 4.0)
+            self.assertEqual(rating["mean_samples"], [4.2, 5.0, 6.4])
+            self.assertEqual(rating["predicted_mean"], 5.2)
             self.assertTrue(rating["verified"])
             review = manifest.stage("review")
             assert review is not None
@@ -1361,6 +1365,7 @@ class HolisticSampleTests(unittest.TestCase):
                 json.dumps(
                     {
                         "rating": 4.5,
+                        "predicted_mean": 5.5,
                         "rationale": "Synthetic cohort is a borderline accept.",
                         "strength_excerpt": "",
                         "weakness_excerpt": "",
