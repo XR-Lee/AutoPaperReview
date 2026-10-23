@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from autopaperreview.fusion import DIAGNOSTIC, SHIPPABLE, selection_report
+from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
@@ -48,7 +48,9 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
                 "mean_samples": score.get("mean_samples") or [],
                 "place_samples": score.get("place_samples") or [],
                 "count_samples": score.get("count_samples") or [],
+                "isolate_samples": score.get("isolate_samples") or [],
                 "placements": score.get("placements") or [],
+                "poles": score.get("poles") or [],
                 "caps": score.get("caps") or [],
                 "drop_counts": score.get("drop_counts") or {},
             }
@@ -75,7 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ids")
     parser.add_argument("--split")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("candidates", "locked"), default="candidates")
+    parser.add_argument(
+        "--mode",
+        choices=("candidates", "locked"),
+        default="locked",
+        help="locked reports the shipped rank (the preregistered candidate); candidates is diagnostic",
+    )
     parser.add_argument("--resamples", type=int, default=4000)
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
@@ -116,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     output.write_text(
         json.dumps(
             {
+                "preregistered": LOCKED_CANDIDATE,
                 "chosen": chosen,
                 "tied": tied,
                 "n": len(records),
@@ -128,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         + "\n",
         encoding="utf-8",
     )
+    print(f"preregistered={LOCKED_CANDIDATE}")
     print(f"n={len(records)} mode={args.mode}")
     for name in names:
         intervals = table[name]["intervals"]

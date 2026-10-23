@@ -577,7 +577,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--holistic-samples",
         type=int,
         default=DEFAULT_HOLISTIC_SAMPLES,
-        help="holistic calls per paper; the default is the locked evaluation K",
+        help="isolated comparison pairs per paper; the default is the locked evaluation K of 1",
     )
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")

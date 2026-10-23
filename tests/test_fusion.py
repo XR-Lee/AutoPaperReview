@@ -5,6 +5,8 @@ from __future__ import annotations
 import unittest
 
 from autopaperreview.fusion import (
+    FUSION_VARIANT,
+    LOCKED_CANDIDATE,
     SHIPPABLE,
     RankSignals,
     candidate_scores,
@@ -112,9 +114,11 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["fusion_variant"], "mean")
 
     def test_near_tie_prefers_fewer_samples(self) -> None:
-        self.assertEqual(SHIPPABLE[0], "place-k1")
-        self.assertEqual(SHIPPABLE[1], "mean-k1")
-        self.assertEqual(SHIPPABLE[2], "decision-k1")
+        self.assertEqual(LOCKED_CANDIDATE, "isolate-k1")
+        self.assertEqual(FUSION_VARIANT, LOCKED_CANDIDATE)
+        self.assertEqual(SHIPPABLE[0], "isolate-k1")
+        self.assertEqual(SHIPPABLE[1], "place-k1")
+        self.assertEqual(SHIPPABLE[2], "mean-k1")
         metrics = {
             "decision-k1": {"spearman": 0.70, "auc": 0.74},
             "decision-k2": {"spearman": 0.71, "auc": 0.75},
@@ -153,6 +157,62 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertEqual(scored.metadata["candidates"]["decision-k1"], 3.0)
         self.assertEqual(scored.metadata["fusion_variant"], "place")
 
+    def test_isolated_pair_ranks_and_a_later_pair_stays_off_the_rank(self) -> None:
+        package = _package("isolated", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 4.0,
+                        "verified": True,
+                        "samples": [4.0, 2.0],
+                        "isolate_samples": [6.5, 3.5],
+                        "poles": [
+                            {
+                                "sample": 0,
+                                "isolate": 6.5,
+                                "anchors": [
+                                    {"id": "weak-reject", "relation": "better", "margin": 4, "implied": 6.5},
+                                    {"id": "strong-accept", "relation": "worse", "margin": 2, "implied": 6.5},
+                                ],
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertEqual(scored.scale_max, 10)
+        self.assertAlmostEqual(scored.value, 6.5)
+        self.assertEqual(scored.metadata["venue_bin"], 5)
+        self.assertAlmostEqual(scored.metadata["candidates"]["decision"], 3.0)
+        self.assertAlmostEqual(scored.metadata["candidates"]["isolate-k1"], 6.5)
+        self.assertAlmostEqual(scored.metadata["candidates"]["isolate-k2"], 5.0)
+        self.assertEqual(scored.metadata["candidates"]["decision-k1"], 4.0)
+        self.assertEqual(scored.metadata["fusion_variant"], "isolate-k1")
+        self.assertEqual(scored.metadata["poles"][0]["isolate"], 6.5)
+        self.assertIn("isolate-k1", scored.metadata["formula"])
+
+    def test_isolated_pair_wins_over_an_older_placement(self) -> None:
+        package = _package("both-ranks", _all(8)).model_copy(
+            update={
+                "dimension_scores": [],
+                "metadata": {
+                    "holistic_rating": {
+                        "rating": 3.0,
+                        "verified": True,
+                        "samples": [3.0],
+                        "place_samples": [4.75],
+                        "isolate_samples": [7.5],
+                    }
+                },
+            }
+        )
+        scored = rate_venue(package, coefficient_set=FUSION_COEFFICIENT_SET)
+        self.assertAlmostEqual(scored.value, 7.5)
+        self.assertEqual(scored.metadata["fusion_variant"], "isolate-k1")
+        self.assertEqual(scored.metadata["venue_bin"], 5)
+
     def test_placement_without_a_decision_fails(self) -> None:
         package = _package("place-only", _all(8)).model_copy(
             update={
@@ -185,6 +245,16 @@ class FusionFormulaTests(unittest.TestCase):
         self.assertAlmostEqual(scored.value, 7.2)
         self.assertEqual(scored.metadata["venue_bin"], 8)
         self.assertLess(scored.metadata["candidates"]["decision-k1-capped"], 5.0)
+
+    def test_same_k_prefers_the_isolated_pair_over_the_venue_mean(self) -> None:
+        metrics = {
+            "isolate-k1": {"spearman": 0.70, "auc": 0.80},
+            "mean-k1": {"spearman": 0.71, "auc": 0.81},
+        }
+        report = selection_report(metrics)
+        self.assertEqual(report["chosen"], "isolate-k1")
+        self.assertEqual(report["preregistered"], "isolate-k1")
+        self.assertEqual(report["rule"], "within-0.02-then-cheapest")
 
     def test_same_k_prefers_place_over_the_venue_mean(self) -> None:
         metrics = {

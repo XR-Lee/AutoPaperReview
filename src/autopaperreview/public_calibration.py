@@ -1409,7 +1409,9 @@ def run_cache(
                 "mean_samples": list(metadata.get("mean_samples") or []),
                 "place_samples": list(metadata.get("place_samples") or []),
                 "count_samples": list(metadata.get("count_samples") or []),
+                "isolate_samples": list(metadata.get("isolate_samples") or []),
                 "placements": list(metadata.get("placements") or []),
+                "poles": list(metadata.get("poles") or []),
                 "ladder": list(metadata.get("ladder") or []),
                 "candidates": metadata.get("candidates") or {},
                 "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})

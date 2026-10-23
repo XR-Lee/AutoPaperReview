@@ -99,6 +99,41 @@ _VISUAL_STATUS = {
 }
 
 
+def _fusion_rank_note(meta: dict[str, object], language: str, rank_value: float, scale_max: float) -> str:
+    """One sentence on the shipped rank. The bin sentence stays with the decision."""
+    variant = str(meta.get("fusion_variant") or "")
+    if language == "zh-Hans":
+        if variant == "isolate-k1":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（两极对照的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant == "place":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（合成参照的 1–10 落点）。档位来自 1–6 决定分。"
+            )
+        if scale_max > 6:
+            return f" 排序分 {rank_value:.2f}（1–10 会场均分估计）。档位来自 1–6 决定分。"
+        return f" 排序分 {rank_value:.2f}（1–6 决定分，不是 1–10）。"
+    if variant == "isolate-k1":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale from two isolated reference comparisons. "
+            "The bin comes from the 1–6 decision."
+        )
+    if variant == "place":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 ladder placement. "
+            "The bin comes from the 1–6 decision."
+        )
+    if scale_max > 6:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 venue-mean scale. "
+            "The bin comes from the 1–6 decision."
+        )
+    return f" Rank score {rank_value:.2f} on a 1–6 decision scale."
+
+
 def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     score = package.overall_score
     if (
@@ -118,13 +153,7 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     rank_note = ""
     if score.coefficient_set == "apr-fusion-v1":
         rank_value = float(meta.get("rank_score", score.value))
-        if float(score.scale_max) > 6:
-            rank_note = (
-                f" 排序分 {rank_value:.2f}"
-                "（1–10 会场均分估计）。档位来自 1–6 决定分。"
-            )
-        else:
-            rank_note = f" 排序分 {rank_value:.2f}（1–6 决定分，不是 1–10）。"
+        rank_note = _fusion_rank_note(meta, "zh-Hans", rank_value, float(score.scale_max))
     if language == "zh-Hans":
         return [
             f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{float(bin_value):.0f}**。"
@@ -139,13 +168,7 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     rank_note_en = ""
     if score.coefficient_set == "apr-fusion-v1":
         rank_value = float(meta.get("rank_score", score.value))
-        if float(score.scale_max) > 6:
-            rank_note_en = (
-                f" Rank score {rank_value:.2f} on a 1–10 venue-mean scale. "
-                "The bin comes from the 1–6 decision."
-            )
-        else:
-            rank_note_en = f" Rank score {rank_value:.2f} on a 1–6 decision scale."
+        rank_note_en = _fusion_rank_note(meta, "en", rank_value, float(score.scale_max))
     return [
         f"Declared rating `{score.coefficient_set}`: ICLR bin **{float(bin_value):.0f}**. "
         f"This is not a fitted regression.{rank_note_en}",

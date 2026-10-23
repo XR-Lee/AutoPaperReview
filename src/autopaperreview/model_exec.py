@@ -6,9 +6,10 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. An optional `holistic` judgment adds K samples of a
-1–6 decision, a ladder placement against synthetic references, and a 1.0–10.0
-venue-scale mean. The shipped K is one. Excerpts on that rating are optional.
+fatal classification. An optional `holistic` judgment adds K pairs of
+isolated comparisons, one against weak-reject and one against strong-accept,
+plus a 1–6 decision on the strong-accept call. The shipped K is one pair,
+and the shipped rank is the mean of that pair's implied scores.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -31,10 +32,12 @@ import ipaddress
 import json
 import os
 import socket
+import threading
 import time
 import unicodedata
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -46,11 +49,16 @@ from .i18n import script_matches
 
 from .adapters import ReviewRequest, ReviewResult, _merge_literature
 from .anchors import (
-    ANCHOR_IDS,
+    LOCKED_CANDIDATE,
     LOCKED_HOLISTIC_SAMPLES,
+    MARGIN_MAX,
+    RELATIONS,
     SYNTHETIC_ANCHORS,
-    anchor_ladder_text,
-    describe_placement,
+    anchor_by_id,
+    anchor_prompt_text,
+    implied_score,
+    isolate_score,
+    normalize_margin,
 )
 from .hashing import sha256_bytes
 from .models import (
@@ -231,21 +239,12 @@ _RELATION_ALIASES = {
     "same": "tie",
     "equal": "tie",
 }
-_LEAN_ALIASES = {
-    "low": "low",
-    "lower": "low",
-    "mid": "mid",
-    "middle": "mid",
-    "high": "high",
-    "higher": "high",
-}
+class IsolatedComparison(StrictPayload):
+    """One manuscript-to-reference comparison. The reference is synthetic."""
 
-
-class AnchorComparison(StrictPayload):
-    """One manuscript-to-reference vote. The reference is synthetic."""
-
-    anchor_id: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
     relation: str = Field(min_length=1)
+    margin: float = Field(ge=0, le=MARGIN_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -253,66 +252,23 @@ class AnchorComparison(StrictPayload):
         if not isinstance(value, dict):
             return value
         updated = dict(value)
-        anchor_id = updated.get("anchor_id")
         relation = updated.get("relation")
-        if isinstance(anchor_id, str):
-            updated["anchor_id"] = anchor_id.strip().lower()
         if isinstance(relation, str):
             updated["relation"] = _RELATION_ALIASES.get(relation.strip().lower(), relation.strip().lower())
         return updated
 
-
-class HolisticJudgment(StrictPayload):
-    """One sample: ladder votes, a 1–6 decision, and a venue-scale mean.
-
-    The placement is derived from the votes. The decision sets the ICLR bin.
-    The venue mean is recorded and is not the rank. Excerpts are optional.
-    """
-
-    rationale: str = Field(min_length=1)
-    rating: float = Field(ge=1, le=6)
-    predicted_mean: float = Field(ge=1, le=10)
-    comparisons: list[AnchorComparison] = Field(min_length=5, max_length=5)
-    gap_lean: str = Field(min_length=1)
-    strength_excerpt: str = ""
-    weakness_excerpt: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_comparison_map(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        raw = value.get("comparisons")
-        if not isinstance(raw, dict):
-            updated = dict(value)
-        else:
-            rows = []
-            for key, item in raw.items():
-                if isinstance(item, str):
-                    rows.append({"anchor_id": key, "relation": item})
-                else:
-                    rows.append(item)
-            updated = {**value, "comparisons": rows}
-        lean = updated.get("gap_lean")
-        if isinstance(lean, str):
-            updated["gap_lean"] = _LEAN_ALIASES.get(lean.strip().lower(), lean.strip().lower())
-        return updated
-
     @model_validator(mode="after")
-    def one_of_each_reference(self) -> "HolisticJudgment":
-        found = [item.anchor_id for item in self.comparisons]
-        if len(found) != len(set(found)) or set(found) != set(ANCHOR_IDS):
-            raise ValueError(
-                "comparisons must name each reference once: " + ", ".join(ANCHOR_IDS)
-            )
-        if self.gap_lean not in _LEAN_ALIASES.values():
-            raise ValueError("gap_lean must be low, mid, or high")
-        for item in self.comparisons:
-            if item.relation not in {"better", "tie", "worse"}:
-                raise ValueError(
-                    f"relation for {item.anchor_id} must be better, tie, or worse"
-                )
+    def margin_matches_relation(self) -> "IsolatedComparison":
+        if self.relation not in RELATIONS:
+            raise ValueError("relation must be better, tie, or worse")
+        normalize_margin(self.relation, self.margin)
         return self
+
+
+class IsolatedDecision(IsolatedComparison):
+    """The strong-accept comparison plus the 1–6 decision. The decision is not the rank."""
+
+    rating: float = Field(ge=1, le=6)
 
 
 class VisualJudgment(StrictPayload):
@@ -399,7 +355,9 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     "dimensions": DimensionJudgment,
     "fatal": FatalJudgment,
     "fatal-verify": FatalVerifyJudgment,
-    "holistic": HolisticJudgment,
+    "holistic": IsolatedDecision,
+    "holistic-weak-reject": IsolatedComparison,
+    "holistic-strong-accept": IsolatedDecision,
     "visual": VisualJudgment,
     "zh-Hans": ZhHansJudgment,
 }
@@ -439,19 +397,31 @@ _SCHEMA_HINTS = {
         "holds is true only when the excerpt itself states the class. "
         "One verdict per issue in the user message."
     ),
-    "holistic": (
-        "Keys: rationale, rating, predicted_mean, comparisons, gap_lean, strength_excerpt, weakness_excerpt. "
-        "rating is an integer 1, 2, 3, 4, 5, or 6. "
-        "predicted_mean is a number from 1.0 to 10.0 with one decimal. "
-        "comparisons has one object per reference, with anchor_id and relation. "
-        "anchor_id is one of weak-reject, ordinary-reject, split-decision, ordinary-accept, strong-accept. "
+    "holistic-weak-reject": (
+        "Keys: rationale, relation, margin. "
         "relation is better, tie, or worse. "
-        "gap_lean is low, mid, or high. "
-        "There is no example number to copy. "
+        "margin is a number from 0 to 6. "
+        "A tie has margin 0. better or worse has a margin above 0. "
+        "There is no example margin to copy. "
+        "No other keys."
+    ),
+    "holistic-strong-accept": (
+        "Keys: rationale, relation, margin, rating. "
+        "relation is better, tie, or worse. "
+        "margin is a number from 0 to 6. "
+        "A tie has margin 0. better or worse has a margin above 0. "
+        "rating is an integer 1, 2, 3, 4, 5, or 6. "
+        "There is no example margin or rating to copy. "
         "1 strong reject, 2 reject, 3 borderline reject, 4 borderline accept, "
         "5 accept, 6 strong accept. 3 and 4 are opposite decisions. "
-        "predicted_mean is a side estimate, not the placement and not a rescaling of rating. "
-        "strength_excerpt and weakness_excerpt are optional and may be empty. "
+        "The margin is not a rescaling of rating. "
+        "No other keys."
+    ),
+    "holistic": (
+        "Keys: rationale, relation, margin, rating. "
+        "relation is better, tie, or worse. "
+        "margin is a number from 0 to 6. "
+        "rating is an integer 1, 2, 3, 4, 5, or 6. "
         "No other keys."
     ),
     "visual": (
@@ -893,12 +863,17 @@ class ModelSession:
         self.rejected: list[dict[str, str]] = []
         self.usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self._checked = False
+        self._lock = threading.RLock()
         self._attempt_counts: dict[str, int] = {}
         self._last_messages: list[dict[str, Any]] = []
         self._last_text = ""
         self._last_judgment = ""
 
     def authorize(self) -> None:
+        with self._lock:
+            self._authorize_locked()
+
+    def _authorize_locked(self) -> None:
         if self._checked:
             return
         self._checked = True
@@ -921,6 +896,10 @@ class ModelSession:
         self.manuscript_left_machine = False
 
     def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return self._metadata_locked()
+
+    def _metadata_locked(self) -> dict[str, Any]:
         return {
             "model": self.model_name,
             "base_url": self.base_url,
@@ -945,13 +924,15 @@ class ModelSession:
         row = {"judgment": judgment, "id": item_id, "reason": reason}
         if category:
             row["category"] = category
-        self.rejected.append(row)
+        with self._lock:
+            self.rejected.append(row)
 
     def write_index(self) -> None:
-        directory = self.scratch / "model"
-        directory.mkdir(parents=True, exist_ok=True)
-        _write_json(directory / "exchanges.json", self.metadata())
-        _write_json(directory / "rejected.json", self.rejected)
+        with self._lock:
+            directory = self.scratch / "model"
+            directory.mkdir(parents=True, exist_ok=True)
+            _write_json(directory / "exchanges.json", self._metadata_locked())
+            _write_json(directory / "rejected.json", list(self.rejected))
 
     def artifact_names(self) -> list[str]:
         directory = self.scratch / "model"
@@ -969,9 +950,10 @@ class ModelSession:
         raise ModelExecutionError(_redact(message, secret), stage_metadata=self.metadata())
 
     def _next_attempt(self, judgment: str) -> int:
-        attempt = self._attempt_counts.get(judgment, 0) + 1
-        self._attempt_counts[judgment] = attempt
-        return attempt
+        with self._lock:
+            attempt = self._attempt_counts.get(judgment, 0) + 1
+            self._attempt_counts[judgment] = attempt
+            return attempt
 
     def complete(
         self,
@@ -1019,9 +1001,10 @@ class ModelSession:
                 self.fail(
                     f"judgment {judgment} failed schema validation after one retry: {_brief(second_error)}"
                 )
-        self._last_messages = messages
-        self._last_text = text
-        self._last_judgment = judgment
+        with self._lock:
+            self._last_messages = messages
+            self._last_text = text
+            self._last_judgment = judgment
         return model
 
     def continue_with_error(
@@ -1037,11 +1020,18 @@ class ModelSession:
         This is the single retry for that check. It does not start another schema retry.
         """
         self.authorize()
-        if self._last_judgment != judgment or not self._last_messages:
+        with self._lock:
+            if self._last_judgment != judgment or not self._last_messages:
+                prior = None
+                prior_text = ""
+            else:
+                prior = list(self._last_messages)
+                prior_text = self._last_text
+        if prior is None:
             self.fail(f"judgment {judgment} has no completed exchange to retry")
         messages = [
-            *self._last_messages,
-            {"role": "assistant", "content": self._last_text[:8000]},
+            *prior,
+            {"role": "assistant", "content": prior_text[:8000]},
             {"role": "user", "content": error},
         ]
         text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
@@ -1051,8 +1041,9 @@ class ModelSession:
             self.fail(
                 f"judgment {judgment} failed schema validation after one retry: {_brief(exc)}\n{error}"
             )
-        self._last_messages = messages
-        self._last_text = text
+        with self._lock:
+            self._last_messages = messages
+            self._last_text = text
         return model
 
     def _exchange(
@@ -1144,10 +1135,11 @@ class ModelSession:
                 return "invalid chat envelope: response is not an object"
             usage = payload.get("usage")
             if isinstance(usage, dict):
-                for key in self.usage_totals:
-                    raw_tokens = usage.get(key)
-                    if isinstance(raw_tokens, int):
-                        self.usage_totals[key] += raw_tokens
+                with self._lock:
+                    for key in self.usage_totals:
+                        raw_tokens = usage.get(key)
+                        if isinstance(raw_tokens, int):
+                            self.usage_totals[key] += raw_tokens
             try:
                 return _message_text(payload)
             except ValueError as exc:
@@ -1164,17 +1156,17 @@ class ModelSession:
         request_path: Path,
         response_path: Path,
     ) -> None:
-        self.exchanges.append(
-            {
-                "judgment": judgment,
-                "attempt": attempt,
-                "transport_try": transport_try,
-                "request_sha256": sha256_bytes(request_path.read_bytes()),
-                "response_sha256": sha256_bytes(response_path.read_bytes()),
-                "request_path": f"model/{request_name}",
-                "response_path": f"model/{response_name}",
-            }
-        )
+        row = {
+            "judgment": judgment,
+            "attempt": attempt,
+            "transport_try": transport_try,
+            "request_sha256": sha256_bytes(request_path.read_bytes()),
+            "response_sha256": sha256_bytes(response_path.read_bytes()),
+            "request_path": f"model/{request_name}",
+            "response_path": f"model/{response_name}",
+        }
+        with self._lock:
+            self.exchanges.append(row)
 
 
 def _safe_name(judgment: str) -> str:
@@ -1381,28 +1373,9 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 """.strip()
 
 
-def holistic_task_text() -> str:
-    """Decision plus the synthetic ladder. Positions are not in this text."""
-    head = """
-## Placement, then decision
-You are reviewing one paper for a top machine-learning conference. Order it by where it sits relative to the fixed references below. Do not average per-axis marks. The accept or reject decision is a separate number and does not order papers that share a decision.
-
-Use the following only as questions that inform the placement and the decision:
-- Is the technical work sound, and do the experiments or arguments actually support the claims?
-- Can a careful reader follow the paper and repeat the setup from what is written?
-- Does the result matter to the venue, and is it new relative to the prior work the paper itself engages?
-- Are limitations and possible harms stated, rather than skipped?
-
-Read the references from weakest to strongest. Make one cut. The manuscript is better than a prefix of the ladder, may tie the next reference, and is worse than every stronger reference. Do not mark a stronger reference better than a weaker one. Decide the cut before choosing any number. The decision does not choose the cut. Two papers you would both decline still sit on different references when one is closer to a minor rename and the other is closer to a split decision. Use tie only when you would not rank the manuscript apart from that one reference.
-
-relation is one of three words:
-- better: a careful reviewer would rank this manuscript above that reference
-- tie: a careful reviewer would not rank the two apart
-- worse: a careful reviewer would rank this manuscript below that reference
-
-gap_lean is where the manuscript sits inside the open gap at that cut. low is closer to the weaker side, high is closer to the stronger side, and mid is between them. If you tie a reference, send mid.
-
+_DECISION_TEXT = """
 ## Decision
+Choose rating only after relation and margin are fixed. Do not edit the margin so that it matches rating.
 rating is an integer from 1 to 6. It is only the accept or reject decision:
 
 1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
@@ -1412,23 +1385,76 @@ rating is an integer from 1 to 6. It is only the accept or reject decision:
 5 — accept. The paper is sound and useful, and you would defend it in a discussion.
 6 — strong accept. The result matters and the support is tight.
 
-Most submissions are rejected. A competent paper with a real idea and gaps a reviewer would still ask the authors to fix is a 3 when you would not argue to accept it. A 4 means you would argue to accept it. Do not treat 4 as the ordinary score for a finished paper. 3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.
-
+3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.
 If the paper is weak and you are unsure, the decision is 3 or below. If the paper is strong and you are unsure, the decision is 4 or above.
-
-predicted_mean is a side estimate of the mean score careful reviewers would give this paper on the venue scale from 1.0 to 10.0, with one decimal. It is not a rescaling of rating, it does not choose the comparisons, and it is not chosen from a short list of favorite values such as 4 or 6.
-
-rationale is one short clause per reference, in ladder order, then which reason wins the decision. The comparisons have to match those clauses.
-strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript.
 Return only the JSON object.
 """.strip()
-    return head + "\n\n## Reference ladder\n" + anchor_ladder_text()
+
+_OPPOSITE_CASE = {
+    "weak-reject": (
+        "a careful reviewer would accept the manuscript because its own comparison shows a gain they would rely on"
+    ),
+    "strong-accept": (
+        "a careful reviewer would reject the manuscript because its own comparison does not show a gain they would rely on"
+    ),
+}
 
 
-HOLISTIC_TASK = holistic_task_text()
+def isolated_task_text(anchor_id: str, *, decision: bool) -> str:
+    """One reference, with positions omitted. The decision is only on the strong pole."""
+    anchor = anchor_by_id(anchor_id)
+    if anchor_id == "weak-reject":
+        reserve = (
+            "Do not reserve worse for a manuscript with no experiment. "
+            "A comparison that does not show a gain you would rely on is worse than this reference or tied with it."
+        )
+        distance = (
+            "When relation is better, a small margin means the gain is only just reliable. "
+            "A margin near 6 means the gain is one a reviewer would accept the manuscript for."
+        )
+    else:
+        reserve = (
+            "Do not reserve better for a manuscript that changes the field. "
+            "A comparison that shows a gain you would rely on is better than this reference or tied with it."
+        )
+        distance = (
+            "When relation is worse, a small margin means the gain is almost one you would rely on. "
+            "A margin near 6 means the gain is not established."
+        )
+    head = f"""
+## One comparison
+You are reviewing one paper for a top machine-learning conference.
+Compare this manuscript to the single fictional reference below. The reference is not a real submission and it is not this manuscript.
+Judge the empirical result, not how attractive the idea is. An attractive idea with a gain you would not rely on is close to a reject for that result. A modest idea with a gain you would rely on is close to an accept for that result.
 
-# One placement call is the locked evaluation. Temperature is per call so a
-# stage default of 0 does not force every sample to the same request body.
+{reserve}
+
+relation is one of three words:
+- better: a careful reviewer would rank this manuscript above the reference
+- tie: a careful reviewer would not rank the two apart
+- worse: a careful reviewer would rank this manuscript below the reference
+
+margin is how far apart they are, from 0 to 6, one decimal.
+0 is a tie. Use 0 only when relation is tie.
+1 is a small gap a second reviewer might reverse.
+6 means the manuscript is the opposite case: {_OPPOSITE_CASE[anchor_id]}.
+A margin of 3 is not a neutral answer. Use it only when the manuscript sits about halfway between this reference and that opposite case.
+If the manuscript resembles the reference, the margin is near 0.
+{distance}
+Do not report a venue rating in the margin.
+
+rationale is two short clauses: the manuscript fact that sets the relation, then the fact that sets the margin.
+""".strip()
+    if decision:
+        head += "\n\n" + _DECISION_TEXT
+    else:
+        head += "\n\nReturn only the JSON object."
+    return head + "\n\n## Reference\n" + anchor_prompt_text(anchor)
+
+
+# One pair is the locked evaluation. Temperature is per call so a stage
+# default of 0 does not force every sample to the same request body.
+# The two calls in a pair run together.
 DEFAULT_HOLISTIC_SAMPLES = LOCKED_HOLISTIC_SAMPLES
 DEFAULT_HOLISTIC_TEMPERATURE = 0.7
 
@@ -1448,10 +1474,11 @@ def judgment_prompt_fingerprint() -> str:
         [
             rubric_prompt_text(),
             FATAL_CLASS_DEFINITIONS,
-            HOLISTIC_TASK,
+            isolated_task_text("weak-reject", decision=False),
+            isolated_task_text("strong-accept", decision=True),
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "anchor-place-v1",
+            "isolate-poles-v1",
             ",".join(f"{anchor.id}={anchor.position}" for anchor in SYNTHETIC_ANCHORS),
         ]
     )
@@ -1500,101 +1527,93 @@ def _fatal_verify_user(items: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _optional_holistic_evidence(
+def _pole_record(anchor_id: str, payload: IsolatedComparison) -> dict[str, Any]:
+    anchor = anchor_by_id(anchor_id)
+    return {
+        "id": anchor.id,
+        "position": anchor.position,
+        "relation": payload.relation,
+        "margin": round(float(payload.margin), 4),
+        "implied": implied_score(anchor.position, payload.relation, payload.margin),
+    }
+
+
+def _isolated_pair(
     session: ModelSession,
-    request: ReviewRequest,
-    snapshots: list[Any],
-    payload: HolisticJudgment,
-    evidence: list[EvidenceRecord],
-) -> dict[str, str]:
-    """Attach excerpts that resolve. A miss is a counted drop, not a failed rating."""
-    found: dict[str, str] = {}
-    seen = {item.id for item in evidence}
-    for name, excerpt in (
-        ("strength", payload.strength_excerpt),
-        ("weakness", payload.weakness_excerpt),
-    ):
-        if not excerpt.strip():
-            continue
-        anchor = locate_excerpt(
-            excerpt,
-            manuscript=request.source_text,
-            manuscript_sha=request.manuscript.sha256,
-            snapshots=snapshots,
-        )
-        if anchor is None:
-            session.reject("holistic", name, _UNRESOLVED_ANCHOR, category="holistic_excerpt")
-            continue
-        evidence_id = f"E-holistic-{name}"
-        if evidence_id not in seen:
-            evidence.append(_evidence(evidence_id, anchor.excerpt or excerpt, anchor, request.manuscript))
-            seen.add(evidence_id)
-        found[name] = evidence_id
-    return found
+    weak_user: str,
+    strong_user: str,
+    temperature: float,
+) -> tuple[IsolatedComparison, IsolatedDecision]:
+    """Run the two pole calls together. A schema failure retries once inside each call."""
+    jobs: dict[str, tuple[str, type[IsolatedComparison]]] = {
+        "holistic-weak-reject": (weak_user, IsolatedComparison),
+        "holistic-strong-accept": (strong_user, IsolatedDecision),
+    }
+    results: dict[str, IsolatedComparison] = {}
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {
+            pool.submit(session.complete, name, user, schema, temperature=temperature): name
+            for name, (user, schema) in jobs.items()
+        }
+        for future in as_completed(futures):
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            assert isinstance(payload, IsolatedComparison)
+            results[futures[future]] = payload
+    if errors:
+        raise errors[0]
+    weak = results["holistic-weak-reject"]
+    strong = results["holistic-strong-accept"]
+    assert isinstance(strong, IsolatedDecision)
+    return weak, strong
 
 
 def _sample_holistic(
     session: ModelSession,
-    request: ReviewRequest,
-    snapshots: list[Any],
     packet: str,
-    evidence: list[EvidenceRecord],
     *,
     samples: int,
     temperature: float,
 ) -> dict[str, Any]:
-    """K independent placements. A schema failure retries once, then fails the paper.
-
-    There is no dimension-band substitute. The rank is the ladder placement.
-    The decision and the venue mean are stored from the same response.
-    Optional excerpts are recorded when they resolve and counted when they do not.
-    """
+    """K isolated pairs. The locked rank is the first pair. There is no band substitute."""
     if samples < 1:
         session.fail("judgment holistic requires at least one sample")
-    user = packet + "\n\n" + HOLISTIC_TASK
+    weak_anchor = anchor_by_id("weak-reject")
+    strong_anchor = anchor_by_id("strong-accept")
+    weak_user = packet + "\n\n" + isolated_task_text(weak_anchor.id, decision=False)
+    strong_user = packet + "\n\n" + isolated_task_text(strong_anchor.id, decision=True)
+    session.authorize()
     ratings: list[float] = []
-    means: list[float] = []
-    places: list[float] = []
-    counts: list[float] = []
-    placements: list[dict[str, Any]] = []
-    attached: dict[str, str] = {}
-    for _index in range(samples):
-        payload = session.complete(
-            "holistic",
-            user,
-            HolisticJudgment,
-            temperature=temperature,
-        )
-        assert isinstance(payload, HolisticJudgment)
-        ratings.append(round(float(payload.rating), 4))
-        means.append(round(float(payload.predicted_mean), 4))
-        relations = {item.anchor_id: item.relation for item in payload.comparisons}
-        described = describe_placement(relations, payload.gap_lean)
-        places.append(float(described["place"]))
-        counts.append(float(described["count"]))
-        placements.append(described)
-        attached.update(
-            _optional_holistic_evidence(session, request, snapshots, payload, evidence)
-        )
-    if len(ratings) != samples or len(means) != samples or len(places) != samples:
+    isolates: list[float] = []
+    poles: list[dict[str, Any]] = []
+    for index in range(samples):
+        weak_payload, strong_payload = _isolated_pair(session, weak_user, strong_user, temperature)
+        anchors = [
+            _pole_record(weak_anchor.id, weak_payload),
+            _pole_record(strong_anchor.id, strong_payload),
+        ]
+        score = isolate_score([float(item["implied"]) for item in anchors])
+        ratings.append(round(float(strong_payload.rating), 4))
+        isolates.append(score)
+        poles.append({"sample": index, "isolate": score, "anchors": anchors})
+    if len(ratings) != samples or len(isolates) != samples:
         session.fail(
             "judgment holistic produced no rating; refusing to fall back to dimension bands"
         )
     return {
         "rating": round(sum(ratings) / len(ratings), 4),
         "samples": ratings,
-        "predicted_mean": round(sum(means) / len(means), 4),
-        "mean_samples": means,
-        "place": round(sum(places) / len(places), 4),
-        "place_samples": places,
-        "count": round(sum(counts) / len(counts), 4),
-        "count_samples": counts,
-        "placements": placements,
+        "isolate": isolates[0],
+        "isolate_samples": isolates,
+        "poles": poles,
         "ladder": [{"id": anchor.id, "position": anchor.position} for anchor in SYNTHETIC_ANCHORS],
-        "n": len(ratings),
+        "n": len(isolates),
         "verified": True,
-        "strength_evidence_id": attached.get("strength"),
-        "weakness_evidence_id": attached.get("weakness"),
+        "locked_candidate": LOCKED_CANDIDATE,
     }
 
 
@@ -2034,10 +2053,7 @@ def _run_judgments(
         _route_id, packet = packet_for("holistic")
         holistic_meta = _sample_holistic(
             session,
-            request,
-            snapshots,
             packet,
-            evidence,
             samples=int(settings["holistic_samples"]),
             temperature=float(settings["holistic_temperature"]),
         )

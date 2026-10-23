@@ -4,6 +4,12 @@
 
 The comparison is not a claim about any hosted reviewer's published correlation.
 
+## Locked fusion candidate
+
+`apr-fusion-v1` ships one preregistered rank, `isolate-k1`. It is the mean of two implied scores from a single pair of calls. One call compares the manuscript only to the fictional weak-reject reference. The other compares it only to the fictional strong-accept reference. The calls run together. Each returns a relation and a margin. The implied score is that reference's declared position plus the margin when the manuscript is better, minus the margin when it is worse, and the position itself on a tie, clamped to 1.0–10.0. The positions are 2.5 and 8.5. The margin stops at 6, the gap between those positions. The 1–6 decision is stored from the strong-accept call and sets the ICLR bin. It is not the rank.
+
+Do not replace `isolate-k1` with another candidate after seeing tune or held-out metrics. `scripts/rank_eval.py` defaults to `--mode locked`, which reports the shipped rank. The same default K is 1, so the pair is not repeated. Dimension bands stay on the package and stay off this rank.
+
 ## What is measured
 
 For each public submission the tool stores official ratings separately from the manuscript, runs prompt packets, then `execute_review` and `rate`.

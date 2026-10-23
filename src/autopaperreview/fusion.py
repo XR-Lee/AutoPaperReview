@@ -1,12 +1,14 @@
 """Declared rank signals. Not a fitted regression.
 
-apr-fusion-v1 keeps a 1–6 decision and a ladder placement from one judgment.
-The decision sets the ICLR bin. The placement is where the paper sits against
-a fixed ladder of synthetic references, on 1.0–10.0, and it is the shipped
-rank. A 1.0–10.0 venue mean from the same call stays eligible. A verified
-venue cap and the seven dimension bands stay off this rank unless a tune-slice
-comparison shows the cap is strictly better on both Spearman and AUC. They
-are recorded so a report can explain the score.
+apr-fusion-v1 keeps a 1–6 decision and the locked rank ``isolate-k1``.
+That rank is the mean of two implied scores from one pair of isolated
+comparisons, on 1.0–10.0: the manuscript against weak-reject, and the
+manuscript against strong-accept. The decision sets the ICLR bin and is not
+the rank. A package that has only an older ladder placement, only a venue
+mean, or only a decision still ranks by that older signal.
+
+The measurement uses this one candidate. ``selection_report`` is not a
+license to replace it after seeing tune or held-out metrics.
 
 apr-iclr-cap-v2 is unchanged and still uses its own weakest-link gate. It is
 not a fusion candidate. A missing decision score is not filled in from the
@@ -17,11 +19,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .anchors import LOCKED_CANDIDATE
 from .rubrics import FUSION_COEFFICIENT_SET
 
 __all__ = [
     "FUSION_COEFFICIENT_SET",
     "FUSION_VARIANT",
+    "LOCKED_CANDIDATE",
     "SHIPPABLE",
     "NEAR_TOLERANCE",
     "RankSignals",
@@ -33,20 +37,24 @@ __all__ = [
     "selection_report",
 ]
 
-# Shipped rank when a ladder placement was stored. A package with only a venue
-# mean, or only a decision, still ranks by that older signal.
-FUSION_VARIANT = "place"
+# Shipped rank for a package that stored the isolated pair. Older packages
+# fall through to placement, then the venue mean, then the decision.
+FUSION_VARIANT = LOCKED_CANDIDATE
 
-# Eligible core ranks. One call produces every family at that K, so order is
-# preference: placement, then venue mean, then decision. A within-0.02 tie
-# keeps the earlier name. count-* is diagnostic and is not listed here.
+# Eligible core ranks when a diagnostic table is built. The locked measurement
+# does not pick from this list. Order at the same K is preference for that
+# table only: isolated pair, then placement, then venue mean, then decision.
+# A within-0.02 tie keeps the earlier name. count-* is diagnostic.
 SHIPPABLE = (
+    "isolate-k1",
     "place-k1",
     "mean-k1",
     "decision-k1",
+    "isolate-k2",
     "place-k2",
     "mean-k2",
     "decision-k2",
+    "isolate-k3",
     "place-k3",
     "mean-k3",
     "decision-k3",
@@ -130,6 +138,7 @@ class RankSignals:
     mean_samples: tuple[float, ...] = ()
     place_samples: tuple[float, ...] = ()
     count_samples: tuple[float, ...] = ()
+    isolate_samples: tuple[float, ...] = ()
     bands_available: bool = True
 
 
@@ -186,6 +195,7 @@ def candidate_scores(signals: RankSignals) -> dict[str, float]:
     score.
     """
     scores = _diagnostics(signals)
+    scores.update(_prefix_means(signals.isolate_samples, "isolate"))
     scores.update(_prefix_means(signals.place_samples, "place"))
     scores.update(_prefix_means(signals.count_samples, "count"))
     scores.update(_prefix_means(signals.mean_samples, "mean"))
@@ -211,14 +221,16 @@ def _pair(metrics: dict[str, dict[str, float | None]], name: str) -> tuple[float
 
 
 def selection_report(metrics: dict[str, dict[str, float | None]]) -> dict[str, object]:
-    """Tune-slice selection among the venue-mean and decision prefixes.
+    """Diagnostic table among stored rank families.
+
+    The locked measurement does not call this. It reports ``LOCKED_CANDIDATE``.
 
     A candidate is eligible when its Spearman is within ``NEAR_TOLERANCE`` of
     the best Spearman and its AUC is within ``NEAR_TOLERANCE`` of the best
     AUC. The bests may come from different candidates. The cheapest eligible
-    candidate wins. At the same K the placement is preferred to the venue
-    mean, and the venue mean is preferred to the decision, because they share
-    a call. If none are eligible, the higher Spearman wins, then the higher
+    candidate wins. At the same K the isolated pair is preferred to the
+    placement, the placement to the venue mean, and the venue mean to the
+    decision. If none are eligible, the higher Spearman wins, then the higher
     AUC, then the cheaper candidate.
 
     ``<name>-capped`` replaces that choice only when both metrics are strictly
@@ -257,6 +269,7 @@ def selection_report(metrics: dict[str, dict[str, float | None]]) -> dict[str, o
         cap_adopted = True
     return {
         "chosen": chosen,
+        "preregistered": LOCKED_CANDIDATE,
         "tied": list(eligible),
         "rule": rule,
         "cap_adopted": cap_adopted,
