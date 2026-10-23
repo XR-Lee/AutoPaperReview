@@ -215,27 +215,111 @@ def _read_related_work_comparison(package: ReviewPackage) -> dict[str, Any] | No
     return comparison
 
 
-def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
+def _holistic_rating(package: ReviewPackage) -> float | None:
+    raw = package.metadata.get("holistic_rating")
+    if not isinstance(raw, dict) or raw.get("verified") is not True:
+        return None
+    rating = raw.get("rating")
+    if isinstance(rating, bool) or not isinstance(rating, (int, float)):
+        return None
+    value = float(rating)
+    if value < 1.0 or value > 10.0:
+        return None
+    return value
+
+
+def _clamp_rank(value: float) -> float:
+    return min(10.0, max(1.0, value))
+
+
+def rate_venue(
+    package: ReviewPackage,
+    *,
+    confidence: int = 3,
+    coefficient_set: str | None = None,
+) -> OverallScore:
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
+    from .fusion import FUSION_COEFFICIENT_SET, FUSION_VARIANT, RankSignals, candidate_scores
+
+    chosen = coefficient_set or COEFFICIENT_SET
+    if chosen not in {COEFFICIENT_SET, FUSION_COEFFICIENT_SET}:
+        raise ValueError(f"unknown coefficient set {chosen}")
     comparison = _read_related_work_comparison(package)
-    bands = _bands(package)
     caps = active_caps(package)
-    _apply_ceilings(bands, package, caps)
+    venue_cap = effective_venue_cap(caps)
+    bands = None
+    if not (chosen == FUSION_COEFFICIENT_SET and not package.dimension_scores):
+        bands = _bands(package)
+        _apply_ceilings(bands, package, caps)
     # math.fsum, not sum(). CPython 3.11 adds these products left to right, so a
     # uniform 6 is 5.999999999999998 and snap_down returns 5 (a uniform 3
     # becomes 2.999999999999999 and returns 1). 3.12+ sum() uses Neumaier
     # summation and stays on the bin. fsum matches that result on 3.11/3.12/3.13.
-    weighted = math.fsum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
-    gate = min(
-        bands[SarDimension.claims_supported],
-        bands[SarDimension.experimental_soundness],
+    if bands is None:
+        weighted = 0.0
+        gate = 0.0
+        raw = 0.0
+        capped = 0.0
+        band_mean = 0.0
+        claims = 0.0
+        soundness = 0.0
+    else:
+        weighted = math.fsum(WEIGHTS[dimension] * bands[dimension] for dimension in WEIGHTS)
+        gate = min(
+            bands[SarDimension.claims_supported],
+            bands[SarDimension.experimental_soundness],
+        )
+        raw = min(weighted, gate + 1.0)
+        capped = raw if venue_cap is None else min(raw, float(venue_cap))
+        band_mean = sum(bands.values()) / len(bands)
+        claims = bands[SarDimension.claims_supported]
+        soundness = bands[SarDimension.experimental_soundness]
+    venue = snap_down(capped) if bands is not None else 1
+    signals = RankSignals(
+        weighted=weighted,
+        gate=gate,
+        claims=claims,
+        soundness=soundness,
+        band_mean=band_mean,
+        venue_cap=venue_cap,
+        holistic=_holistic_rating(package),
+        bands_available=bands is not None,
     )
-    raw = min(weighted, gate + 1.0)
-    venue_cap = effective_venue_cap(caps)
-    capped = raw if venue_cap is None else min(raw, float(venue_cap))
-    venue = snap_down(capped)
+    candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
+    if chosen == FUSION_COEFFICIENT_SET:
+        if FUSION_VARIANT not in candidates:
+            raise ValueError(
+                "apr-fusion-v1 requires a holistic rating; refusing to fall back to dimension bands"
+            )
+        rank_score = round(_clamp_rank(candidates[FUSION_VARIANT]), 4)
+        venue = snap_down(rank_score)
+        reported = rank_score
+        notes = (
+            "apr-fusion-v1 ranks by the mean of the holistic samples on a 1.0-10.0 scale. "
+            "A verified venue cap is a downward adjustment and nothing else. "
+            "Dimension bands are not a gate. A missing holistic rating fails the paper. "
+            "It is not a fitted regression. venue_bin is snap_down of the rank score."
+        )
+        formula = (
+            f"rank = {FUSION_VARIANT}; "
+            "rank = mean(holistic samples); "
+            "a verified venue cap may only lower the rank; "
+            "venue_bin = snap_down(rank)"
+        )
+    else:
+        rank_score = round(capped, 4)
+        reported = float(venue)
+        notes = (
+            "apr-iclr-cap-v2 is a declared formula with fatal-flaw caps. "
+            "The venue bin is the largest ICLR bin that does not exceed the capped raw score. "
+            "It is not a fitted ICLR regression."
+        )
+        formula = (
+            "raw = min(dot(weights, bands), min(claims, soundness) + 1); "
+            "capped = min(raw, active caps); venue = snap_down onto 1/3/5/6/8/10"
+        )
     evidence_ids: list[str] = []
     for score in package.dimension_scores:
         evidence_ids.extend(score.evidence_ids)
@@ -256,13 +340,19 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
         "gate": gate,
         "raw": round(raw, 4),
         "capped": round(capped, 4),
+        "venue_bin": int(venue),
+        "rank_score": rank_score,
+        "candidates": candidates,
+        "holistic": signals.holistic,
         "cap_ids": [item.record_id for item in caps],
         "caps": [
             {"id": item.record_id, "fatal_class": item.fatal_class.value, "cap": item.cap, "exempted": item.exempted}
             for item in caps
         ],
         "exemption_ids": exemption_ids,
-        "bands_after_ceiling": {dimension.value: bands[dimension] for dimension in bands},
+        "bands_after_ceiling": (
+            {} if bands is None else {dimension.value: bands[dimension] for dimension in bands}
+        ),
         "visual_status": visual_status,
         "related_work_comparison": (
             None
@@ -278,29 +368,28 @@ def rate_venue(package: ReviewPackage, *, confidence: int = 3) -> OverallScore:
                 ],
             }
         ),
-        "formula": (
-            "raw = min(dot(weights, bands), min(claims, soundness) + 1); "
-            "capped = min(raw, active caps); venue = snap_down onto 1/3/5/6/8/10"
-        ),
+        "formula": formula,
+        "fusion_variant": FUSION_VARIANT if chosen == FUSION_COEFFICIENT_SET else None,
     }
     return OverallScore(
-        value=float(venue),
+        value=reported,
         scale_min=1.0,
         scale_max=10.0,
         method=OverallScoreMethod.declared_formula,
-        coefficient_set=COEFFICIENT_SET,
-        notes=(
-            "apr-iclr-cap-v2 is a declared formula with fatal-flaw caps. "
-            "The venue bin is the largest ICLR bin that does not exceed the capped raw score. "
-            "It is not a fitted ICLR regression."
-        ),
+        coefficient_set=chosen,
+        notes=notes,
         evidence_ids=evidence_ids,
         metadata=metadata,
     )
 
 
-def apply_rating(package: ReviewPackage, *, confidence: int = 3) -> ReviewPackage:
-    scored = rate_venue(package, confidence=confidence)
+def apply_rating(
+    package: ReviewPackage,
+    *,
+    confidence: int = 3,
+    coefficient_set: str | None = None,
+) -> ReviewPackage:
+    scored = rate_venue(package, confidence=confidence, coefficient_set=coefficient_set)
     return package.model_copy(update={"overall_score": scored})
 
 

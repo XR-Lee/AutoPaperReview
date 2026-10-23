@@ -13,7 +13,7 @@ from ..integrity import assert_inside_workspace
 from ..models import ReviewPackage
 from ..rating import TieNote, apply_rating, calibrate_packages
 from ..reporting import write_package_json
-from ..rubrics import COEFFICIENT_SET
+from ..rubrics import COEFFICIENT_SET, FUSION_COEFFICIENT_SET
 from .base import StageContext, StageHandler, StageOutcome
 
 
@@ -43,25 +43,35 @@ def _load_package(context: StageContext) -> ReviewPackage:
 
 class RateParams(ParamsModel):
     confidence: int = Field(default=3, ge=1, le=5)
+    coefficient_set: str = COEFFICIENT_SET
 
 
 class RateStage(StageHandler):
     type_name = "rate"
-    version = "4"
+    version = "5"
     params_model = RateParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
+        from ..fusion import FUSION_VARIANT
         from ..rubrics import RUBRIC_ID, rubric_fingerprint
 
-        return {
-            "coefficient_set": COEFFICIENT_SET,
+        params = RateParams.model_validate(context.stage.params)
+        material = {
+            "coefficient_set": params.coefficient_set,
             "rubric_id": RUBRIC_ID,
             "rubric_sha256": rubric_fingerprint(),
         }
+        if params.coefficient_set == FUSION_COEFFICIENT_SET:
+            material["fusion_variant"] = FUSION_VARIANT
+        return material
 
     def run(self, context: StageContext) -> StageOutcome:
         params = RateParams.model_validate(context.stage.params)
-        package = apply_rating(_load_package(context), confidence=params.confidence)
+        package = apply_rating(
+            _load_package(context),
+            confidence=params.confidence,
+            coefficient_set=params.coefficient_set,
+        )
         output = context.stage_dir / "package.json"
         write_package_json(package, output)
         score = package.overall_score
@@ -69,7 +79,7 @@ class RateStage(StageHandler):
         return StageOutcome(
             artifacts=[_artifact(output, context, "review.package.rated")],
             metadata={
-                "coefficient_set": COEFFICIENT_SET,
+                "coefficient_set": params.coefficient_set,
                 "value": None if score is None else score.value,
                 "cap_ids": metadata.get("cap_ids", []),
             },

@@ -147,6 +147,20 @@ class ScoreRow(BaseModel):
         return sum(self.human_ratings) / len(self.human_ratings)
 
 
+_STATUS_LINE = re.compile(
+    r"^\s*(?:Published as a conference paper|Under review as a conference paper|"
+    r"Accepted (?:to|at) (?:ICLR|NeurIPS|ICML|CVPR|ACL))\b",
+    re.IGNORECASE,
+)
+
+
+def strip_venue_status_lines(text: str) -> str:
+    """Drop camera-ready banner lines so a public PDF cannot leak the decision."""
+    kept = [line for line in text.splitlines() if not _STATUS_LINE.search(line)]
+    body = "\n".join(kept).strip()
+    return body + ("\n" if body else "")
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1046,10 +1060,14 @@ def _write_project(
     model: str | None = None,
     api_key_env: str = "APR_MODEL_API_KEY",
     allow_remote: bool = False,
+    coefficient_set: str = COEFFICIENT_SET,
+    with_holistic: bool = False,
+    cheap: bool = False,
+    holistic_samples: int = 3,
 ) -> None:
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
-    manuscript = (destination / "manuscript.txt").read_text(encoding="utf-8")
+    manuscript = strip_venue_status_lines((destination / "manuscript.txt").read_text(encoding="utf-8"))
     (project / "manuscript.txt").write_text(manuscript, encoding="utf-8")
     pdf = destination / "manuscript.pdf"
     if pdf.is_file():
@@ -1112,21 +1130,36 @@ def _write_project(
             review_params.append(f"model = {_toml_string(model)}")
             review_params.append(f"api_key_env = {_toml_string(api_key_env)}")
             review_params.append(f"allow_remote = {'true' if allow_remote else 'false'}")
-            review_params.append('judgments = ["contributions", "ledger", "dimensions", "fatal"]')
+            from .rubrics import FUSION_COEFFICIENT_SET
+
+            include_holistic = with_holistic or cheap or coefficient_set == FUSION_COEFFICIENT_SET
+            if cheap:
+                judgment_names = ["holistic"]
+            else:
+                judgment_names = ["contributions", "ledger", "dimensions", "fatal"]
+                if include_holistic:
+                    judgment_names.append("holistic")
+            review_params.append("judgments = [" + ", ".join(f'"{item}"' for item in judgment_names) + "]")
+            if cheap:
+                review_params.append("cheap = true")
+            if include_holistic:
+                review_params.append(f"holistic_samples = {int(holistic_samples)}")
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
         if adapter == MODEL_ADAPTER:
-            review_params.extend(
-                [
-                    "",
-                    "[stages.params.packet_routes]",
+            if cheap:
+                route_lines = ['holistic = "M0"']
+            else:
+                route_lines = [
                     'contributions = "M0"',
                     'ledger = "M0"',
                     'dimensions = "M2"',
                     'fatal = "M2"',
                 ]
-            )
+                if include_holistic:
+                    route_lines.append('holistic = "M0"')
+            review_params.extend(["", "[stages.params.packet_routes]", *route_lines])
         review_params.append("")
         related_params = [
             "[[stages]]",
@@ -1174,6 +1207,8 @@ def _write_project(
                 'id = "rate"',
                 'type = "rate"',
                 'depends_on = ["consensus"]',
+                "[stages.params]",
+                f"coefficient_set = {_toml_string(coefficient_set)}",
                 "",
             ]
         )
@@ -1271,12 +1306,19 @@ def run_cache(
     model: str | None = None,
     api_key_env: str = "APR_MODEL_API_KEY",
     allow_remote: bool = False,
+    coefficient_set: str = COEFFICIENT_SET,
+    with_holistic: bool = False,
+    cheap: bool = False,
+    holistic_samples: int = 3,
+    only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
     """Run related-work search, execute_review, and rate. Agent mode waits for a judgment drop."""
     cache = assert_local_only(cache, root=root)
     if related_work not in {"off", "agent", "live"}:
         raise PublicCalibrationError("related_work must be off, agent, or live")
+    if holistic_samples < 1 or holistic_samples > 8:
+        raise PublicCalibrationError("holistic_samples must be an integer from 1 to 8")
     spec = _resolve_adapter(mode, adapter)
     if spec == MODEL_ADAPTER and (not base_url or not model):
         raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
@@ -1296,6 +1338,8 @@ def run_cache(
         if status.get("state") not in {"prepared", "awaiting_judgment", "scored"}:
             continue
         forum_id = str(status["forum_id"])
+        if only_ids is not None and forum_id not in only_ids:
+            continue
         destination = paper_dir(cache, forum_id)
         project = destination / "project"
         judgment = project / "judgment.json"
@@ -1326,32 +1370,49 @@ def run_cache(
                 model=model,
                 api_key_env=api_key_env,
                 allow_remote=allow_remote,
+                coefficient_set=coefficient_set,
+                with_holistic=with_holistic,
+                cheap=cheap,
+                holistic_samples=holistic_samples,
             )
             manifest = run_pipeline(project / "review.toml")
             package_path = project / ".runs" / manifest.run_id / "stages" / "rate" / "package.json"
             package = json.loads(package_path.read_text(encoding="utf-8"))
             overall = package.get("overall_score") or {}
-            if overall.get("coefficient_set") != COEFFICIENT_SET:
-                raise PublicCalibrationError("rate stage did not use the declared coefficient set")
+            if overall.get("coefficient_set") != coefficient_set:
+                raise PublicCalibrationError("rate stage did not use the requested coefficient set")
             metadata = overall.get("metadata") or {}
             dimension_scores = {
                 str(item.get("dimension")): item.get("score")
                 for item in (package.get("dimension_scores") or [])
                 if isinstance(item, dict) and item.get("dimension")
             }
+            venue_bin = metadata.get("venue_bin", overall.get("value"))
+            review_stage = manifest.stage("review")
+            usage = {}
+            if review_stage is not None:
+                usage = dict((review_stage.metadata or {}).get("usage_totals") or {})
             score = {
                 "project_id": project_id_for(forum_id),
                 "forum_id": forum_id,
-                "our_bin": int(overall["value"]),
+                "our_bin": int(venue_bin),
+                "rank_score": metadata.get("rank_score", overall.get("value")),
                 "cap_ids": list(metadata.get("cap_ids") or []),
                 "caps": list(metadata.get("caps") or []),
                 "weighted": metadata.get("weighted"),
                 "gate": metadata.get("gate"),
                 "raw": metadata.get("raw"),
                 "capped": metadata.get("capped"),
+                "holistic": metadata.get("holistic"),
+                "candidates": metadata.get("candidates") or {},
+                "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})
+                if review_stage is not None
+                else {},
+                "fusion_variant": metadata.get("fusion_variant"),
                 "dimensions": dimension_scores,
                 "bands_after_ceiling": metadata.get("bands_after_ceiling") or {},
                 "coefficient_set": overall.get("coefficient_set"),
+                "usage_totals": usage,
                 "pdf_source": status.get("pdf_source"),
                 "title": status.get("title"),
             }

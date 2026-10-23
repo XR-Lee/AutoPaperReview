@@ -114,10 +114,14 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     status = _VISUAL_STATUS.get(status_key, (status_key, status_key))
     status_label = status[1] if language == "zh-Hans" else status[0]
     none = "无" if language == "zh-Hans" else "none"
+    bin_value = meta.get("venue_bin", score.value)
+    rank_note = ""
+    if score.coefficient_set == "apr-fusion-v1":
+        rank_note = f" 排序分 {float(meta.get('rank_score', score.value)):.2f}。"
     if language == "zh-Hans":
         return [
-            f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{score.value:.0f}**。"
-            "这不是拟合回归。",
+            f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{float(bin_value):.0f}**。"
+            f"这不是拟合回归。{rank_note}",
             f"- 加权平均：{meta.get('weighted')}",
             f"- 门控 min(主张, 可靠性)：{meta.get('gate')}",
             f"- 上限：{', '.join(cap_ids) if cap_ids else none}",
@@ -125,9 +129,12 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
             f"- 视觉状态：{status_label}",
             f"- 信心：{meta.get('confidence')}",
         ]
+    rank_note_en = ""
+    if score.coefficient_set == "apr-fusion-v1":
+        rank_note_en = f" Rank score {float(meta.get('rank_score', score.value)):.2f}."
     return [
-        f"Declared rating `{score.coefficient_set}`: ICLR bin **{score.value:.0f}**. "
-        "This is not a fitted regression.",
+        f"Declared rating `{score.coefficient_set}`: ICLR bin **{float(bin_value):.0f}**. "
+        f"This is not a fitted regression.{rank_note_en}",
         f"- Weighted mean: {meta.get('weighted')}",
         f"- Gate min(claims, soundness): {meta.get('gate')}",
         f"- Caps: {', '.join(cap_ids) if cap_ids else none}",
