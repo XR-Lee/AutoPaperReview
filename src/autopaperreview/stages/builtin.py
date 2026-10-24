@@ -982,7 +982,7 @@ class ReportParams(ParamsModel):
 
 class ReportStage(StageHandler):
     type_name = "report"
-    version = "12"
+    version = "13"
     params_model = ReportParams
 
     def signature_material(self, context: StageContext) -> dict[str, Any]:
@@ -1076,7 +1076,12 @@ class ReportStage(StageHandler):
         manuscript_pdf = sibling_pdf(context.source_path)
         if manuscript_pdf is not None and pymupdf_available():
             annotated_path = context.stage_dir / "annotated_manuscript.pdf"
-            placements = annotate_pdf(manuscript_pdf, package, annotated_path)
+            placements = annotate_pdf(
+                manuscript_pdf,
+                package,
+                annotated_path,
+                review_markdown=markdown,
+            )
             (project_dir / "annotated_manuscript.pdf").write_bytes(annotated_path.read_bytes())
             annotated_pdf = True
             highlighted = sum(1 for item in placements if item.placement != "page-note")

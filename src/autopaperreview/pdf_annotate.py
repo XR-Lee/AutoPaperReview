@@ -10,6 +10,7 @@ Re-running it only needs the finished package and the source PDF.
 
 from __future__ import annotations
 
+import difflib
 import importlib.util
 import json
 import re
@@ -76,6 +77,43 @@ _KIND_LABEL = {
 }
 _PAGE_HINT = re.compile(r"\b(?:pages?|pp?)\.?\s*(\d{1,4})\b", re.IGNORECASE)
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+_CJK_CHAR = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
+_HEADING = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
+_BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+# "Evidence" does not match: the character after E must not be a letter.
+_EVIDENCE_ID = re.compile(
+    r"(?<![A-Za-z0-9])(E(?![A-Za-z])[A-Za-z0-9._-]*[A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_EVIDENCE_LINK = re.compile(
+    r"\[\[?\s*E(?![A-Za-z])[A-Za-z0-9._-]*[A-Za-z0-9]\s*\]\([^)]*\)\]?",
+    re.IGNORECASE,
+)
+_SEVERITY_WORD = re.compile(r"\b(critical|major|moderate|minor)\b", re.IGNORECASE)
+_ARROW = re.compile(r"(?:-->|=>|->|←|→|⇒|⇐|⟶|⟵|➔|➜|➡|↔|⇔|⟹|⟸)")
+_LIGATURES = str.maketrans(
+    {
+        "\ufb00": "ff",
+        "\ufb01": "fi",
+        "\ufb02": "fl",
+        "\ufb03": "ffi",
+        "\ufb04": "ffl",
+        "\ufb05": "st",
+        "\ufb06": "st",
+    }
+)
+_ROLE_WORD = {
+    "strength": "strength",
+    "strengths": "strength",
+    "优点": "strength",
+    "weakness": "weakness",
+    "weaknesses": "weakness",
+    "不足": "weakness",
+    "question": "question",
+    "questions": "question",
+    "问题": "question",
+}
+_REVIEW_LABEL = {"strength": "Strength", "weakness": "Weakness", "question": "Question"}
 _CJK_FONTS = (
     "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
     "/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf",
@@ -156,9 +194,23 @@ def _two_sentences(text: str, limit: int = 420) -> str:
     return _clip(chosen, limit)
 
 
-def _norm_token(raw: str) -> str:
+def _norm_pieces(raw: str) -> list[str]:
+    """Tokens for one already-joined word, with line numbers removed.
+
+    Ligatures, arrows, and brackets fold onto the same token stream on both
+    the quote and the page. Digit-only tokens are margin line numbers or
+    numerals that the quote may have absorbed from those margins.
+    """
     text = unicodedata.normalize("NFKC", raw).casefold().replace("\u00ad", "")
-    return "".join(char for char in text if char.isalnum())
+    text = text.translate(_LIGATURES)
+    text = _ARROW.sub(" arrow ", text)
+    text = text.replace("-", "")
+    pieces = []
+    for part in text.split():
+        token = "".join(char for char in part if char.isalnum())
+        if token and not token.isdigit():
+            pieces.append(token)
+    return pieces
 
 
 def _natural_id(evidence_id: str) -> list[Any]:
@@ -188,12 +240,127 @@ def _quote_text(evidence: EvidenceRecord) -> str | None:
 
 
 def _quote_tokens(quote: str) -> list[str]:
+    text = unicodedata.normalize("NFKC", quote).replace("\u00ad", "")
+    text = text.translate(_LIGATURES)
+    # A line-break hyphen in the stored quote is the same word as the page.
+    text = re.sub(r"-\s+", "", text)
+    text = text.casefold()
+    text = _ARROW.sub(" arrow ", text)
+    text = text.replace("-", "")
     tokens = []
-    for raw in re.split(r"\s+", quote.strip()):
-        token = _norm_token(raw)
-        if token:
+    for part in text.split():
+        token = "".join(char for char in part if char.isalnum())
+        if token and not token.isdigit():
             tokens.append(token)
     return tokens
+
+
+def _heading_role(title: str) -> str | None:
+    cleaned = re.sub(r"[*_`]", "", title).strip()
+    for segment in re.split(r"\s*/\s*|\s+\|\s+", cleaned):
+        match = re.match(r"([A-Za-z]+|[\u3400-\u9fff]+)", segment.strip())
+        if match is None:
+            continue
+        role = _ROLE_WORD.get(match.group(1).casefold())
+        if role is not None:
+            return role
+    return None
+
+
+def _ids_in(text: str, known: set[str]) -> list[str]:
+    by_fold = {item.casefold(): item for item in known}
+    found: list[str] = []
+    for match in _EVIDENCE_ID.finditer(text):
+        canonical = by_fold.get(match.group(1).casefold())
+        if canonical and canonical not in found:
+            found.append(canonical)
+    return found
+
+
+def _section_blocks(lines: list[str]) -> list[str]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if not line.strip():
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        if current and _BULLET.match(line.strip()) and not line[:1].isspace():
+            blocks.append(current)
+            current = [line]
+            continue
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return ["\n".join(block) for block in blocks]
+
+
+def _note_from_block(text: str) -> str:
+    stripped = _EVIDENCE_LINK.sub(" ", text)
+    stripped = _EVIDENCE_ID.sub(" ", stripped)
+    stripped = re.sub(r"\[(?:\s|,)*\]", " ", stripped)
+    return _two_sentences(stripped)
+
+
+def citations_from_review(markdown: str, known: set[str]) -> dict[str, list[_Citation]]:
+    """Role citations from Strengths, Weaknesses, and Questions sections."""
+    citations: dict[str, list[_Citation]] = {}
+    if not markdown.strip() or not known:
+        return citations
+    role: str | None = None
+    section: list[str] = []
+    sections: list[tuple[str | None, list[str]]] = []
+    for line in markdown.splitlines():
+        heading = _HEADING.match(line.strip())
+        if heading:
+            sections.append((role, section))
+            role = _heading_role(heading.group(2))
+            section = []
+            continue
+        section.append(line)
+    sections.append((role, section))
+
+    seen: set[tuple[str, str]] = set()
+    for section_role, lines in sections:
+        if section_role is None:
+            continue
+        number = 0
+        for block in _section_blocks(lines):
+            evidence_ids = _ids_in(block, known)
+            if not evidence_ids:
+                continue
+            number += 1
+            label = f"{_REVIEW_LABEL[section_role]} {number}"
+            if section_role == "weakness":
+                severity = _SEVERITY_WORD.search(block)
+                if severity:
+                    label = f"{label} ({severity.group(1).casefold()})"
+            note = _note_from_block(block)
+            for evidence_id in evidence_ids:
+                key = (evidence_id, section_role)
+                if key in seen:
+                    continue
+                seen.add(key)
+                _add(citations, evidence_id, _Citation(section_role, label, note))
+    return citations
+
+
+def apply_review_roles(
+    citations: dict[str, list[_Citation]],
+    markdown: str | None,
+    known: set[str],
+) -> None:
+    """Add a section role when the package citation does not already have it."""
+    if not markdown:
+        return
+    for evidence_id, items in citations_from_review(markdown, known).items():
+        existing = {item.role for item in citations.get(evidence_id, [])}
+        for citation in items:
+            if citation.role in existing:
+                continue
+            _add(citations, evidence_id, citation)
+            existing.add(citation.role)
 
 
 def _issue_role(issue: ReviewIssue) -> str:
@@ -365,6 +532,11 @@ def _line_rects(spans: list[Any]) -> list[Any]:
     return lines
 
 
+def _digit_word(text: str) -> bool:
+    pieces = _norm_pieces(text)
+    return not pieces
+
+
 def _tokens_on_page(page: Any) -> list[tuple[str, Any]]:
     import pymupdf
 
@@ -372,20 +544,42 @@ def _tokens_on_page(page: Any) -> list[tuple[str, Any]]:
     for word in page.get_text("words") or []:
         raw_words.append((str(word[4]), pymupdf.Rect(word[0], word[1], word[2], word[3])))
     # A line-end hyphen is one token, but each physical line keeps its own rect
-    # so the highlight does not paint the gap between the lines.
+    # so the highlight does not paint the gap between the lines. Margin line
+    # numbers sit between those words and must not become part of the join.
     merged: list[tuple[str, list[pymupdf.Rect]]] = []
+    pending: tuple[str, list[pymupdf.Rect]] | None = None
     for text, rect in raw_words:
-        if merged and merged[-1][0].endswith("-") and abs(merged[-1][1][-1].y0 - rect.y0) > 2:
-            previous, rects = merged.pop()
-            merged.append((previous[:-1] + text, [*rects, rect]))
-        else:
+        if _digit_word(text):
             merged.append((text, [rect]))
+            continue
+        if pending is not None:
+            stem, rects = pending
+            pending = None
+            if abs(rects[-1].y0 - rect.y0) > 2:
+                merged.append((stem + text, [*rects, rect]))
+                continue
+            merged.append((stem + "-", rects))
+        if text.endswith("-") and not text.endswith("--"):
+            pending = (text[:-1], [rect])
+            continue
+        merged.append((text, [rect]))
+    if pending is not None:
+        stem, rects = pending
+        merged.append((stem + "-", rects))
     tokens: list[tuple[str, list[pymupdf.Rect]]] = []
     for text, rects in merged:
-        token = _norm_token(text)
-        if token:
+        for token in _norm_pieces(text):
             tokens.append((token, rects))
     return tokens
+
+
+def _word_rects(page: Any) -> list[Any]:
+    import pymupdf
+
+    rects = []
+    for word in page.get_text("words") or []:
+        rects.append(pymupdf.Rect(word[0], word[1], word[2], word[3]))
+    return rects
 
 
 def _find_tokens(tokens: list[tuple[str, Any]], quote_tokens: list[str]) -> list[Any] | None:
@@ -399,6 +593,66 @@ def _find_tokens(tokens: list[tuple[str, Any]], quote_tokens: list[str]) -> list
                 spans.extend(tokens[start + offset][1])
             return _line_rects(spans)
     return None
+
+
+def _fuzzy_find(tokens: list[tuple[str, Any]], quote_tokens: list[str]) -> tuple[list[Any], float] | None:
+    """Recover a span when a few tokens differ or a line number was stored in the quote."""
+    count = len(quote_tokens)
+    page_count = len(tokens)
+    if count < 4 or page_count < 4:
+        return None
+    budget = max(1, count // 5)
+    if page_count < count - budget:
+        return None
+    page_words = [item[0] for item in tokens]
+    anchors = set(quote_tokens[: budget + 1])
+    window = count + budget
+    best: tuple[tuple[float, int, int], int, int] | None = None
+    for start, word in enumerate(page_words):
+        if word not in anchors:
+            continue
+        segment = page_words[start : start + window]
+        matcher = difflib.SequenceMatcher(a=quote_tokens, b=segment, autojunk=False)
+        blocks = [block for block in matcher.get_matching_blocks() if block.size]
+        if not blocks:
+            continue
+        matched = sum(block.size for block in blocks)
+        if matched < 4 or matched / count < 0.75:
+            continue
+        first = blocks[0]
+        last = blocks[-1]
+        local_end = last.b + last.size
+        span = local_end - first.b
+        extra = span - matched
+        missing = count - matched
+        if extra > budget or missing > budget:
+            continue
+        abs_start = start + first.b
+        abs_end = start + local_end
+        score = matched / count
+        key = (score, -(extra + missing), -abs_start)
+        if best is None or key > best[0]:
+            best = (key, abs_start, abs_end)
+    if best is None:
+        return None
+    _, abs_start, abs_end = best
+    spans: list[Any] = []
+    for index in range(abs_start, abs_end):
+        spans.extend(tokens[index][1])
+    return _line_rects(spans), best[0][0]
+
+
+def _pick_hit(
+    hits: list[tuple[int, list[Any], float]],
+    hint: int | None,
+) -> tuple[int, list[Any]]:
+    pool = hits
+    if hint is not None:
+        hinted = [hit for hit in hits if hit[0] == hint - 1]
+        if hinted:
+            pool = hinted
+    pool.sort(key=lambda hit: (-hit[2], hit[0]))
+    return pool[0][0], pool[0][1]
 
 
 def _region_rect(evidence: EvidenceRecord, page: Any) -> Any | None:
@@ -441,7 +695,16 @@ def _cjk_file() -> str | None:
     return None
 
 
-def _page_font(page: Any) -> str:
+def _font_for(page: Any, text: str, ready: set[int]) -> str:
+    """Latin text stays on the built-in Helvetica face.
+
+    A CJK face substitutes a non-breaking space for the ASCII space, so an
+    index title drawn with that face no longer extracts as ``Evidence index``.
+    """
+    if not text or _CJK_CHAR.search(text) is None:
+        return "helv"
+    if page.number in ready:
+        return "apr-cjk"
     path = _cjk_file()
     if path is None:
         return "helv"
@@ -449,6 +712,7 @@ def _page_font(page: Any) -> str:
         page.insert_font(fontname="apr-cjk", fontfile=path)
     except (RuntimeError, ValueError):
         return "helv"
+    ready.add(page.number)
     return "apr-cjk"
 
 
@@ -461,16 +725,29 @@ def _top_is_clear(page: Any, band: float = 40) -> bool:
     return True
 
 
-def _draw_legend(page: Any, x: float, y: float, font: str) -> float:
+def _draw_legend(page: Any, x: float, y: float, ready: set[int] | None = None) -> float:
     """Draw the role legend. `y` is the top of the swatches. Returns the next y."""
     import pymupdf
 
-    page.insert_text((x, y + 8), "Legend", fontsize=8, fontname=font, color=(0.25, 0.25, 0.25))
+    fonts = ready if ready is not None else set()
+    page.insert_text(
+        (x, y + 8),
+        "Legend",
+        fontsize=8,
+        fontname=_font_for(page, "Legend", fonts),
+        color=(0.25, 0.25, 0.25),
+    )
     cursor = x + 40
     for role, label in _LEGEND:
         swatch = pymupdf.Rect(cursor, y, cursor + 9, y + 9)
         page.draw_rect(swatch, color=MARKER_COLORS[role], fill=HIGHLIGHT_COLORS[role], width=0.6)
-        page.insert_text((cursor + 12, y + 8), label, fontsize=8, fontname=font, color=(0.15, 0.15, 0.15))
+        page.insert_text(
+            (cursor + 12, y + 8),
+            label,
+            fontsize=8,
+            fontname=_font_for(page, label, fonts),
+            color=(0.15, 0.15, 0.15),
+        )
         cursor += 12 + 4.5 * len(label) + 14
     return y + 18
 
@@ -501,7 +778,18 @@ def _tag_label(evidence_id: str) -> str:
     return evidence_id[:15] + "..."
 
 
-def _allocate_margin(page: Any, anchor: Any, label: str, occupied: list[Any]) -> tuple[Any, Any]:
+def _allocate_margin(
+    page: Any,
+    anchor: Any,
+    label: str,
+    occupied: list[Any],
+    words: list[Any],
+) -> tuple[Any, Any]:
+    """Put the icon and E# tag in the free margin that has more room.
+
+    The slot has to miss the anchor, already placed tags, and every text
+    glyph, including template line numbers in the left margin.
+    """
     import pymupdf
 
     tag_width = min(130.0, max(26.0, 4.3 * len(label) + 8))
@@ -509,24 +797,78 @@ def _allocate_margin(page: Any, anchor: Any, label: str, occupied: list[Any]) ->
     gap = 2.0
     height = 14.0
     total = icon_width + gap + tag_width
-    right_x1 = page.rect.x1 - 6
-    right_x0 = right_x1 - total
-    if right_x0 >= anchor.x1 + 3 and right_x0 > page.rect.x0:
-        x0 = right_x0
+    pad = 1.5
+    line_words = [
+        rect
+        for rect in words
+        if rect.y0 < anchor.y1 + 2 and rect.y1 > anchor.y0 - 2
+    ]
+    if line_words:
+        content_left = min(rect.x0 for rect in line_words)
+        content_right = max(rect.x1 for rect in line_words)
     else:
-        x0 = page.rect.x0 + 4
-    rect = pymupdf.Rect(x0, anchor.y0, x0 + total, anchor.y0 + height)
-    guard = 0
-    while any(rect.intersects(other) for other in occupied) and guard < 40:
-        rect.y0 += height + 2
-        rect.y1 += height + 2
-        guard += 1
-    if rect.y1 > page.rect.y1 - 8:
-        rect.y1 = page.rect.y1 - 8
-        rect.y0 = rect.y1 - height
-    occupied.append(pymupdf.Rect(rect))
-    icon = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + icon_width, rect.y1)
-    tag = pymupdf.Rect(rect.x0 + icon_width + gap, rect.y0, rect.x1, rect.y1)
+        content_left = anchor.x0
+        content_right = anchor.x1
+    left_room = content_left - page.rect.x0
+    right_room = page.rect.x1 - content_right
+    sides = ("right", "left") if right_room >= left_room else ("left", "right")
+
+    def blocked(rect: Any) -> bool:
+        padded = pymupdf.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad)
+        if padded.intersects(anchor):
+            return True
+        if any(padded.intersects(other) for other in occupied):
+            return True
+        return any(padded.intersects(word) for word in words)
+
+    def x_positions(side: str) -> list[float]:
+        if side == "right":
+            outer = page.rect.x1 - 4 - total
+            beside = content_right + 6
+            ordered = [outer, beside] if right_room >= left_room else [beside, outer]
+        else:
+            outer = page.rect.x0 + 4
+            beside = content_left - 6 - total
+            ordered = [beside, outer] if left_room >= right_room else [outer, beside]
+        chosen: list[float] = []
+        for value in ordered:
+            if value < page.rect.x0 or value + total > page.rect.x1:
+                continue
+            if value not in chosen:
+                chosen.append(value)
+        return chosen
+
+    chosen_rect = None
+    for side in sides:
+        for x0 in x_positions(side):
+            for nudge in range(48):
+                y0 = anchor.y0 + nudge * (height + 2)
+                rect = pymupdf.Rect(x0, y0, x0 + total, y0 + height)
+                if rect.y1 > page.rect.y1 - 4:
+                    break
+                if blocked(rect):
+                    continue
+                chosen_rect = rect
+                break
+            if chosen_rect is not None:
+                break
+        if chosen_rect is not None:
+            break
+    if chosen_rect is None:
+        x0 = page.rect.x1 - 4 - total if right_room >= left_room else page.rect.x0 + 4
+        x0 = min(max(x0, page.rect.x0), page.rect.x1 - total)
+        chosen_rect = pymupdf.Rect(x0, anchor.y0, x0 + total, anchor.y0 + height)
+        guard = 0
+        while any(chosen_rect.intersects(other) for other in occupied) and guard < 40:
+            chosen_rect.y0 += height + 2
+            chosen_rect.y1 += height + 2
+            guard += 1
+        if chosen_rect.y1 > page.rect.y1 - 4:
+            chosen_rect.y1 = page.rect.y1 - 4
+            chosen_rect.y0 = chosen_rect.y1 - height
+    occupied.append(pymupdf.Rect(chosen_rect))
+    icon = pymupdf.Rect(chosen_rect.x0, chosen_rect.y0, chosen_rect.x0 + icon_width, chosen_rect.y1)
+    tag = pymupdf.Rect(chosen_rect.x0 + icon_width + gap, chosen_rect.y0, chosen_rect.x1, chosen_rect.y1)
     return icon, tag
 
 
@@ -538,11 +880,12 @@ def _add_marker(
     role: str,
     comment: str,
     occupied: list[Any],
+    words: list[Any],
 ) -> tuple[float, float]:
     import pymupdf
 
     label = _tag_label(evidence_id)
-    icon_rect, tag_rect = _allocate_margin(page, anchor, label, occupied)
+    icon_rect, tag_rect = _allocate_margin(page, anchor, label, occupied, words)
     marker = MARKER_COLORS[role]
     note = page.add_text_annot(pymupdf.Point(icon_rect.x0, icon_rect.y0), comment, icon="Note")
     _finish(note, title=AUTHOR, content=comment, subject=role, stroke=marker)
@@ -587,45 +930,51 @@ def _append_index(doc: Any, placements: list[EvidenceAnnotation], manuscript_pag
     else:
         chunks.append([])
 
-    index_pages = []
+    # new_page hands back a page that later new_page calls unbind. Fetch
+    # each index page by number after every page exists.
+    first_index_page = doc.page_count
     for _chunk in chunks:
-        index_pages.append(doc.new_page(width=base.width, height=base.height))
+        doc.new_page(width=base.width, height=base.height)
 
-    for index, (page, chunk) in enumerate(zip(index_pages, chunks, strict=True)):
-        font = _page_font(page)
+    for index, chunk in enumerate(chunks):
+        page = doc[first_index_page + index]
+        ready: set[int] = set()
+
+        def paint(origin: Any, text: str, size: float, color: tuple[float, float, float] | None = None, *, box: bool = False) -> None:
+            font = _font_for(page, text, ready)
+            options: dict[str, Any] = {"fontsize": size, "fontname": font}
+            if color is not None:
+                options["color"] = color
+            if box:
+                page.insert_textbox(origin, text, **options)
+            else:
+                page.insert_text(origin, text, **options)
+
         title = "Evidence index" if index == 0 else "Evidence index (continued)"
-        page.insert_text((48, 40), title, fontsize=16, fontname=font, color=(0.12, 0.12, 0.12))
-        page.insert_text(
+        paint((48, 40), title, 16, (0.12, 0.12, 0.12))
+        paint(
             (48, 58),
             f"{AUTHOR}. Margin tags match the comment popups.",
-            fontsize=9,
-            fontname=font,
-            color=(0.30, 0.30, 0.30),
+            9,
+            (0.30, 0.30, 0.30),
         )
-        next_y = _draw_legend(page, 48, 70, font)
+        next_y = _draw_legend(page, 48, 70, ready)
         if index == 0:
-            page.insert_text(
+            paint(
                 (48, next_y + 12),
                 "A page note means the quote was not found. The link still opens that page.",
-                fontsize=8,
-                fontname=font,
-                color=(0.35, 0.35, 0.35),
+                8,
+                (0.35, 0.35, 0.35),
             )
             next_y += 18
         header_y = next_y + 16
-        page.insert_text((48, header_y), "Id", fontsize=8, fontname=font, color=(0.25, 0.25, 0.25))
-        page.insert_text((130, header_y), "Page", fontsize=8, fontname=font, color=(0.25, 0.25, 0.25))
-        page.insert_text((175, header_y), "Field", fontsize=8, fontname=font, color=(0.25, 0.25, 0.25))
-        page.insert_text((330, header_y), "Note", fontsize=8, fontname=font, color=(0.25, 0.25, 0.25))
+        paint((48, header_y), "Id", 8, (0.25, 0.25, 0.25))
+        paint((130, header_y), "Page", 8, (0.25, 0.25, 0.25))
+        paint((175, header_y), "Field", 8, (0.25, 0.25, 0.25))
+        paint((330, header_y), "Note", 8, (0.25, 0.25, 0.25))
         y = header_y + 8
         if not chunk and index == 0:
-            page.insert_text(
-                (48, y + 16),
-                "No cited evidence items.",
-                fontsize=10,
-                fontname=font,
-                color=(0.20, 0.20, 0.20),
-            )
+            paint((48, y + 16), "No cited evidence items.", 10, (0.20, 0.20, 0.20))
             continue
         for item in chunk:
             row = pymupdf.Rect(44, y, base.width - 40, y + 34)
@@ -636,33 +985,17 @@ def _append_index(doc: Any, placements: list[EvidenceAnnotation], manuscript_pag
                 fill=HIGHLIGHT_COLORS[item.role],
                 width=0.4,
             )
-            page.insert_textbox(
-                pymupdf.Rect(62, y + 4, 128, y + 32),
-                item.evidence_id,
-                fontsize=8,
-                fontname=font,
-                color=(0.10, 0.10, 0.10),
-            )
-            page.insert_textbox(
-                pymupdf.Rect(130, y + 4, 170, y + 32),
-                str(item.page),
-                fontsize=8,
-                fontname=font,
-            )
-            page.insert_textbox(
-                pymupdf.Rect(175, y + 2, 325, y + 32),
-                _clip(item.field, 80),
-                fontsize=7.5,
-                fontname=font,
-            )
+            paint(pymupdf.Rect(62, y + 4, 128, y + 32), item.evidence_id, 8, (0.10, 0.10, 0.10), box=True)
+            paint(pymupdf.Rect(130, y + 4, 170, y + 32), str(item.page), 8, box=True)
+            paint(pymupdf.Rect(175, y + 2, 325, y + 32), _clip(item.field, 80), 7.5, box=True)
             status = "highlighted" if item.placement == "text" else (
                 "region highlight" if item.placement == "region" else "page note"
             )
-            page.insert_textbox(
+            paint(
                 pymupdf.Rect(330, y + 2, base.width - 48, y + 32),
                 _clip(f"{status}. {item.note}", 180),
-                fontsize=7.5,
-                fontname=font,
+                7.5,
+                box=True,
             )
             if item.dest is not None and 1 <= item.page <= manuscript_pages:
                 page.insert_link(
@@ -693,8 +1026,18 @@ def _append_index(doc: Any, placements: list[EvidenceAnnotation], manuscript_pag
         return
 
 
-def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> list[EvidenceAnnotation]:
-    """Write an annotated copy of `pdf_path`. The source file is left unchanged."""
+def annotate_pdf(
+    pdf_path: Path,
+    package: ReviewPackage,
+    output_path: Path,
+    *,
+    review_markdown: str | None = None,
+) -> list[EvidenceAnnotation]:
+    """Write an annotated copy of `pdf_path`. The source file is left unchanged.
+
+    `review_markdown`, when given, colors each evidence id from the Strengths,
+    Weaknesses, or Questions section that cites it.
+    """
     import pymupdf
 
     source = Path(pdf_path).expanduser().resolve()
@@ -704,8 +1047,9 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
     if source == output:
         raise ValueError("annotated PDF output must be a different file from the source PDF")
 
-    citations = collect_citations(package)
     by_id = {item.id: item for item in package.evidence}
+    citations = collect_citations(package)
+    apply_review_roles(citations, review_markdown, set(by_id))
     issues_for: dict[str, list[ReviewIssue]] = {}
     for issue in package.issues:
         for evidence_id in issue.evidence_ids:
@@ -720,6 +1064,7 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
             raise ValueError("manuscript PDF has no pages")
 
         token_cache: dict[int, list[tuple[str, Any]]] = {}
+        word_cache = {index: _word_rects(document[index]) for index in range(document.page_count)}
         occupied: dict[int, list[Any]] = {index: [] for index in range(document.page_count)}
         note_slots: dict[int, int] = {}
         legend_on_first = _top_is_clear(document[0])
@@ -734,7 +1079,8 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
             note = _reviewer_note(evidence, issues_for.get(evidence_id, []), group)
             quote = _quote_text(evidence)
             quote_tokens = _quote_tokens(quote) if quote else []
-            matches: list[tuple[int, list[Any]]] = []
+            exact_hits: list[tuple[int, list[Any], float]] = []
+            fuzzy_hits: list[tuple[int, list[Any], float]] = []
             if quote_tokens:
                 for page_index in range(document.page_count):
                     tokens = token_cache.get(page_index)
@@ -743,15 +1089,18 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
                         token_cache[page_index] = tokens
                     found = _find_tokens(tokens, quote_tokens)
                     if found:
-                        matches.append((page_index, found))
+                        exact_hits.append((page_index, found, 1.0))
+                if not exact_hits and len(quote_tokens) >= 4:
+                    for page_index in range(document.page_count):
+                        fuzzy = _fuzzy_find(token_cache[page_index], quote_tokens)
+                        if fuzzy is not None:
+                            fuzzy_hits.append((page_index, fuzzy[0], fuzzy[1]))
             hint = _page_hint(evidence)
+            hits = exact_hits or fuzzy_hits
             chosen = None
             placement = "page-note"
-            if matches:
-                if hint is not None:
-                    chosen = next((item for item in matches if item[0] == hint - 1), matches[0])
-                else:
-                    chosen = matches[0]
+            if hits:
+                chosen = _pick_hit(hits, hint)
                 placement = "text"
             elif evidence.anchor is not None and evidence.anchor.page is not None:
                 region_page = evidence.anchor.page - 1
@@ -808,6 +1157,7 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
                 role=role,
                 comment=comment,
                 occupied=occupied[page_index],
+                words=word_cache[page_index],
             )
             placements.append(
                 EvidenceAnnotation(
@@ -824,7 +1174,7 @@ def annotate_pdf(pdf_path: Path, package: ReviewPackage, output_path: Path) -> l
             )
 
         if legend_on_first:
-            _draw_legend(document[0], 36, 10, _page_font(document[0]))
+            _draw_legend(document[0], 36, 10)
 
         manuscript_pages = document.page_count
         _append_index(document, placements, manuscript_pages)
@@ -903,6 +1253,19 @@ def _find_pdf(run_dir: Path, project_dir: Path | None) -> Path | None:
         if path.name.lower() in _SKIP_PDF_NAMES or ".attempts" in path.parts:
             continue
         return path.resolve()
+    return None
+
+
+def discover_review_markdown(run_dir: Path | None, project_dir: Path | None) -> str | None:
+    """Return the finished review markdown for a run, when one was written."""
+    candidates: list[Path] = []
+    if run_dir is not None:
+        candidates.append(Path(run_dir) / "stages" / "report" / "review_report.md")
+    if project_dir is not None:
+        candidates.append(Path(project_dir) / "review_report.md")
+    for path in candidates:
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
     return None
 
 

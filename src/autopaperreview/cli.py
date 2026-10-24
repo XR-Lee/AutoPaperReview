@@ -231,7 +231,12 @@ def command_calibrate_eval_report(args: argparse.Namespace) -> int:
 
 
 def command_annotate(args: argparse.Namespace) -> int:
-    from .pdf_annotate import annotate_pdf, pymupdf_available, resolve_annotation_request
+    from .pdf_annotate import (
+        annotate_pdf,
+        discover_review_markdown,
+        pymupdf_available,
+        resolve_annotation_request,
+    )
 
     if not pymupdf_available():
         raise RuntimeError(
@@ -243,8 +248,20 @@ def command_annotate(args: argparse.Namespace) -> int:
         package=Path(args.package) if args.package else None,
         output=Path(args.output) if args.output else None,
     )
+    if args.review:
+        review_path = Path(args.review).expanduser()
+        if not review_path.is_file():
+            raise FileNotFoundError(f"review markdown does not exist: {review_path}")
+        review_markdown = review_path.read_text(encoding="utf-8")
+    else:
+        review_markdown = discover_review_markdown(request.run_dir, request.project_dir)
     package = ReviewPackage.model_validate_json(request.package_path.read_text(encoding="utf-8"))
-    placements = annotate_pdf(request.pdf_path, package, request.output_path)
+    placements = annotate_pdf(
+        request.pdf_path,
+        package,
+        request.output_path,
+        review_markdown=review_markdown,
+    )
     project_copy = None
     if args.output is None and request.project_dir is not None:
         copy_path = request.project_dir / "annotated_manuscript.pdf"
@@ -557,6 +574,10 @@ def build_parser() -> argparse.ArgumentParser:
     annotate.add_argument(
         "--output",
         help="annotated PDF path; default is <run>/annotated_manuscript.pdf",
+    )
+    annotate.add_argument(
+        "--review",
+        help="review markdown; Strengths, Weaknesses, and Questions citations set the highlight colour",
     )
     annotate.set_defaults(func=command_annotate)
 
