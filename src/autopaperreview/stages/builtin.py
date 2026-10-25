@@ -16,7 +16,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..adapters import ReviewRequest, load_review_adapter
+from ..anchors import HOLISTIC_MODES
 from ..model_exec import (
+    DEFAULT_HOLISTIC_MODE,
+    DEFAULT_HOLISTIC_SAMPLES,
+    DEFAULT_HOLISTIC_TEMPERATURE,
     DEFAULT_MODEL_TIMEOUT_SECONDS,
     TEXT_JUDGMENTS,
     judgment_prompt_fingerprint,
@@ -1431,8 +1435,17 @@ class ExecuteReviewParams(ParamsModel):
     json_object: bool = True
     bilingual: bool = False
     cheap: bool = False
-    holistic_samples: int = Field(default=3, ge=1, le=8)
-    holistic_temperature: float = Field(default=0.7, ge=0, le=2)
+    holistic_samples: int = Field(default=DEFAULT_HOLISTIC_SAMPLES, ge=1, le=8)
+    holistic_temperature: float = Field(default=DEFAULT_HOLISTIC_TEMPERATURE, ge=0, le=2)
+    holistic_mode: str = DEFAULT_HOLISTIC_MODE
+
+    @field_validator("holistic_mode")
+    @classmethod
+    def known_holistic_mode(cls, value: str) -> str:
+        mode = value.strip().lower()
+        if mode not in HOLISTIC_MODES:
+            raise ValueError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
+        return mode
 
 
 class ExecuteReviewStage(StageHandler):
@@ -1473,6 +1486,7 @@ class ExecuteReviewStage(StageHandler):
                 "cheap": params.cheap,
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
+                "holistic_mode": params.holistic_mode,
             }
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
@@ -1534,6 +1548,7 @@ class ExecuteReviewStage(StageHandler):
                 "cheap": params.cheap,
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
+                "holistic_mode": params.holistic_mode,
                 "stage_signature": (
                     context.manifest.stage(context.stage.id).signature
                     if context.manifest.stage(context.stage.id) is not None

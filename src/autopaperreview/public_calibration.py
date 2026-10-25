@@ -28,6 +28,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .adapters import digest_packet_text, load_review_adapter
+from .anchors import HOLISTIC_MODES, LOCKED_HOLISTIC_MODE, LOCKED_HOLISTIC_SAMPLES
 from .pipeline import PipelineError, run_pipeline
 from .rating import snap_down
 from .rubrics import COEFFICIENT_SET, ICLR_BINS
@@ -1063,8 +1064,11 @@ def _write_project(
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
     cheap: bool = False,
-    holistic_samples: int = 3,
+    holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
+    holistic_mode: str = LOCKED_HOLISTIC_MODE,
 ) -> None:
+    if holistic_mode not in HOLISTIC_MODES:
+        raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
     manuscript = strip_venue_status_lines((destination / "manuscript.txt").read_text(encoding="utf-8"))
@@ -1144,6 +1148,7 @@ def _write_project(
                 review_params.append("cheap = true")
             if include_holistic:
                 review_params.append(f"holistic_samples = {int(holistic_samples)}")
+                review_params.append(f"holistic_mode = {_toml_string(holistic_mode)}")
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
@@ -1234,6 +1239,161 @@ def _write_project(
     (project / toml_name).write_text(body, encoding="utf-8")
 
 
+_EXPERT_SUMMARY_KEYS = (
+    "sample",
+    "contribution_type",
+    "soundness",
+    "presentation",
+    "contribution",
+    "form_score",
+    "prior_work",
+    "prior_work_sure",
+    "prior_work_uncited_sure",
+    "field_context_lines",
+)
+
+
+def expert_summary(forms: Any) -> list[dict[str, Any]]:
+    """The type and the numbers from each expert read. No free text leaves the package."""
+    summary = []
+    if not isinstance(forms, list):
+        return summary
+    for form in forms:
+        if not isinstance(form, dict):
+            continue
+        summary.append({key: form.get(key) for key in _EXPERT_SUMMARY_KEYS})
+    return summary
+
+
+_PANEL_SUMMARY_KEYS = (
+    "sample",
+    "panel_mean",
+    "high",
+    "low",
+    "off_scale",
+    "chair_mean",
+    "decision",
+)
+_PANEL_REVIEW_KEYS = ("role", "rating", "confidence")
+
+
+def panel_summary(
+    panels: Any,
+    *,
+    keys: tuple[str, ...] = _PANEL_SUMMARY_KEYS,
+    review_keys: tuple[str, ...] = _PANEL_REVIEW_KEYS,
+) -> list[dict[str, Any]]:
+    """The role ids and the numbers from each simulated panel. No free text leaves the package."""
+    summary = []
+    if not isinstance(panels, list):
+        return summary
+    for panel in panels:
+        if not isinstance(panel, dict):
+            continue
+        row: dict[str, Any] = {key: panel.get(key) for key in keys}
+        row["reviews"] = [
+            {key: review.get(key) for key in review_keys}
+            for review in panel.get("reviews") or []
+            if isinstance(review, dict)
+        ]
+        summary.append(row)
+    return summary
+
+
+_REBUTTAL_SUMMARY_KEYS = (
+    "sample",
+    "initial_mean",
+    "final_mean",
+    "lift",
+    "raised",
+    "lowered",
+    "high",
+    "low",
+    "off_scale",
+    "label_mismatch",
+    "chair_mean",
+    "decision",
+)
+_REBUTTAL_REVIEW_KEYS = ("role", "rating", "confidence", "final_rating")
+
+
+def rebuttal_summary(panels: Any) -> list[dict[str, Any]]:
+    """The seat ids and the numbers from each simulated discussion. No free text leaves the package."""
+    return panel_summary(panels, keys=_REBUTTAL_SUMMARY_KEYS, review_keys=_REBUTTAL_REVIEW_KEYS)
+
+
+_FORECAST_SUMMARY_KEYS = (
+    "sample",
+    "forecast_mean",
+    "vote_mean",
+    "high",
+    "low",
+    "off_scale",
+    "renormalized",
+    "mode_mismatch",
+    "chair_mean",
+    "decision",
+)
+_FORECAST_REVIEW_KEYS = ("role", "rating", "confidence", "expected", "peak", "probabilities")
+
+
+def forecast_summary(panels: Any) -> list[dict[str, Any]]:
+    """The seat ids, the probabilities and the numbers from each forecast panel. No free text leaves the package."""
+    rows = panel_summary(panels, keys=_FORECAST_SUMMARY_KEYS, review_keys=_FORECAST_REVIEW_KEYS)
+    for row in rows:
+        for review in row["reviews"]:
+            raw = review.get("probabilities")
+            review["probabilities"] = (
+                [float(item) for item in raw if isinstance(item, (int, float)) and not isinstance(item, bool)]
+                if isinstance(raw, list)
+                else []
+            )
+    return rows
+
+
+_MAIN_TEXT_KEYS = ("source_chars", "shown_chars", "cut")
+
+
+def main_text_summary(record: Any) -> dict[str, Any]:
+    """The character counts and the cut kind of the main-text packet. Numbers and one word only."""
+    if not isinstance(record, dict):
+        return {}
+    return {key: record.get(key) for key in _MAIN_TEXT_KEYS if key in record}
+
+
+def audit_summary(audits: Any) -> list[dict[str, Any]]:
+    """Verdicts and counts only. No excerpt, note, title, or reason leaves the package."""
+    summary = []
+    if not isinstance(audits, list):
+        return summary
+    for audit in audits:
+        if not isinstance(audit, dict):
+            continue
+        summary.append(
+            {
+                "sample": audit.get("sample"),
+                "checks_score": audit.get("checks_score"),
+                "counts": dict(audit.get("counts") or {}),
+                "checks": [
+                    {
+                        "id": item.get("id"),
+                        "verdict": item.get("verdict"),
+                        "claimed": item.get("claimed"),
+                        "verified": bool(item.get("verified")),
+                    }
+                    for item in audit.get("checks") or []
+                    if isinstance(item, dict)
+                ],
+                "flaws": [
+                    {"id": item.get("id"), "severity": item.get("severity")}
+                    for item in audit.get("flaws") or []
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    return summary
+
+
 def project_id_for(forum_id: str) -> str:
     return "pub-" + forum_id
 
@@ -1309,7 +1469,8 @@ def run_cache(
     coefficient_set: str = COEFFICIENT_SET,
     with_holistic: bool = False,
     cheap: bool = False,
-    holistic_samples: int = 3,
+    holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
+    holistic_mode: str = LOCKED_HOLISTIC_MODE,
     only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -1319,6 +1480,8 @@ def run_cache(
         raise PublicCalibrationError("related_work must be off, agent, or live")
     if holistic_samples < 1 or holistic_samples > 8:
         raise PublicCalibrationError("holistic_samples must be an integer from 1 to 8")
+    if holistic_mode not in HOLISTIC_MODES:
+        raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     spec = _resolve_adapter(mode, adapter)
     if spec == MODEL_ADAPTER and (not base_url or not model):
         raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
@@ -1374,6 +1537,7 @@ def run_cache(
                 with_holistic=with_holistic,
                 cheap=cheap,
                 holistic_samples=holistic_samples,
+                holistic_mode=holistic_mode,
             )
             manifest = run_pipeline(project / "review.toml")
             package_path = project / ".runs" / manifest.run_id / "stages" / "rate" / "package.json"
@@ -1404,6 +1568,35 @@ def run_cache(
                 "raw": metadata.get("raw"),
                 "capped": metadata.get("capped"),
                 "holistic": metadata.get("holistic"),
+                "samples": list(metadata.get("samples") or []),
+                "mean_samples": list(metadata.get("mean_samples") or []),
+                "place_samples": list(metadata.get("place_samples") or []),
+                "count_samples": list(metadata.get("count_samples") or []),
+                "isolate_samples": list(metadata.get("isolate_samples") or []),
+                "audited_samples": list(metadata.get("audited_samples") or []),
+                "checks_samples": list(metadata.get("checks_samples") or []),
+                "expert_samples": list(metadata.get("expert_samples") or []),
+                "form_samples": list(metadata.get("form_samples") or []),
+                "forecast_samples": list(metadata.get("forecast_samples") or []),
+                "vote_samples": list(metadata.get("vote_samples") or []),
+                "rebuttal_samples": list(metadata.get("rebuttal_samples") or []),
+                "initial_samples": list(metadata.get("initial_samples") or []),
+                "matched_samples": list(metadata.get("matched_samples") or []),
+                "panel_samples": list(metadata.get("panel_samples") or []),
+                "chair_samples": list(metadata.get("chair_samples") or []),
+                "high_samples": list(metadata.get("high_samples") or []),
+                "low_samples": list(metadata.get("low_samples") or []),
+                "audit": audit_summary(metadata.get("audits")),
+                "expert": expert_summary(metadata.get("forms")),
+                "panel": panel_summary(metadata.get("panels")),
+                "matched": panel_summary(metadata.get("matched_panels")),
+                "rebuttal": rebuttal_summary(metadata.get("rebuttal_panels")),
+                "forecast": forecast_summary(metadata.get("forecast_panels")),
+                "main_text": main_text_summary(metadata.get("main_text")),
+                "holistic_mode": metadata.get("holistic_mode"),
+                "placements": list(metadata.get("placements") or []),
+                "poles": list(metadata.get("poles") or []),
+                "ladder": list(metadata.get("ladder") or []),
                 "candidates": metadata.get("candidates") or {},
                 "drop_counts": dict((review_stage.metadata or {}).get("drop_counts") or {})
                 if review_stage is not None

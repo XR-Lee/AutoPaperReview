@@ -6,8 +6,23 @@ replace a failed call with the deterministic manuscript adapter.
 
 `OpenAICompatibleAdapter` is the `execute_review` entry point. Text judgments
 are contributions, ledger and agenda items, the seven rating dimensions, and
-fatal classification. An optional `holistic` judgment adds K samples of one
-1.0–10.0 rating. The mean is the rating. Excerpts on that rating are optional.
+fatal classification. An optional `holistic` judgment ranks the paper. In the
+locked `matched` mode it is K matched-panel calls, run together: each sees the
+manuscript's main text only (the reference list and the appendix are cut from
+the packet and the text is capped), simulates the four topic-matched reviewers
+of mixed seniority the venue would assign, states the venue's rating norms,
+writes their reviews, and has each submit an official rating; the per-call
+panel mean is the mean of those four ratings and the shipped rank is the mean
+of the panel means. In `panel` mode it is K mixed-role panels on the full
+manuscript. The model's own estimate of the mean after writing a panel is
+diagnostic in both. In `expert` mode it is K
+expert reads, run together: each names the contribution type, writes down the
+closest prior work and the field context the model recalls, fills the venue
+review form, and then estimates the mean official rating on 1.0–10.0. The
+1–6 decision on the same calls sets the bin and is not the rank. In `audited`
+mode it is one audit call, whose pass, fail, and flaw excerpts must resolve in
+the manuscript, followed by one scoring call that sees the verified audit. In
+`mean` mode it is K venue-mean calls with no audit, run together and averaged.
 `OpenAICompatibleVisionInspector` is the `visual_inspect` entry point and sends
 rendered page images to the same chat API.
 
@@ -29,21 +44,72 @@ import base64
 import ipaddress
 import json
 import os
+import re
 import socket
+import threading
 import time
 import unicodedata
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from .i18n import script_matches
 
 from .adapters import ReviewRequest, ReviewResult, _merge_literature
+from .anchors import (
+    AUDIT_CHECK_IDS,
+    AUDIT_VERDICTS,
+    CONFIDENCE_MAX,
+    CONFIDENCE_MIN,
+    CONTRIBUTION_TYPE_IDS,
+    FLAW_SEVERITIES,
+    FORECAST_PANEL_SIZE,
+    FORECAST_SEAT_IDS,
+    FORM_MAX,
+    FORM_MIN,
+    FULL_TEXT_MAX_CHARS,
+    HOLISTIC_MODES,
+    LOCKED_CANDIDATE,
+    LOCKED_HOLISTIC_MODE,
+    LOCKED_HOLISTIC_SAMPLES,
+    LOCKED_HOLISTIC_TEMPERATURE,
+    MAIN_TEXT_MAX_CHARS,
+    MAIN_TEXT_MIN_SHARE,
+    MATCHED_SEAT_IDS,
+    MAX_AUDIT_FLAWS,
+    MAX_FIELD_CONTEXT_LINES,
+    MAX_PRIOR_WORK,
+    MAX_REVIEW_POINTS,
+    OFFICIAL_RATINGS,
+    PANEL_ROLE_IDS,
+    PANEL_SIZE,
+    RATING_MAX,
+    RATING_MIN,
+    REBUTTAL_PANEL_SIZE,
+    REBUTTAL_SEAT_IDS,
+    audit_check_prompt_lines,
+    checks_score,
+    contribution_type_prompt_lines,
+    expected_rating,
+    forecast_mean,
+    forecast_seat_prompt_lines,
+    form_score,
+    matched_seat_prompt_lines,
+    normalize_contribution_type,
+    normalize_forecast_seat,
+    normalize_matched_seat,
+    normalize_rebuttal_seat,
+    normalize_reviewer_role,
+    panel_mean,
+    panel_role_prompt_lines,
+    rebuttal_seat_prompt_lines,
+)
 from .hashing import sha256_bytes
 from .models import (
     AgendaQuestion,
@@ -212,12 +278,284 @@ class FatalVerifyJudgment(StrictPayload):
 
 
 class HolisticJudgment(StrictPayload):
-    """One sample of the overall rating. Excerpts are optional and post-hoc."""
+    """One venue-mean estimate plus the 1–6 decision. The decision is not the rank."""
 
-    rating: float = Field(ge=1, le=10)
     rationale: str = Field(min_length=1)
-    strength_excerpt: str = ""
-    weakness_excerpt: str = ""
+    rating: float = Field(ge=1, le=6)
+    predicted_mean: float = Field(ge=1, le=10)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_bool_scores(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("rating", "predicted_mean"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        return value
+
+
+class ExpertPriorWork(StrictPayload):
+    """One existing work the expert recalls as close to the submission. Not verified."""
+
+    name: str = Field(min_length=1)
+    relation: str = Field(min_length=1)
+    cited: bool = False
+    sure: bool = False
+
+
+class ExpertJudgment(StrictPayload):
+    """One expert read: the context first, then the review form, then the mean and the decision."""
+
+    area: str = Field(min_length=1)
+    contribution_type: str = Field(min_length=1)
+    prior_work: list[ExpertPriorWork] = Field(default_factory=list, max_length=MAX_PRIOR_WORK)
+    field_context: list[str] = Field(default_factory=list, max_length=MAX_FIELD_CONTEXT_LINES)
+    soundness: int = Field(ge=FORM_MIN, le=FORM_MAX)
+    presentation: int = Field(ge=FORM_MIN, le=FORM_MAX)
+    contribution: int = Field(ge=FORM_MIN, le=FORM_MAX)
+    strengths: list[str] = Field(default_factory=list, max_length=MAX_REVIEW_POINTS)
+    weaknesses: list[str] = Field(default_factory=list, max_length=MAX_REVIEW_POINTS)
+    rationale: str = Field(min_length=1)
+    predicted_mean: float = Field(ge=1, le=10)
+    rating: float = Field(ge=1, le=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def plain_numbers_and_lists(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("soundness", "presentation", "contribution", "predicted_mean", "rating"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        for key in ("field_context", "strengths", "weaknesses"):
+            if isinstance(value.get(key), str):
+                value = {**value, key: [value[key]]}
+        return value
+
+    @model_validator(mode="after")
+    def known_contribution_type(self) -> "ExpertJudgment":
+        self.contribution_type = normalize_contribution_type(self.contribution_type)
+        return self
+
+
+class PanelReview(StrictPayload):
+    """One simulated reviewer's review and official rating. The label is free text."""
+
+    reviewer: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    rating: int = Field(ge=RATING_MIN, le=RATING_MAX)
+    confidence: int = Field(ge=CONFIDENCE_MIN, le=CONFIDENCE_MAX)
+
+    @model_validator(mode="before")
+    @classmethod
+    def plain_numbers_and_lists(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("rating", "confidence"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        for key in ("strengths", "weaknesses"):
+            if isinstance(value.get(key), str):
+                value = {**value, key: [value[key]]}
+        return value
+
+
+class PanelJudgment(StrictPayload):
+    """One simulated panel: exactly four reviews, then the chair's mean and decision."""
+
+    reviews: list[PanelReview] = Field(min_length=PANEL_SIZE, max_length=PANEL_SIZE)
+    discussion: str = Field(min_length=1)
+    predicted_mean: float = Field(ge=1, le=10)
+    rating: float = Field(ge=1, le=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_bool_scores(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("rating", "predicted_mean"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        return value
+
+
+class MatchedJudgment(PanelJudgment):
+    """One simulated matched panel. Same shape as a panel; the reviewer labels are the seats."""
+
+
+class RebuttalUpdate(StrictPayload):
+    """One reviewer's rating at the end of the discussion, with what the response settled."""
+
+    reviewer: str = Field(min_length=1)
+    change: str = Field(min_length=1)
+    final_rating: int = Field(ge=RATING_MIN, le=RATING_MAX)
+
+    @model_validator(mode="before")
+    @classmethod
+    def plain_number_and_text(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if isinstance(value.get("final_rating"), bool):
+            raise ValueError("final_rating must be a number")
+        if isinstance(value.get("change"), list):
+            value = {**value, "change": "; ".join(str(item) for item in value["change"])}
+        return value
+
+
+class RebuttalJudgment(StrictPayload):
+    """One simulated review through the discussion: three reviews, the response, three updates, the chair."""
+
+    reviews: list[PanelReview] = Field(min_length=REBUTTAL_PANEL_SIZE, max_length=REBUTTAL_PANEL_SIZE)
+    response: str = Field(min_length=1)
+    updates: list[RebuttalUpdate] = Field(min_length=REBUTTAL_PANEL_SIZE, max_length=REBUTTAL_PANEL_SIZE)
+    discussion: str = Field(min_length=1)
+    predicted_mean: float = Field(ge=1, le=10)
+    rating: float = Field(ge=1, le=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_bool_scores_and_join_lists(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("rating", "predicted_mean"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        if isinstance(value.get("response"), list):
+            value = {**value, "response": "; ".join(str(item) for item in value["response"])}
+        return value
+
+
+class ForecastReview(PanelReview):
+    """One simulated reviewer's review, most likely official rating, and probability over the official ratings.
+
+    ``probabilities`` holds six non-negative numbers in the order of the
+    official ratings 1, 3, 5, 6, 8, 10. A dictionary keyed by the rating is
+    reordered; a sum away from one is normalised later and counted, not
+    retried. A wrong count, a negative entry, or an all-zero list fails.
+    """
+
+    probabilities: list[float] = Field(min_length=len(OFFICIAL_RATINGS), max_length=len(OFFICIAL_RATINGS))
+
+    @model_validator(mode="before")
+    @classmethod
+    def probabilities_as_a_list(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        raw = value.get("probabilities")
+        if isinstance(raw, dict):
+            ordered: list[Any] = []
+            for rating in OFFICIAL_RATINGS:
+                for key in (rating, str(rating), float(rating), f"{rating}.0"):
+                    if key in raw:
+                        ordered.append(raw[key])
+                        break
+                else:
+                    ordered.append(0.0)
+            value = {**value, "probabilities": ordered}
+        return value
+
+    @field_validator("probabilities", mode="before")
+    @classmethod
+    def plain_numbers(cls, value: Any) -> Any:
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, bool) or not isinstance(item, (int, float)):
+                    raise ValueError("each probability must be a number")
+        return value
+
+    @field_validator("probabilities")
+    @classmethod
+    def non_negative_with_mass(cls, value: list[float]) -> list[float]:
+        if any(item != item or item < 0 for item in value):
+            raise ValueError("probabilities must be non-negative")
+        if sum(value) <= 0:
+            raise ValueError("probabilities must not all be zero")
+        return value
+
+
+class ForecastJudgment(StrictPayload):
+    """One simulated forecast panel: exactly three reviews with probabilities, then the chair's mean and decision."""
+
+    reviews: list[ForecastReview] = Field(min_length=FORECAST_PANEL_SIZE, max_length=FORECAST_PANEL_SIZE)
+    discussion: str = ""
+    predicted_mean: float = Field(ge=1, le=10)
+    rating: float = Field(ge=1, le=6)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_bool_scores(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for key in ("rating", "predicted_mean"):
+            if isinstance(value.get(key), bool):
+                raise ValueError(f"{key} must be a number")
+        if value.get("discussion") is None:
+            value = {**value, "discussion": ""}
+        return value
+
+
+class AuditCheckAnswer(StrictPayload):
+    """One answer to a fixed audit question. The pipeline checks the excerpt."""
+
+    id: str = Field(min_length=1)
+    verdict: str = Field(min_length=1)
+    excerpt: str = ""
+    note: str = ""
+
+    @model_validator(mode="after")
+    def known_id_and_verdict(self) -> "AuditCheckAnswer":
+        if self.id not in AUDIT_CHECK_IDS:
+            raise ValueError(f"unknown audit check id {self.id}")
+        verdict = self.verdict.strip().lower()
+        if verdict not in AUDIT_VERDICTS:
+            raise ValueError("verdict must be pass, fail, or unclear")
+        self.verdict = verdict
+        return self
+
+
+class AuditFlaw(StrictPayload):
+    """One problem a reviewer would weigh, with the passage that shows it."""
+
+    id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    excerpt: str = Field(min_length=1)
+    why: str = Field(min_length=1)
+    severity: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def known_severity(self) -> "AuditFlaw":
+        severity = self.severity.strip().lower()
+        if severity not in FLAW_SEVERITIES:
+            raise ValueError("severity must be blocking, major, or minor")
+        self.severity = severity
+        return self
+
+
+class AuditJudgment(StrictPayload):
+    """Every audit id answered once, plus at most four flaws. No score."""
+
+    checks: list[AuditCheckAnswer] = Field(default_factory=list)
+    flaws: list[AuditFlaw] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def complete_checklist(self) -> "AuditJudgment":
+        found = [item.id for item in self.checks]
+        if sorted(found) != sorted(AUDIT_CHECK_IDS):
+            missing = [item for item in AUDIT_CHECK_IDS if item not in found]
+            repeated = sorted({item for item in found if found.count(item) > 1})
+            raise ValueError(
+                "checks must answer each audit id exactly once; "
+                f"missing {missing}; repeated {repeated}"
+            )
+        if len(self.flaws) > MAX_AUDIT_FLAWS:
+            raise ValueError(f"flaws must list at most {MAX_AUDIT_FLAWS} items")
+        flaw_ids = [item.id for item in self.flaws]
+        if len(flaw_ids) != len(set(flaw_ids)):
+            raise ValueError("flaw ids must be unique")
+        return self
 
 
 class VisualJudgment(StrictPayload):
@@ -305,6 +643,11 @@ _SCHEMAS: dict[str, type[BaseModel]] = {
     "fatal": FatalJudgment,
     "fatal-verify": FatalVerifyJudgment,
     "holistic": HolisticJudgment,
+    "expert": ExpertJudgment,
+    "panel": PanelJudgment,
+    "matched": MatchedJudgment,
+    "forecast": ForecastJudgment,
+    "audit": AuditJudgment,
     "visual": VisualJudgment,
     "zh-Hans": ZhHansJudgment,
 }
@@ -345,11 +688,99 @@ _SCHEMA_HINTS = {
         "One verdict per issue in the user message."
     ),
     "holistic": (
-        '{"rating":6.5,"rationale":"...","strength_excerpt":"","weakness_excerpt":""} '
-        "rating is a number from 1.0 to 10.0. One decimal place is allowed. "
-        "1-2 strong reject, 3-4 reject, 5 borderline reject, 6 borderline accept, "
-        "7-8 accept, 9-10 strong accept. Do not use 4 or 5 as a default. "
-        "strength_excerpt and weakness_excerpt are optional and may be empty."
+        "Keys: rationale, rating, predicted_mean. "
+        "rating is an integer 1, 2, 3, 4, 5, or 6. "
+        "predicted_mean is a number from 1.0 to 10.0. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "expert": (
+        "Keys in this order: area, contribution_type, prior_work, field_context, soundness, "
+        "presentation, contribution, strengths, weaknesses, rationale, predicted_mean, rating. "
+        f"contribution_type is one of {', '.join(CONTRIBUTION_TYPE_IDS)}. "
+        f"prior_work is a list of at most {MAX_PRIOR_WORK} objects with keys name, relation, cited, sure; "
+        "cited and sure are booleans; the list may be empty. "
+        f"field_context is a list of at most {MAX_FIELD_CONTEXT_LINES} strings. "
+        f"soundness, presentation, and contribution are integers from {FORM_MIN} to {FORM_MAX}. "
+        f"strengths and weaknesses are lists of at most {MAX_REVIEW_POINTS} strings. "
+        "rating is an integer 1, 2, 3, 4, 5, or 6. "
+        "predicted_mean is a number from 1.0 to 10.0. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "panel": (
+        '{"reviews":[{"reviewer":"<role id>","summary":"...","strengths":["..."],'
+        '"weaknesses":["..."],"rating":<an official rating>,"confidence":<an integer>}],'
+        '"discussion":"...","predicted_mean":<a number>,"rating":<a decision>} '
+        f"reviews has exactly {PANEL_SIZE} objects, one for each reviewer id in the user message, "
+        f"in that order: {', '.join(PANEL_ROLE_IDS)}. "
+        "Inside a review, rating is that reviewer's official rating, an integer chosen from "
+        f"{', '.join(str(item) for item in OFFICIAL_RATINGS)}, and confidence is an integer from "
+        f"{CONFIDENCE_MIN} to {CONFIDENCE_MAX}. strengths and weaknesses are lists of short strings. "
+        "At the top level, predicted_mean is a number from 1.0 to 10.0 and rating is the integer "
+        "decision 1, 2, 3, 4, 5, or 6. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "matched": (
+        '{"reviews":[{"reviewer":"<seat id>","summary":"...","strengths":["..."],'
+        '"weaknesses":["..."],"rating":<an official rating>,"confidence":<an integer>}],'
+        '"discussion":"...","predicted_mean":<a number>,"rating":<a decision>} '
+        f"reviews has exactly {PANEL_SIZE} objects, one for each reviewer id in the user message, "
+        f"in that order: {', '.join(MATCHED_SEAT_IDS)}. "
+        "Inside a review, rating is that reviewer's official rating, an integer chosen from "
+        f"{', '.join(str(item) for item in OFFICIAL_RATINGS)}, and confidence is an integer from "
+        f"{CONFIDENCE_MIN} to {CONFIDENCE_MAX}. strengths and weaknesses are lists of short strings. "
+        "At the top level, predicted_mean is a number from 1.0 to 10.0 and rating is the integer "
+        "decision 1, 2, 3, 4, 5, or 6. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "rebuttal": (
+        '{"reviews":[{"reviewer":"<reviewer id>","summary":"...","strengths":["..."],'
+        '"weaknesses":["..."],"rating":<an official rating>,"confidence":<an integer>}],'
+        '"response":"...",'
+        '"updates":[{"reviewer":"<reviewer id>","change":"...","final_rating":<an official rating>}],'
+        '"discussion":"...","predicted_mean":<a number>,"rating":<a decision>} '
+        f"reviews has exactly {REBUTTAL_PANEL_SIZE} objects, one for each reviewer id in the user "
+        f"message, in that order: {', '.join(REBUTTAL_SEAT_IDS)}. "
+        f"updates has exactly {REBUTTAL_PANEL_SIZE} objects, one per reviewer, in the same order. "
+        "Inside a review, rating is that reviewer's first official rating, an integer chosen from "
+        f"{', '.join(str(item) for item in OFFICIAL_RATINGS)}, and confidence is an integer from "
+        f"{CONFIDENCE_MIN} to {CONFIDENCE_MAX}. Inside an update, final_rating is that reviewer's "
+        "official rating at the end of the discussion, an integer chosen from the same list. "
+        "strengths and weaknesses are lists of short strings; response and change are strings. "
+        "At the top level, predicted_mean is a number from 1.0 to 10.0 and rating is the integer "
+        "decision 1, 2, 3, 4, 5, or 6. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "forecast": (
+        '{"reviews":[{"reviewer":"<reviewer id>","summary":"...","strengths":["..."],'
+        '"weaknesses":["..."],"rating":<an official rating>,"probabilities":[<six numbers>],'
+        '"confidence":<an integer>}],'
+        '"predicted_mean":<a number>,"rating":<a decision>} '
+        f"reviews has exactly {FORECAST_PANEL_SIZE} objects, one for each reviewer id in the user "
+        f"message, in that order: {', '.join(FORECAST_SEAT_IDS)}. "
+        "Inside a review, rating is the official rating that reviewer would most likely submit, an "
+        f"integer chosen from {', '.join(str(item) for item in OFFICIAL_RATINGS)}; probabilities is a "
+        f"list of exactly {len(OFFICIAL_RATINGS)} numbers from 0 to 1 that sum to 1, the probability "
+        f"that this reviewer's official rating is {', '.join(str(item) for item in OFFICIAL_RATINGS)}, "
+        f"in that order; confidence is an integer from {CONFIDENCE_MIN} to {CONFIDENCE_MAX}. "
+        "strengths and weaknesses are lists of short strings. "
+        "At the top level, predicted_mean is a number from 1.0 to 10.0 and rating is the integer "
+        "decision 1, 2, 3, 4, 5, or 6. "
+        "There is no example score to copy. "
+        "No other keys."
+    ),
+    "audit": (
+        '{"checks":[{"id":"<one of the twelve ids>","verdict":"<pass, fail, or unclear>",'
+        '"excerpt":"copied passage, or empty","note":"..."}],'
+        '"flaws":[{"id":"F1","title":"...","excerpt":"copied passage","why":"...",'
+        '"severity":"<blocking, major, or minor>"}]} '
+        "checks has exactly one entry for each of the twelve ids in the user message. "
+        "excerpt is empty only when verdict is unclear. flaws may be an empty list. "
+        "There is no score in this object. No other keys."
     ),
     "visual": (
         '{"findings":[{"id":"V1","page":1,"bbox":[0,0,1,1],'
@@ -790,12 +1221,17 @@ class ModelSession:
         self.rejected: list[dict[str, str]] = []
         self.usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self._checked = False
+        self._lock = threading.RLock()
         self._attempt_counts: dict[str, int] = {}
         self._last_messages: list[dict[str, Any]] = []
         self._last_text = ""
         self._last_judgment = ""
 
     def authorize(self) -> None:
+        with self._lock:
+            self._authorize_locked()
+
+    def _authorize_locked(self) -> None:
         if self._checked:
             return
         self._checked = True
@@ -818,6 +1254,10 @@ class ModelSession:
         self.manuscript_left_machine = False
 
     def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return self._metadata_locked()
+
+    def _metadata_locked(self) -> dict[str, Any]:
         return {
             "model": self.model_name,
             "base_url": self.base_url,
@@ -842,13 +1282,15 @@ class ModelSession:
         row = {"judgment": judgment, "id": item_id, "reason": reason}
         if category:
             row["category"] = category
-        self.rejected.append(row)
+        with self._lock:
+            self.rejected.append(row)
 
     def write_index(self) -> None:
-        directory = self.scratch / "model"
-        directory.mkdir(parents=True, exist_ok=True)
-        _write_json(directory / "exchanges.json", self.metadata())
-        _write_json(directory / "rejected.json", self.rejected)
+        with self._lock:
+            directory = self.scratch / "model"
+            directory.mkdir(parents=True, exist_ok=True)
+            _write_json(directory / "exchanges.json", self._metadata_locked())
+            _write_json(directory / "rejected.json", list(self.rejected))
 
     def artifact_names(self) -> list[str]:
         directory = self.scratch / "model"
@@ -866,9 +1308,10 @@ class ModelSession:
         raise ModelExecutionError(_redact(message, secret), stage_metadata=self.metadata())
 
     def _next_attempt(self, judgment: str) -> int:
-        attempt = self._attempt_counts.get(judgment, 0) + 1
-        self._attempt_counts[judgment] = attempt
-        return attempt
+        with self._lock:
+            attempt = self._attempt_counts.get(judgment, 0) + 1
+            self._attempt_counts[judgment] = attempt
+            return attempt
 
     def complete(
         self,
@@ -916,9 +1359,10 @@ class ModelSession:
                 self.fail(
                     f"judgment {judgment} failed schema validation after one retry: {_brief(second_error)}"
                 )
-        self._last_messages = messages
-        self._last_text = text
-        self._last_judgment = judgment
+        with self._lock:
+            self._last_messages = messages
+            self._last_text = text
+            self._last_judgment = judgment
         return model
 
     def continue_with_error(
@@ -934,11 +1378,18 @@ class ModelSession:
         This is the single retry for that check. It does not start another schema retry.
         """
         self.authorize()
-        if self._last_judgment != judgment or not self._last_messages:
+        with self._lock:
+            if self._last_judgment != judgment or not self._last_messages:
+                prior = None
+                prior_text = ""
+            else:
+                prior = list(self._last_messages)
+                prior_text = self._last_text
+        if prior is None:
             self.fail(f"judgment {judgment} has no completed exchange to retry")
         messages = [
-            *self._last_messages,
-            {"role": "assistant", "content": self._last_text[:8000]},
+            *prior,
+            {"role": "assistant", "content": prior_text[:8000]},
             {"role": "user", "content": error},
         ]
         text = self._exchange(judgment, messages, attempt=self._next_attempt(judgment))
@@ -948,8 +1399,9 @@ class ModelSession:
             self.fail(
                 f"judgment {judgment} failed schema validation after one retry: {_brief(exc)}\n{error}"
             )
-        self._last_messages = messages
-        self._last_text = text
+        with self._lock:
+            self._last_messages = messages
+            self._last_text = text
         return model
 
     def _exchange(
@@ -1041,10 +1493,11 @@ class ModelSession:
                 return "invalid chat envelope: response is not an object"
             usage = payload.get("usage")
             if isinstance(usage, dict):
-                for key in self.usage_totals:
-                    raw_tokens = usage.get(key)
-                    if isinstance(raw_tokens, int):
-                        self.usage_totals[key] += raw_tokens
+                with self._lock:
+                    for key in self.usage_totals:
+                        raw_tokens = usage.get(key)
+                        if isinstance(raw_tokens, int):
+                            self.usage_totals[key] += raw_tokens
             try:
                 return _message_text(payload)
             except ValueError as exc:
@@ -1061,17 +1514,17 @@ class ModelSession:
         request_path: Path,
         response_path: Path,
     ) -> None:
-        self.exchanges.append(
-            {
-                "judgment": judgment,
-                "attempt": attempt,
-                "transport_try": transport_try,
-                "request_sha256": sha256_bytes(request_path.read_bytes()),
-                "response_sha256": sha256_bytes(response_path.read_bytes()),
-                "request_path": f"model/{request_name}",
-                "response_path": f"model/{response_name}",
-            }
-        )
+        row = {
+            "judgment": judgment,
+            "attempt": attempt,
+            "transport_try": transport_try,
+            "request_sha256": sha256_bytes(request_path.read_bytes()),
+            "response_sha256": sha256_bytes(response_path.read_bytes()),
+            "request_path": f"model/{request_name}",
+            "response_path": f"model/{response_name}",
+        }
+        with self._lock:
+            self.exchanges.append(row)
 
 
 def _safe_name(judgment: str) -> str:
@@ -1134,6 +1587,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
             low=0.0,
             high=2.0,
         ),
+        "holistic_mode": _holistic_mode(metadata.get("holistic_mode")),
         "packet_routes": {str(key): str(value) for key, value in packet_routes.items()},
         "stage_signature": str(metadata.get("stage_signature") or ""),
         "bilingual": bool(metadata.get("bilingual")),
@@ -1172,6 +1626,16 @@ def _bounded_float(value: object, *, default: float, low: float, high: float) ->
     except (TypeError, ValueError):
         return default
     return min(high, max(low, number))
+
+
+def _holistic_mode(value: object) -> str:
+    """``forecast``, ``rebuttal``, ``matched``, ``panel``, ``expert``, ``audited``, or ``mean``. An empty value is the locked mode."""
+    if value is None or value == "":
+        return DEFAULT_HOLISTIC_MODE
+    mode = str(value).strip().lower()
+    if mode not in HOLISTIC_MODES:
+        raise ModelExecutionError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
+    return mode
 
 
 def _route_ids(route_id: str | None, routes: list[ReviewRoute]) -> list[str]:
@@ -1215,6 +1679,7 @@ _SESSION_SETTINGS_EXCLUDED = frozenset(
         "cheap",
         "holistic_samples",
         "holistic_temperature",
+        "holistic_mode",
     }
 )
 
@@ -1279,30 +1744,487 @@ A suspicion, a missing experiment, or a harsh tone is not one of these classes.
 
 
 HOLISTIC_TASK = """
-## Overall recommendation
-You are reviewing for a top machine-learning venue. Give one score for the paper as a decision, not a pile of sub-scores.
-Weigh technical quality, clarity, significance, originality, reproducibility, and how the work sits against prior work.
-Keep a high bar. Only a paper you would argue for belongs at the top of the scale.
-If the paper is weak and you are unsure, score it as a reject. If the paper is strong and you are unsure, score it as an accept. Do not park in the middle to avoid deciding.
+## Venue mean
+You are predicting the mean official rating of one paper at a top machine-learning conference. Score the manuscript against the scale below. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
 
-rating is a number from 1.0 to 10.0. One decimal place is allowed, and that is how you separate two close papers.
-1.0-2.0 is a strong reject: a broken claim, a known result, or an evaluation that does not support the result.
-3.0-4.0 is a reject: there is a clear reason to decline.
-5.0 is a borderline reject: the reasons to decline are stronger.
-6.0 is a borderline accept: the reasons to accept are stronger.
-7.0-8.0 is an accept: sound, useful, and above the bar.
-9.0-10.0 is a strong accept: the result matters and the support is tight.
-Use the whole scale. A score of 4 is a reject, not a default. 5 and 6 are different decisions.
+predicted_mean is the mean of the official ratings careful reviewers would give. Those ratings are chosen from 1, 3, 5, 6, 8, and 10. The mean of several reviewers often falls between those choices. Report that mean, from 1.0 to 10.0 with one decimal. Do not round it back to the nearest official choice. This number orders papers. It is the reviewers' mean, not your harshest reading, and it is not a rescaling of rating.
 
-rationale is a short review: what the paper does, the strongest reason to accept, and the strongest reason to decline.
-strength_excerpt and weakness_excerpt are optional. Leave both as empty strings unless you copy a passage from the manuscript. The rating stands without them.
+Judge the comparison the manuscript reports. An attractive idea whose comparison does not show a gain a reviewer would rely on is a reject. A modest idea whose comparison shows a gain a reviewer would rely on is an accept. Do not save the top of the scale for a paper that changes the field. A paper you would accept and cite sits near 7 or 8.
+
+Place the mean on this scale:
+- near 3: a clear reject. The comparison does not test the claim, or it shows no gain.
+- near 4: a reject. There is a real attempt, and a gap decides the paper. A typical rejected paper is near 4, not near 1.
+- 5.0 to 5.4: borderline reject. The paper is competent, and you would not argue to accept it.
+- 5.6 to 6.4: borderline accept. The paper is competent, and you would argue to accept it.
+- near 7 or 8: an accept. The gain is one a reviewer would rely on and cite. A typical accepted paper is here, not near 9.
+- near 9: a strong accept. Rare. The support is tight and the result matters.
+
+There is no midpoint between a borderline reject and a borderline accept. The reject side stops at 5.4. The accept side starts at 5.6. Use 5.4 or 5.6 only when the paper sits on that line. A paper you would clearly reject is near 4 or below. A paper you would clearly accept is near 7 or above. Do not use 4.0, 5.0, 6.0, or 7.0 as a default. If the paper is not exactly on an anchor, move by a tenth. Use 1 and 10 only for an extreme case.
+
+A paper with a gain a reviewer would rely on scores higher than a paper whose gain is almost reliable. That paper scores higher than a paper whose comparison does not test the claim. Keep that order. Two papers you would both reject still get different means when one is closer to a reliable gain. Two papers you would both accept still get different means when one is closer to a result you would cite. Most submissions are rejected.
+
+rationale is three short clauses, in this order: the comparison the manuscript reports; whether a reviewer would rely on that gain; which side of the line that fact puts the mean on. Set predicted_mean only after those clauses. Do not edit it toward a round favorite.
+
+rating is an integer from 1 to 6, chosen after predicted_mean. It is only the accept or reject decision. It must agree with the mean, and it is not the rank.
+1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.
+2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.
+3 — borderline reject. The paper is competent, and the reasons to decline outweigh the reasons to accept.
+4 — borderline accept. The paper is competent, and the reasons to accept outweigh the reasons to decline.
+5 — accept. The paper is sound and useful, and you would defend it in a discussion.
+6 — strong accept. The result matters and the support is tight.
+A mean at or below 5.4 takes rating 1, 2, or 3. A mean at or above 5.6 takes rating 4, 5, or 6.
+3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.
 Return only the JSON object.
 """.strip()
 
-# Independent holistic draws. Temperature is per call so a stage default of 0
-# does not force every sample to the same request body.
-DEFAULT_HOLISTIC_SAMPLES = 3
-DEFAULT_HOLISTIC_TEMPERATURE = 0.7
+
+_AUDIT_HEAD = """
+## Audit
+You are the first reader of one manuscript submitted to a top machine-learning conference. You are not scoring it. Answer twelve fixed questions about what the manuscript shows, then list the flaws a careful reviewer would weigh in the decision.
+
+Answer every question with one verdict:
+- pass: the manuscript shows it. excerpt is the passage that shows it.
+- fail: the manuscript shows the gap. excerpt is the passage where the gap is visible: the headline result stated without a spread, the results table caption that lists the baselines, the claim that outruns the evidence.
+- unclear: the manuscript does not settle it. Leave excerpt empty.
+An excerpt is a short span copied from the manuscript, at most two sentences or one table line. Copy it exactly; a line break may be written as a space. An excerpt that is not in the manuscript turns that answer into unclear. Prefer a passage from the method or the results over the abstract. Length, confidence, or polish does not answer any question. note is one short clause on what the excerpt shows.
+
+The twelve questions, by id:
+""".strip()
+
+_AUDIT_TAIL = """
+flaws are at most four problems a careful reviewer would weigh in the decision: a comparison the paper itself makes necessary and does not run, a gain inside its own noise, a claim the experiments do not test, a protocol that favours the method, a step that cannot be reimplemented. Each flaw has an id (F1, F2, ...), a title, an excerpt copied from the passage that shows it, why a reviewer would weigh it, and a severity: blocking when it alone decides the paper against acceptance, major when a reviewer would press on it and it could decide the paper, minor when it is worth stating and would not decide the paper alone. A missing citation, a writing issue, or a wish for more experiments is not a flaw here. A paper can have none; return an empty list then.
+Return only the JSON object.
+""".strip()
+
+
+def audit_task_text() -> str:
+    """The audit instructions. The twelve ids come from ``anchors.AUDIT_CHECKS``."""
+    return "\n".join([_AUDIT_HEAD, *audit_check_prompt_lines(), "", _AUDIT_TAIL])
+
+
+_EXPERT_HEAD = """
+## Expert read
+You are a senior researcher who has published and reviewed for years in the subfield this manuscript belongs to. You are predicting the mean official rating this paper would receive at a top machine-learning conference. Reviewers there bring their knowledge of the field to the paper: whether the idea already exists under another name, whether the baselines are the ones the area now uses, what size of gain is inside the usual noise, and whether anyone will use the result. Bring yours. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
+
+Fill the fields in this order and settle each one before the next.
+
+1. area: the subfield in a few words.
+2. contribution_type: one of the ids below. The standard the evidence is held to follows from it.
+""".strip()
+
+_EXPERT_STEPS = """
+3. prior_work: up to five existing works you recall as the closest to this submission's main idea or setting. For each give name (the way the area refers to it: a method name, or first author and year), relation (one clause on how the submission differs from it or overlaps with it), cited (true when the submission already cites or compares against it), and sure (true when you are confident the work exists as you describe it). Name a work only when you recall it; a line of work you cannot name belongs in field_context. A recalled work the submission does not cite counts against novelty only when sure is true. An empty list is allowed when you recall nothing close.
+4. field_context: up to four short lines on what an expert knows about this setting: the standard benchmarks and the baselines a reviewer in the area expects to see in the comparison, whether this paper's baselines are the current strong ones or ones the area has moved past, and what size of gain the area treats as meaningful on these benchmarks against their usual run-to-run noise.
+5. soundness, presentation, contribution: integers from 1 to 4 in the sense of the conference review form, where 1 is poor, 2 is fair, 3 is good, and 4 is excellent. soundness is whether the claims are supported by the evidence by the standard of the contribution type above. presentation is whether a reader in the area can follow and check the work. contribution is how much the area gains if the claims hold: novelty against the prior work you recalled, and the importance of the problem and of the result.
+6. strengths and weaknesses: up to three clauses each, the ones a reviewer in this area would write. A weakness names something specific to this paper, not a wish for more experiments.
+7. rationale: three short clauses, in this order: what the paper adds to what the area already has; whether the evidence meets the standard of its contribution type; where that puts the mean a panel of reviewers in this area would reach.
+8. predicted_mean, then rating, chosen last.
+
+Across all types, reviewers reward a result they will use or cite. They mark down an idea that already exists under another name, a comparison against baselines the area has moved past, a gain inside the usual noise on that benchmark, and a claim broader than the evidence. Judge the headline claim against the numbers in the tables, not against the abstract. Length, ambition, and polish are not evidence. A modest scope with a result the area will use is not marked down for being modest.
+""".strip()
+
+# The scale paragraphs below are the round 5 and 6 text, unchanged, so the
+# expert read moves only the reading and not the output scale. A test checks
+# that each paragraph is a verbatim part of HOLISTIC_TASK.
+EXPERT_SCALE_PARAGRAPHS = (
+    "predicted_mean is the mean of the official ratings careful reviewers would give. Those ratings are chosen from 1, 3, 5, 6, 8, and 10. The mean of several reviewers often falls between those choices. Report that mean, from 1.0 to 10.0 with one decimal. Do not round it back to the nearest official choice. This number orders papers. It is the reviewers' mean, not your harshest reading, and it is not a rescaling of rating.",
+    "Place the mean on this scale:\n- near 3: a clear reject. The comparison does not test the claim, or it shows no gain.\n- near 4: a reject. There is a real attempt, and a gap decides the paper. A typical rejected paper is near 4, not near 1.\n- 5.0 to 5.4: borderline reject. The paper is competent, and you would not argue to accept it.\n- 5.6 to 6.4: borderline accept. The paper is competent, and you would argue to accept it.\n- near 7 or 8: an accept. The gain is one a reviewer would rely on and cite. A typical accepted paper is here, not near 9.\n- near 9: a strong accept. Rare. The support is tight and the result matters.",
+    "There is no midpoint between a borderline reject and a borderline accept. The reject side stops at 5.4. The accept side starts at 5.6. Use 5.4 or 5.6 only when the paper sits on that line. A paper you would clearly reject is near 4 or below. A paper you would clearly accept is near 7 or above. Do not use 4.0, 5.0, 6.0, or 7.0 as a default. If the paper is not exactly on an anchor, move by a tenth. Use 1 and 10 only for an extreme case.",
+    "rating is an integer from 1 to 6, chosen after predicted_mean. It is only the accept or reject decision. It must agree with the mean, and it is not the rank.\n1 — strong reject. The main claim is already known, the method does not work, or an ethical problem is left untouched.\n2 — reject. A technical flaw, an evaluation that does not test the claim, or missing detail that blocks reproduction is enough to decline.\n3 — borderline reject. The paper is competent, and the reasons to decline outweigh the reasons to accept.\n4 — borderline accept. The paper is competent, and the reasons to accept outweigh the reasons to decline.\n5 — accept. The paper is sound and useful, and you would defend it in a discussion.\n6 — strong accept. The result matters and the support is tight.\nA mean at or below 5.4 takes rating 1, 2, or 3. A mean at or above 5.6 takes rating 4, 5, or 6.\n3 and 4 are opposite decisions. Use 1 and 6 for extreme cases, not as decoration.",
+)
+
+_EXPERT_ORDER = (
+    "Two papers you would both reject still get different means when one is closer to what the area would use. "
+    "Two papers you would both accept still get different means when one is closer to a result the area will cite. "
+    "Most submissions are rejected."
+)
+
+
+def expert_task_text() -> str:
+    """The expert-read instructions. The type ids come from ``anchors.CONTRIBUTION_TYPES``."""
+    return "\n".join(
+        [
+            _EXPERT_HEAD,
+            *contribution_type_prompt_lines(),
+            _EXPERT_STEPS,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[0],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[1],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[2],
+            "",
+            _EXPERT_ORDER,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[3],
+            "Return only the JSON object.",
+        ]
+    )
+
+
+_PANEL_HEAD = """
+## Review panel
+You are simulating the review of this manuscript at a top machine-learning conference. The quantity to predict is the mean of the official ratings the paper would receive from the reviewers this venue actually assigns. Those reviewers are not ideal referees. They are competent, busy researchers who read the paper once, bring their own corner of the field to it, and rate it by what reviewers at this venue reward and mark down. Predict them, not a better reviewer. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
+
+Write four reviews, one from each reviewer below, in this order. Each reviewer has read the whole manuscript and has not seen the other reviews.
+""".strip()
+
+_PANEL_STEPS = """
+Each review has these fields:
+- reviewer: the id above.
+- summary: one sentence on what the paper claims, in that reviewer's words.
+- strengths: up to three clauses that reviewer would write.
+- weaknesses: up to three clauses that reviewer would write, each specific to this paper.
+- rating: the official rating that reviewer would submit, one of 1, 3, 5, 6, 8, or 10. At this venue an 8 says the reviewer would argue for acceptance and expects to cite the paper. A 6 says they lean accept with reservations. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: a flaw in the evidence, a comparison that matters and is missing, or little novelty against work they know. 1 and 10 are rare.
+- confidence: an integer from 1 to 5, how sure that reviewer is.
+
+Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating they would submit from their own reading. Do not pull the four toward each other, and do not save 8 for a paper that changes the field. The reasons reviewers at this venue most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim. The reasons they most often give for an 8 are a result they want to use or cite and an idea that changes how they think about the problem. Most submissions are rejected.
+
+After the four reviews, write discussion: two or three short clauses on where this panel lands and what decides it. Then set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating after the discussion; it need not equal the mean of the four ratings above.
+""".strip()
+
+
+def panel_task_text() -> str:
+    """The panel instructions. The role ids come from ``anchors.PANEL_ROLES``.
+
+    The scale paragraphs are the round 5-7 text, unchanged, so the panel moves
+    the reading and not the output scale of the chair's estimate or the decision.
+    """
+    return "\n".join(
+        [
+            _PANEL_HEAD,
+            *panel_role_prompt_lines(),
+            "",
+            _PANEL_STEPS,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[0],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[1],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[2],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[3],
+            "Return only the JSON object.",
+        ]
+    )
+
+
+_MATCHED_HEAD = """
+## Assigned panel
+You are predicting the mean official rating this manuscript would receive at a top machine-learning conference, from the reviewers the venue would assign to it. Those reviewers are matched to the paper's topic and vary in seniority. They are competent and busy: each reads the main text once, in one sitting, does not study the appendix, brings their own knowledge of the area to the paper, and rates by what reviewers at this venue reward and mark down. Predict them, not a better reviewer. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
+
+You are shown the manuscript's main text. The reference list and the appendix are not shown; where they were removed, the text says so. When the main text defers a detail, a proof, or an experiment to the appendix, treat it as these reviewers do: note that it is deferred, and do not treat it as missing or as wrong.
+
+Write four reviews, one from each reviewer below, in this order. Each reviewer has read the main text and has not seen the other reviews.
+""".strip()
+
+_MATCHED_STEPS = """
+Each review has these fields:
+- reviewer: the id above.
+- summary: one sentence on what the paper claims, in that reviewer's words.
+- strengths: up to two clauses that reviewer would write.
+- weaknesses: up to two clauses that reviewer would write, each specific to this paper.
+- rating: the official rating that reviewer would submit, one of 1, 3, 5, 6, 8, or 10.
+- confidence: an integer from 1 to 5, how sure that reviewer is.
+""".strip()
+
+# The venue's rating norms, stated as public knowledge of the venue. Rates
+# across all submissions, not a quota for one paper.
+MATCHED_NORMS = """
+How reviewers at this venue use the scale. About one submission in three is accepted. Across all reviews, 5 and 6 are the most common ratings; 3 is next, about one review in five; 8 is about one review in six; 1 and 10 are rare. An 8 says the reviewer would argue for acceptance in the discussion and expects to cite the paper. A 6 says they lean accept with reservations. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: little novelty against work they know, a comparison that matters and is missing, or evidence that does not cover the claim. An accepted paper usually has a mean above 6 and at least one 8; a rejected paper usually has a mean between 3.5 and 5.5 and at least one 3. These are rates across all submissions, not a quota for one paper: a strong paper draws 8s from more than one of its reviewers, and a weak one draws 3s from more than one.
+
+Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating they would submit from their own reading. Do not pull the four toward each other, and do not save 8 for a paper that changes the field: reviewers at this venue give an 8 to a paper they want to use or cite. The reasons they most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim.
+
+After the four reviews, write discussion: two or three short clauses on where this panel lands and what decides it. Then set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating after the discussion; it need not equal the mean of the four ratings above.
+""".strip()
+
+
+def matched_task_text() -> str:
+    """The matched-panel instructions. The seat ids come from ``anchors.MATCHED_SEATS``.
+
+    The scale paragraphs are the round 5-8 text, unchanged, so the matched panel
+    moves the reading, the seats and the norms, not the output scale of the
+    chair's estimate or the decision.
+    """
+    return "\n".join(
+        [
+            _MATCHED_HEAD,
+            *matched_seat_prompt_lines(),
+            "",
+            _MATCHED_STEPS,
+            "",
+            MATCHED_NORMS,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[0],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[1],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[2],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[3],
+            "Return only the JSON object.",
+        ]
+    )
+
+
+_REBUTTAL_HEAD = """
+## Review and discussion
+You are simulating the review of this manuscript at a top machine-learning conference, through the discussion period. The quantity to predict is the mean of the official ratings as they stand at the end of that period, after the authors have responded and each reviewer has revised or kept their rating. Those are the ratings the venue's forum shows. The reviewers are not ideal referees. They are competent, busy researchers who read the paper once, bring their own corner of the field to it, and rate it by what reviewers at this venue reward and mark down. Predict them, not a better reviewer. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
+
+Stage one: write three reviews, one from each reviewer below, in this order. Each reviewer has read the whole manuscript and has not seen the other reviews.
+""".strip()
+
+_REBUTTAL_STEPS = """
+Each review has these fields:
+- reviewer: the id above.
+- summary: one sentence on what the paper claims, in that reviewer's words.
+- strengths: up to two clauses that reviewer would write.
+- weaknesses: up to three clauses that reviewer would write, each specific to this paper. These are what the authors will answer.
+- rating: the official rating that reviewer would submit, one of 1, 3, 5, 6, 8, or 10. At this venue an 8 says the reviewer would argue for acceptance and expects to cite the paper. A 6 says they lean accept with reservations. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: a flaw in the evidence, a comparison that matters and is missing, or little novelty against work they know. 1 and 10 are rare.
+- confidence: an integer from 1 to 5, how sure that reviewer is.
+
+Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating they would submit from their own reading. Do not pull the three toward each other, and do not save 8 for a paper that changes the field. The reasons reviewers at this venue most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim. The reasons they most often give for an 8 are a result they want to use or cite and an idea that changes how they think about the problem. Most submissions are rejected.
+
+Stage two: write response, the authors' reply as competent authors would write it in the discussion period, in two to five clauses. The authors answer every weakness above and concede nothing they can contest. For each weakness, say what they can offer: a clarification or a pointer to something the manuscript already contains, its appendix included; a new experiment, comparison, or ablation they can run and report within the period, with the outcome such authors would plausibly obtain given what the paper already shows; or nothing that would satisfy the reviewer, because the objection is to the contribution itself. Do not invent a result the paper's own evidence does not make plausible.
+
+Stage three: write updates, one per reviewer, in the same order. Each has reviewer (the id), change (one clause: what the response settled for this reviewer, or what still stands), and final_rating, the official rating that reviewer holds at the end of the discussion, one of 1, 3, 5, 6, 8, or 10. Reviewers at this venue raise a rating when the response settles the concern they rated on: a comparison or ablation they asked for that comes out in the paper's favour, an ambiguity cleared up, a claim narrowed to what the evidence shows. They keep it when the concern is the contribution itself: an idea that exists under another name, a gain within the usual noise of the benchmark, a central claim the added evidence still does not cover, a problem too small to matter. A raised rating usually moves one step, 5 to 6 or 6 to 8. A rating rarely falls. Most ratings do not change; the ones that do belong to reviewers whose concern was answerable. A reviewer who gave a 3 for one of those fundamental reasons keeps it. Decide each reviewer's final rating from their own weaknesses and the response, not from the other reviewers.
+
+After the updates, write discussion: two or three short clauses on where this panel lands at the end of the discussion and what decided it. Then set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating at the end of the discussion; it need not equal the mean of the three final ratings above.
+""".strip()
+
+
+def rebuttal_task_text() -> str:
+    """The review-and-discussion instructions. The seat ids come from ``anchors.REBUTTAL_SEATS``.
+
+    The scale paragraphs are the round 5-9 text, unchanged, so the discussion
+    stage moves the reading and the target, not the output scale of the
+    chair's estimate or the decision.
+    """
+    return "\n".join(
+        [
+            _REBUTTAL_HEAD,
+            *rebuttal_seat_prompt_lines(),
+            "",
+            _REBUTTAL_STEPS,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[0],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[1],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[2],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[3],
+            "Return only the JSON object.",
+        ]
+    )
+
+
+_FORECAST_HEAD = """
+## Review forecast
+You are simulating the review of this manuscript at a top machine-learning conference. The quantity to predict is the mean of the official ratings the paper would receive from the reviewers this venue actually assigns. Those reviewers are not ideal referees. They are competent, busy researchers who read the paper once, bring their own corner of the field to it, and rate it by what reviewers at this venue reward and mark down. Predict them, not a better reviewer. You have not been shown another submission. Do not invent a reference paper, and do not report a distance from one.
+
+Write three reviews, one from each reviewer below, in this order. Each reviewer has read the whole manuscript and has not seen the other reviews.
+""".strip()
+
+_FORECAST_STEPS = """
+Each review has these fields:
+- reviewer: the id above.
+- summary: one sentence on what the paper claims, in that reviewer's words.
+- strengths: up to two clauses that reviewer would write.
+- weaknesses: up to two clauses that reviewer would write, each specific to this paper.
+- rating: the official rating that reviewer would most likely submit, one of 1, 3, 5, 6, 8, or 10. At this venue an 8 says the reviewer would argue for acceptance and expects to cite the paper. A 6 says they lean accept with reservations. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: a flaw in the evidence, a comparison that matters and is missing, or little novelty against work they know. 1 and 10 are rare.
+- probabilities: six numbers that sum to one, the probability that this reviewer's official rating is 1, 3, 5, 6, 8, and 10, in that order. This is your forecast of one reviewer, not a hedge. A reviewer whose reaction to the paper is clear puts most of the mass on one rating. A reviewer who could land on either side of a line splits it between the two ratings on each side of that line. Put mass on 8 when a reviewer with this reading would have a real chance of arguing for the paper, and mass on 3 when they would have a real chance of finding a reason to reject it. Spread the mass only as far as the reviewer's reaction is uncertain, and no further; a flat spread over all six ratings is almost never right. The expected rating under these probabilities is this reviewer's score, so the probabilities must say what the review says. rating is the rating with the most mass.
+- confidence: an integer from 1 to 5, how sure that reviewer is.
+
+Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating and the probabilities they would have from their own reading. Do not pull the three toward each other, and do not save 8 for a paper that changes the field. The reasons reviewers at this venue most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim. The reasons they most often give for an 8 are a result they want to use or cite and an idea that changes how they think about the problem. Most submissions are rejected.
+
+After the three reviews, set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating; it need not equal the mean of the three ratings above.
+""".strip()
+
+
+def forecast_task_text() -> str:
+    """The forecast-panel instructions. The seat ids come from ``anchors.FORECAST_SEATS``.
+
+    The scale paragraphs are the round 5-10 text, unchanged, so the forecast
+    moves the form of each reviewer's answer and not the output scale of the
+    chair's estimate or the decision.
+    """
+    return "\n".join(
+        [
+            _FORECAST_HEAD,
+            *forecast_seat_prompt_lines(),
+            "",
+            _FORECAST_STEPS,
+            "",
+            EXPERT_SCALE_PARAGRAPHS[0],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[1],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[2],
+            "",
+            EXPERT_SCALE_PARAGRAPHS[3],
+            "Return only the JSON object.",
+        ]
+    )
+
+
+_SOURCE_TEXT_HEADING = "\n## Source Text\n"
+# The packet sections the prompt_packet stage writes after the source text.
+# The source section ends at the first of them; a "## " inside the manuscript
+# does not end it.
+_PACKET_SECTIONS_AFTER_SOURCE = (
+    "\n## Figures (mandatory inspection)",
+    "\n## Listed contributions (audit each one)",
+    "\n## Related-Work Queries",
+    "\n## Retrieved Sources",
+)
+# A reference-list heading on a line of its own, optionally numbered. Small
+# caps sometimes extract with a space after the first letter.
+_REFERENCES_HEADING = re.compile(
+    r"^[ \t]*(?:\d+\.?[ \t]+)?(?:r[ \t]?eferences|b[ \t]?ibliography)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+MAIN_TEXT_END_MARKER = "[Main text ends here. The reference list and any appendix that follow are not shown.]"
+MAIN_TEXT_CAP_MARKER = (
+    "[The manuscript text is cut here for length. The rest, including the reference list and any "
+    "appendix, is not shown.]"
+)
+
+
+def main_text_packet(packet: str, *, max_chars: int = MAIN_TEXT_MAX_CHARS) -> tuple[str, dict[str, Any]]:
+    """The packet with its ``## Source Text`` section reduced to the manuscript's main text.
+
+    The source text is cut at the first standalone reference-list heading that
+    occurs at or after ``MAIN_TEXT_MIN_SHARE`` of the text, and is capped at
+    ``max_chars`` in every case. A marker line says where the cut happened.
+    Every other section of the packet is kept. The record holds numbers only:
+    the source characters, the characters shown, and the kind of cut
+    (``references``, ``cap``, or ``none``).
+    """
+    if max_chars < 1:
+        raise ValueError("max_chars must be at least 1")
+    span = _source_span(packet)
+    if span is None:
+        return packet, {"source_chars": 0, "shown_chars": 0, "cut": "none"}
+    body_start, body_end = span
+    source = packet[body_start:body_end]
+    source_chars = len(source.strip())
+    cut = "none"
+    shown = source
+    floor = int(len(source) * MAIN_TEXT_MIN_SHARE)
+    for match in _REFERENCES_HEADING.finditer(source):
+        if match.start() >= floor:
+            shown = source[: match.start()]
+            cut = "references"
+            break
+    if len(shown.strip()) > max_chars:
+        shown = shown.lstrip("\n")[:max_chars]
+        cut = "cap"
+    shown = shown.strip("\n")
+    shown_chars = len(shown.strip())
+    if cut == "references":
+        shown = shown + "\n\n" + MAIN_TEXT_END_MARKER
+    elif cut == "cap":
+        shown = shown + "\n\n" + MAIN_TEXT_CAP_MARKER
+    rebuilt = packet[:body_start] + "\n" + shown + "\n" + packet[body_end:]
+    return rebuilt, {"source_chars": source_chars, "shown_chars": shown_chars, "cut": cut}
+
+
+def _source_span(packet: str) -> tuple[int, int] | None:
+    """Start and end of the packet's ``## Source Text`` body, or ``None`` without one."""
+    start = packet.find(_SOURCE_TEXT_HEADING)
+    if start < 0:
+        return None
+    body_start = start + len(_SOURCE_TEXT_HEADING)
+    ends = [index for index in (packet.find(marker, body_start) for marker in _PACKET_SECTIONS_AFTER_SOURCE) if index >= 0]
+    body_end = min(ends) if ends else len(packet)
+    return body_start, body_end
+
+
+def full_text_packet(packet: str, *, max_chars: int = FULL_TEXT_MAX_CHARS) -> tuple[str, dict[str, Any]]:
+    """The packet whole, unless its ``## Source Text`` section is longer than ``max_chars``.
+
+    A manuscript under the cap is returned byte for byte. A longer one keeps
+    its first ``max_chars`` characters of source text, reference list and
+    appendix included as far as they reach, followed by a marker line; every
+    other section of the packet is kept. The record holds numbers only: the
+    source characters, the characters shown, and the kind of cut (``cap`` or
+    ``none``). No reference-list cut is made.
+    """
+    if max_chars < 1:
+        raise ValueError("max_chars must be at least 1")
+    span = _source_span(packet)
+    if span is None:
+        return packet, {"source_chars": 0, "shown_chars": 0, "cut": "none"}
+    body_start, body_end = span
+    source = packet[body_start:body_end]
+    source_chars = len(source.strip())
+    if source_chars <= max_chars:
+        return packet, {"source_chars": source_chars, "shown_chars": source_chars, "cut": "none"}
+    shown = source.lstrip("\n")[:max_chars].strip("\n")
+    shown_chars = len(shown.strip())
+    rebuilt = packet[:body_start] + "\n" + shown + "\n\n" + MAIN_TEXT_CAP_MARKER + "\n" + packet[body_end:]
+    return rebuilt, {"source_chars": source_chars, "shown_chars": shown_chars, "cut": "cap"}
+
+
+AUDITED_SCORING_RULE = (
+    "Treat the audit as the facts a careful reviewer would raise. It is not a score sheet: "
+    "do not add or subtract a fixed amount per item. For each failed check and each flaw, "
+    "decide whether it would change a reviewer's decision on this paper, and say so in the "
+    "rationale before you set the mean. A flaw a reviewer would decline the paper over puts "
+    "the mean on the reject side. A passed check does not raise the mean on its own. Length, "
+    "ambition, and polish are not evidence. Begin the rationale with the flaw or failed check "
+    "that matters most, or say that none changes the decision."
+)
+_AUDIT_EXCERPT_CHARS = 240
+
+
+def _clip(text: str) -> str:
+    flat = " ".join(str(text).split())
+    if len(flat) <= _AUDIT_EXCERPT_CHARS:
+        return flat
+    return flat[: _AUDIT_EXCERPT_CHARS - 1].rstrip() + "…"
+
+
+def _audited_block(audit: dict[str, Any]) -> str:
+    """The verified audit as the scorer sees it. An unanchored verdict shows as unclear."""
+    lines = [
+        "## Verified audit",
+        "A first pass answered twelve fixed questions about this manuscript. Each pass or fail "
+        "below is tied to a passage that was located in the manuscript. An item marked unclear "
+        "had no locatable passage and is not evidence either way.",
+        "",
+    ]
+    for check in audit["checks"]:
+        verdict = str(check["verdict"])
+        if verdict in {"pass", "fail"}:
+            lead = f"- {check['id']}: {verdict}"
+            note = str(check.get("note") or "").strip()
+            if note:
+                lead += f" — {note}"
+            lines.append(f'{lead} Passage: "{_clip(check["excerpt"])}"')
+        else:
+            lines.append(f"- {check['id']}: unclear")
+    lines.extend(["", "Flaws from that pass. Each passage was located in the manuscript."])
+    flaws = list(audit.get("flaws") or [])
+    if not flaws:
+        lines.append("- none")
+    for flaw in flaws:
+        lines.append(
+            f"- {flaw['id']} [{flaw['severity']}] {flaw['title']}: {flaw['why']} "
+            f'Passage: "{_clip(flaw["excerpt"])}"'
+        )
+    lines.extend(["", AUDITED_SCORING_RULE])
+    return "\n".join(lines)
+
+
+# One forecast-panel call is the locked evaluation. Temperature is per call so
+# a stage default of 0 does not force every sample to the same request body.
+# In forecast, rebuttal, matched, panel, expert and mean modes the calls run
+# together and each sees only its own request.
+DEFAULT_HOLISTIC_SAMPLES = LOCKED_HOLISTIC_SAMPLES
+DEFAULT_HOLISTIC_TEMPERATURE = LOCKED_HOLISTIC_TEMPERATURE
+DEFAULT_HOLISTIC_MODE = LOCKED_HOLISTIC_MODE
 
 
 def rubric_prompt_text() -> str:
@@ -1321,9 +2243,22 @@ def judgment_prompt_fingerprint() -> str:
             rubric_prompt_text(),
             FATAL_CLASS_DEFINITIONS,
             HOLISTIC_TASK,
+            audit_task_text(),
+            AUDITED_SCORING_RULE,
+            expert_task_text(),
+            panel_task_text(),
+            matched_task_text(),
+            rebuttal_task_text(),
+            forecast_task_text(),
             "excerpt-normalize-fuzzy-v1",
             "fatal-verify-v1",
-            "holistic-k-v1",
+            "venue-mean-k3-v1",
+            "audited-k1-v1",
+            "expert-k2-v1",
+            "panel-k2-v1",
+            f"matched-k2-v1-main-text-{MAIN_TEXT_MAX_CHARS}",
+            f"rebuttal-k2-v1-full-text-{FULL_TEXT_MAX_CHARS}",
+            f"forecast-k1-v1-full-text-{FULL_TEXT_MAX_CHARS}",
         ]
     )
     return digest_excerpt(blob)
@@ -1371,82 +2306,718 @@ def _fatal_verify_user(items: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _optional_holistic_evidence(
+def _sample_holistic(
     session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+    mode: str = DEFAULT_HOLISTIC_MODE,
+    request: ReviewRequest | None = None,
+    snapshots: list[Any] | None = None,
+) -> dict[str, Any]:
+    """K holistic samples in the declared mode.
+
+    ``forecast``: K simulated three-reviewer forecast panels on the full
+    packet, run together; the locked rank is the first call's mean expected
+    rating. ``rebuttal``: K simulated reviews through the discussion period on
+    the full packet, run together; ranked by the mean of the first two
+    final-rating means. ``matched``: K simulated matched panels on the main
+    text, run together. ``panel``: K simulated mixed-role panels on the full
+    packet, run together. ``expert``: K expert reads, run together, averaged.
+    ``audited``: each sample is one audit call, whose excerpts are verified
+    against the manuscript, then one scoring call that sees the verified
+    audit. ``mean``: K venue-mean calls, run together, averaged. There is no
+    band substitute in any mode. A missing sample fails the paper.
+    """
+    if samples < 1:
+        session.fail("judgment holistic requires at least one sample")
+    if mode not in HOLISTIC_MODES:
+        session.fail(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
+    session.authorize()
+    if mode == "forecast":
+        return _forecast_samples(session, packet, samples=samples, temperature=temperature)
+    if mode == "rebuttal":
+        return _rebuttal_samples(session, packet, samples=samples, temperature=temperature)
+    if mode == "matched":
+        return _matched_samples(session, packet, samples=samples, temperature=temperature)
+    if mode == "panel":
+        return _panel_samples(session, packet, samples=samples, temperature=temperature)
+    if mode == "expert":
+        return _expert_samples(session, packet, samples=samples, temperature=temperature)
+    if mode == "mean":
+        return _venue_mean_samples(session, packet, samples=samples, temperature=temperature)
+    if request is None:
+        session.fail("audited holistic mode needs the manuscript to verify excerpts")
+    assert request is not None
+    return _audited_samples(
+        session,
+        packet,
+        samples=samples,
+        temperature=temperature,
+        request=request,
+        snapshots=list(snapshots or []),
+    )
+
+
+def _venue_mean_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K venue-mean calls, run together. The previous candidate ``mean-k3``."""
+    user = packet + "\n\n" + HOLISTIC_TASK
+    ratings: list[float | None] = [None] * samples
+    means: list[float | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> HolisticJudgment:
+        payload = session.complete(
+            f"holistic-{index + 1}",
+            user,
+            HolisticJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, HolisticJudgment):
+            session.fail("judgment holistic returned an unexpected payload")
+        return payload
+
+    # Three concurrent calls keep the paper's wall clock near one call.
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            ratings[index] = round(float(payload.rating), 4)
+            means[index] = round(float(payload.predicted_mean), 4)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in ratings) or any(item is None for item in means):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    rating_values = [float(item) for item in ratings if item is not None]
+    mean_values = [float(item) for item in means if item is not None]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "predicted_mean": round(sum(mean_values) / len(mean_values), 4),
+        "mean_samples": mean_values,
+        "n": len(mean_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "mean",
+    }
+
+
+def _form_record(payload: ExpertJudgment, *, sample: int) -> dict[str, Any]:
+    """The numbers and the type from one expert read. No text leaves the raw exchange."""
+    return {
+        "sample": sample,
+        "contribution_type": payload.contribution_type,
+        "soundness": int(payload.soundness),
+        "presentation": int(payload.presentation),
+        "contribution": int(payload.contribution),
+        "form_score": form_score(payload.soundness, payload.presentation, payload.contribution),
+        "prior_work": len(payload.prior_work),
+        "prior_work_sure": sum(1 for item in payload.prior_work if item.sure),
+        "prior_work_uncited_sure": sum(1 for item in payload.prior_work if item.sure and not item.cited),
+        "field_context_lines": len(payload.field_context),
+    }
+
+
+def _expert_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K expert reads, run together. The locked candidate ``expert-k2``."""
+    user = packet + "\n\n" + expert_task_text()
+    ratings: list[float | None] = [None] * samples
+    means: list[float | None] = [None] * samples
+    forms: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> ExpertJudgment:
+        payload = session.complete(
+            f"expert-{index + 1}",
+            user,
+            ExpertJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, ExpertJudgment):
+            session.fail("judgment expert returned an unexpected payload")
+        assert isinstance(payload, ExpertJudgment)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            ratings[index] = round(float(payload.rating), 4)
+            means[index] = round(float(payload.predicted_mean), 4)
+            forms[index] = _form_record(payload, sample=index)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in (*ratings, *means, *forms)):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    rating_values = [float(item) for item in ratings if item is not None]
+    mean_values = [float(item) for item in means if item is not None]
+    form_values = [item for item in forms if item is not None]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "expert_mean": round(sum(mean_values) / len(mean_values), 4),
+        "expert_samples": mean_values,
+        "form_samples": [float(item["form_score"]) for item in form_values],
+        "forms": form_values,
+        "n": len(mean_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "expert",
+    }
+
+
+def _panel_record(
+    payload: PanelJudgment,
+    *,
+    sample: int,
+    normalize: Callable[[object], str | None] = normalize_reviewer_role,
+) -> dict[str, Any]:
+    """The numbers and the role ids from one simulated panel. No text leaves the raw exchange."""
+    ratings = [int(review.rating) for review in payload.reviews]
+    return {
+        "sample": sample,
+        "reviews": [
+            {
+                "role": normalize(review.reviewer) or "other",
+                "rating": int(review.rating),
+                "confidence": int(review.confidence),
+            }
+            for review in payload.reviews
+        ],
+        "panel_mean": panel_mean(ratings),
+        "high": max(ratings),
+        "low": min(ratings),
+        "off_scale": sum(1 for value in ratings if value not in OFFICIAL_RATINGS),
+        "chair_mean": round(float(payload.predicted_mean), 4),
+        "decision": round(float(payload.rating), 4),
+    }
+
+
+def _panel_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K simulated panels, run together. The locked candidate ``panel-k2``."""
+    user = packet + "\n\n" + panel_task_text()
+    panels: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> PanelJudgment:
+        payload = session.complete(
+            f"panel-{index + 1}",
+            user,
+            PanelJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, PanelJudgment):
+            session.fail("judgment panel returned an unexpected payload")
+        assert isinstance(payload, PanelJudgment)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            panels[index] = _panel_record(payload, sample=index)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in panels):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    panel_values = [item for item in panels if item is not None]
+    rating_values = [float(item["decision"]) for item in panel_values]
+    mean_values = [float(item["panel_mean"]) for item in panel_values]
+    chair_values = [float(item["chair_mean"]) for item in panel_values]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "panel_mean": round(sum(mean_values) / len(mean_values), 4),
+        "panel_samples": mean_values,
+        "chair_mean": round(sum(chair_values) / len(chair_values), 4),
+        "chair_samples": chair_values,
+        "high_samples": [float(item["high"]) for item in panel_values],
+        "low_samples": [float(item["low"]) for item in panel_values],
+        "panels": panel_values,
+        "n": len(mean_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "panel",
+    }
+
+
+def _matched_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K simulated matched panels on the main text, run together. The locked candidate ``matched-k2``."""
+    shown, main_text = main_text_packet(packet)
+    user = shown + "\n\n" + matched_task_text()
+    panels: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> MatchedJudgment:
+        payload = session.complete(
+            f"matched-{index + 1}",
+            user,
+            MatchedJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, MatchedJudgment):
+            session.fail("judgment matched returned an unexpected payload")
+        assert isinstance(payload, MatchedJudgment)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            panels[index] = _panel_record(payload, sample=index, normalize=normalize_matched_seat)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in panels):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    panel_values = [item for item in panels if item is not None]
+    rating_values = [float(item["decision"]) for item in panel_values]
+    mean_values = [float(item["panel_mean"]) for item in panel_values]
+    chair_values = [float(item["chair_mean"]) for item in panel_values]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "matched_mean": round(sum(mean_values) / len(mean_values), 4),
+        "matched_samples": mean_values,
+        "chair_mean": round(sum(chair_values) / len(chair_values), 4),
+        "chair_samples": chair_values,
+        "high_samples": [float(item["high"]) for item in panel_values],
+        "low_samples": [float(item["low"]) for item in panel_values],
+        "matched_panels": panel_values,
+        "main_text": main_text,
+        "n": len(mean_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "matched",
+    }
+
+
+def _rebuttal_record(payload: RebuttalJudgment, *, sample: int) -> dict[str, Any]:
+    """The numbers and the seat ids from one simulated discussion. No text leaves the raw exchange."""
+    first = [int(review.rating) for review in payload.reviews]
+    final = [int(update.final_rating) for update in payload.updates]
+    seats = [normalize_rebuttal_seat(review.reviewer) for review in payload.reviews]
+    update_seats = [normalize_rebuttal_seat(update.reviewer) for update in payload.updates]
+    initial_mean = panel_mean(first, size=REBUTTAL_PANEL_SIZE)
+    final_mean = panel_mean(final, size=REBUTTAL_PANEL_SIZE)
+    return {
+        "sample": sample,
+        "reviews": [
+            {
+                "role": seat or "other",
+                "rating": before,
+                "confidence": int(review.confidence),
+                "final_rating": after,
+            }
+            for seat, review, before, after in zip(seats, payload.reviews, first, final)
+        ],
+        "initial_mean": initial_mean,
+        "final_mean": final_mean,
+        "lift": round(final_mean - initial_mean, 4),
+        "raised": sum(1 for before, after in zip(first, final) if after > before),
+        "lowered": sum(1 for before, after in zip(first, final) if after < before),
+        "high": max(final),
+        "low": min(final),
+        "off_scale": sum(1 for value in (*first, *final) if value not in OFFICIAL_RATINGS),
+        "label_mismatch": sum(
+            1
+            for seat, update_seat in zip(seats, update_seats)
+            if seat is not None and update_seat is not None and seat != update_seat
+        ),
+        "chair_mean": round(float(payload.predicted_mean), 4),
+        "decision": round(float(payload.rating), 4),
+    }
+
+
+def _rebuttal_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K simulated reviews through the discussion period, run together. The locked candidate ``rebuttal-k2``."""
+    shown, main_text = full_text_packet(packet, max_chars=FULL_TEXT_MAX_CHARS)
+    user = shown + "\n\n" + rebuttal_task_text()
+    panels: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> RebuttalJudgment:
+        payload = session.complete(
+            f"rebuttal-{index + 1}",
+            user,
+            RebuttalJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, RebuttalJudgment):
+            session.fail("judgment rebuttal returned an unexpected payload")
+        assert isinstance(payload, RebuttalJudgment)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            panels[index] = _rebuttal_record(payload, sample=index)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in panels):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    panel_values = [item for item in panels if item is not None]
+    rating_values = [float(item["decision"]) for item in panel_values]
+    final_values = [float(item["final_mean"]) for item in panel_values]
+    initial_values = [float(item["initial_mean"]) for item in panel_values]
+    chair_values = [float(item["chair_mean"]) for item in panel_values]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "rebuttal_mean": round(sum(final_values) / len(final_values), 4),
+        "rebuttal_samples": final_values,
+        "initial_mean": round(sum(initial_values) / len(initial_values), 4),
+        "initial_samples": initial_values,
+        "chair_mean": round(sum(chair_values) / len(chair_values), 4),
+        "chair_samples": chair_values,
+        "high_samples": [float(item["high"]) for item in panel_values],
+        "low_samples": [float(item["low"]) for item in panel_values],
+        "rebuttal_panels": panel_values,
+        "main_text": main_text,
+        "n": len(final_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "rebuttal",
+    }
+
+
+_RENORMALISE_TOLERANCE = 0.01
+
+
+def _forecast_record(payload: ForecastJudgment, *, sample: int) -> dict[str, Any]:
+    """The numbers and the seat ids from one simulated forecast panel. No text leaves the raw exchange."""
+    votes = [int(review.rating) for review in payload.reviews]
+    reviews: list[dict[str, Any]] = []
+    expectations: list[float] = []
+    renormalised = 0
+    mode_mismatch = 0
+    for review, vote in zip(payload.reviews, votes):
+        expected, probabilities = expected_rating(review.probabilities)
+        if abs(sum(float(item) for item in review.probabilities) - 1.0) > _RENORMALISE_TOLERANCE:
+            renormalised += 1
+        peak = max(probabilities)
+        modal = [rating for rating, weight in zip(OFFICIAL_RATINGS, probabilities) if weight == peak]
+        if vote not in modal:
+            mode_mismatch += 1
+        expectations.append(expected)
+        reviews.append(
+            {
+                "role": normalize_forecast_seat(review.reviewer) or "other",
+                "rating": vote,
+                "confidence": int(review.confidence),
+                "expected": expected,
+                "peak": round(peak, 4),
+                "probabilities": list(probabilities),
+            }
+        )
+    return {
+        "sample": sample,
+        "reviews": reviews,
+        "forecast_mean": forecast_mean(expectations),
+        "vote_mean": panel_mean(votes, size=FORECAST_PANEL_SIZE),
+        "high": max(expectations),
+        "low": min(expectations),
+        "off_scale": sum(1 for value in votes if value not in OFFICIAL_RATINGS),
+        "renormalized": renormalised,
+        "mode_mismatch": mode_mismatch,
+        "chair_mean": round(float(payload.predicted_mean), 4),
+        "decision": round(float(payload.rating), 4),
+    }
+
+
+def _forecast_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """K simulated forecast panels on the whole manuscript, run together. The locked candidate ``forecast-k1``."""
+    shown, main_text = full_text_packet(packet, max_chars=FULL_TEXT_MAX_CHARS)
+    user = shown + "\n\n" + forecast_task_text()
+    panels: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> ForecastJudgment:
+        payload = session.complete(
+            f"forecast-{index + 1}",
+            user,
+            ForecastJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, ForecastJudgment):
+            session.fail("judgment forecast returned an unexpected payload")
+        assert isinstance(payload, ForecastJudgment)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                payload = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            panels[index] = _forecast_record(payload, sample=index)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in panels):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    panel_values = [item for item in panels if item is not None]
+    rating_values = [float(item["decision"]) for item in panel_values]
+    forecast_values = [float(item["forecast_mean"]) for item in panel_values]
+    vote_values = [float(item["vote_mean"]) for item in panel_values]
+    chair_values = [float(item["chair_mean"]) for item in panel_values]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "forecast_mean": round(sum(forecast_values) / len(forecast_values), 4),
+        "forecast_samples": forecast_values,
+        "vote_mean": round(sum(vote_values) / len(vote_values), 4),
+        "vote_samples": vote_values,
+        "chair_mean": round(sum(chair_values) / len(chair_values), 4),
+        "chair_samples": chair_values,
+        "high_samples": [float(item["high"]) for item in panel_values],
+        "low_samples": [float(item["low"]) for item in panel_values],
+        "forecast_panels": panel_values,
+        "main_text": main_text,
+        "n": len(forecast_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "forecast",
+    }
+
+
+def _audited_samples(
+    session: ModelSession,
+    packet: str,
+    *,
+    samples: int,
+    temperature: float,
     request: ReviewRequest,
     snapshots: list[Any],
-    payload: HolisticJudgment,
-    evidence: list[EvidenceRecord],
-) -> dict[str, str]:
-    """Attach excerpts that resolve. A miss is a counted drop, not a failed rating."""
-    found: dict[str, str] = {}
-    seen = {item.id for item in evidence}
-    for name, excerpt in (
-        ("strength", payload.strength_excerpt),
-        ("weakness", payload.weakness_excerpt),
-    ):
+) -> dict[str, Any]:
+    """K audit-then-score pairs. Pairs run together; each pair runs in order."""
+    audit_user = packet + "\n\n" + audit_task_text()
+    ratings: list[float | None] = [None] * samples
+    means: list[float | None] = [None] * samples
+    audits: list[dict[str, Any] | None] = [None] * samples
+    errors: list[BaseException] = []
+
+    def one(index: int) -> tuple[dict[str, Any], HolisticJudgment]:
+        payload = session.complete(
+            f"audit-{index + 1}",
+            audit_user,
+            AuditJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(payload, AuditJudgment):
+            session.fail("judgment audit returned an unexpected payload")
+        assert isinstance(payload, AuditJudgment)
+        audit = _verify_audit(session, payload, request=request, snapshots=snapshots, sample=index)
+        user = packet + "\n\n" + _audited_block(audit) + "\n\n" + HOLISTIC_TASK
+        score = session.complete(
+            f"holistic-{index + 1}",
+            user,
+            HolisticJudgment,
+            temperature=temperature,
+        )
+        if not isinstance(score, HolisticJudgment):
+            session.fail("judgment holistic returned an unexpected payload")
+        assert isinstance(score, HolisticJudgment)
+        return audit, score
+
+    with ThreadPoolExecutor(max_workers=min(samples, 3)) as pool:
+        futures = {pool.submit(one, index): index for index in range(samples)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                audit, score = future.result()
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            audits[index] = audit
+            ratings[index] = round(float(score.rating), 4)
+            means[index] = round(float(score.predicted_mean), 4)
+    if errors:
+        raise errors[0]
+    if any(item is None for item in (*ratings, *means, *audits)):
+        session.fail(
+            "judgment holistic produced no rating; refusing to fall back to dimension bands"
+        )
+    rating_values = [float(item) for item in ratings if item is not None]
+    mean_values = [float(item) for item in means if item is not None]
+    audit_values = [item for item in audits if item is not None]
+    return {
+        "rating": round(sum(rating_values) / len(rating_values), 4),
+        "samples": rating_values,
+        "audited_mean": round(sum(mean_values) / len(mean_values), 4),
+        "audited_samples": mean_values,
+        "checks_samples": [float(item["checks_score"]) for item in audit_values],
+        "audits": audit_values,
+        "n": len(mean_values),
+        "verified": True,
+        "locked_candidate": LOCKED_CANDIDATE,
+        "mode": "audited",
+    }
+
+
+def _verify_audit(
+    session: ModelSession,
+    payload: AuditJudgment,
+    *,
+    request: ReviewRequest,
+    snapshots: list[Any],
+    sample: int,
+) -> dict[str, Any]:
+    """Keep a pass or fail only when its excerpt resolves. Drop an unanchored flaw.
+
+    The answers are stored in the fixed checklist order. ``claimed`` keeps what
+    the model said; ``verdict`` is what the scorer sees.
+    """
+
+    def anchor_for(excerpt: str) -> Anchor | None:
         if not excerpt.strip():
-            continue
-        anchor = locate_excerpt(
+            return None
+        return locate_excerpt(
             excerpt,
             manuscript=request.source_text,
             manuscript_sha=request.manuscript.sha256,
             snapshots=snapshots,
         )
+
+    answers = {item.id: item for item in payload.checks}
+    counts = {
+        "pass": 0,
+        "fail": 0,
+        "unclear": 0,
+        "unanchored": 0,
+        "flaws": 0,
+        "flaws_dropped": 0,
+        "blocking": 0,
+    }
+    checks: list[dict[str, Any]] = []
+    for check_id in AUDIT_CHECK_IDS:
+        item = answers[check_id]
+        claimed = item.verdict
+        verdict = claimed
+        excerpt = ""
+        verified = False
+        if claimed in {"pass", "fail"}:
+            anchor = anchor_for(item.excerpt)
+            if anchor is None:
+                session.reject("audit", check_id, _UNRESOLVED_ANCHOR, category="audit_excerpt")
+                verdict = "unclear"
+                counts["unanchored"] += 1
+            else:
+                verified = True
+                excerpt = anchor.excerpt or item.excerpt
+        counts[verdict] += 1
+        checks.append(
+            {
+                "id": check_id,
+                "verdict": verdict,
+                "claimed": claimed,
+                "verified": verified,
+                "excerpt": excerpt,
+                "note": item.note.strip(),
+            }
+        )
+    flaws: list[dict[str, Any]] = []
+    for flaw in payload.flaws:
+        anchor = anchor_for(flaw.excerpt)
         if anchor is None:
-            session.reject("holistic", name, _UNRESOLVED_ANCHOR, category="holistic_excerpt")
+            session.reject("audit", flaw.id, _UNRESOLVED_ANCHOR, category="flaw_excerpt")
+            counts["flaws_dropped"] += 1
             continue
-        evidence_id = f"E-holistic-{name}"
-        if evidence_id not in seen:
-            evidence.append(_evidence(evidence_id, anchor.excerpt or excerpt, anchor, request.manuscript))
-            seen.add(evidence_id)
-        found[name] = evidence_id
-    return found
-
-
-def _sample_holistic(
-    session: ModelSession,
-    request: ReviewRequest,
-    snapshots: list[Any],
-    packet: str,
-    evidence: list[EvidenceRecord],
-    *,
-    samples: int,
-    temperature: float,
-) -> dict[str, Any]:
-    """Average K independent ratings. A schema failure retries once, then fails the paper.
-
-    There is no dimension-band substitute. Optional excerpts are recorded when
-    they resolve and counted when they do not.
-    """
-    if samples < 1:
-        session.fail("judgment holistic requires at least one sample")
-    user = packet + "\n\n" + HOLISTIC_TASK
-    ratings: list[float] = []
-    attached: dict[str, str] = {}
-    for _index in range(samples):
-        payload = session.complete(
-            "holistic",
-            user,
-            HolisticJudgment,
-            temperature=temperature,
+        flaws.append(
+            {
+                "id": flaw.id,
+                "title": flaw.title.strip(),
+                "severity": flaw.severity,
+                "why": flaw.why.strip(),
+                "excerpt": anchor.excerpt or flaw.excerpt,
+                "verified": True,
+            }
         )
-        assert isinstance(payload, HolisticJudgment)
-        ratings.append(round(float(payload.rating), 4))
-        attached.update(
-            _optional_holistic_evidence(session, request, snapshots, payload, evidence)
-        )
-    if len(ratings) != samples:
-        session.fail(
-            "judgment holistic produced no rating; refusing to fall back to dimension bands"
-        )
+        counts["flaws"] += 1
+        if flaw.severity == "blocking":
+            counts["blocking"] += 1
     return {
-        "rating": round(sum(ratings) / len(ratings), 4),
-        "samples": ratings,
-        "n": len(ratings),
-        "verified": True,
-        "strength_evidence_id": attached.get("strength"),
-        "weakness_evidence_id": attached.get("weakness"),
+        "sample": sample,
+        "checks": checks,
+        "flaws": flaws,
+        "counts": counts,
+        "checks_score": checks_score(counts["pass"]),
     }
 
 
@@ -1886,12 +3457,12 @@ def _run_judgments(
         _route_id, packet = packet_for("holistic")
         holistic_meta = _sample_holistic(
             session,
-            request,
-            snapshots,
             packet,
-            evidence,
             samples=int(settings["holistic_samples"]),
             temperature=float(settings["holistic_temperature"]),
+            mode=str(settings.get("holistic_mode") or DEFAULT_HOLISTIC_MODE),
+            request=request,
+            snapshots=snapshots,
         )
 
     if settings["bilingual"]:

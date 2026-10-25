@@ -95,6 +95,117 @@ class CliTests(unittest.TestCase):
             self.assertTrue((output_dir / "figure_grounded_v1.md").is_file())
             self.assertTrue((output_dir / "first_read_v1.md").is_file())
 
+    def test_calibrate_eval_run_declares_the_holistic_mode(self) -> None:
+        from contextlib import redirect_stderr
+
+        from autopaperreview.cli import build_parser
+
+        args = build_parser().parse_args(["calibrate-eval", "run", "--cache", "unused"])
+        self.assertEqual(args.holistic_mode, "forecast")
+        self.assertEqual(args.holistic_samples, 1)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "forecast",
+                "--holistic-samples",
+                "1",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "forecast")
+        self.assertEqual(args.holistic_samples, 1)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "rebuttal",
+                "--holistic-samples",
+                "2",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "rebuttal")
+        self.assertEqual(args.holistic_samples, 2)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "matched",
+                "--holistic-samples",
+                "2",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "matched")
+        self.assertEqual(args.holistic_samples, 2)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "panel",
+                "--holistic-samples",
+                "2",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "panel")
+        self.assertEqual(args.holistic_samples, 2)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "expert",
+                "--holistic-samples",
+                "2",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "expert")
+        self.assertEqual(args.holistic_samples, 2)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "mean",
+                "--holistic-samples",
+                "3",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "mean")
+        self.assertEqual(args.holistic_samples, 3)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "run",
+                "--cache",
+                "unused",
+                "--holistic-mode",
+                "audited",
+                "--holistic-samples",
+                "1",
+            ]
+        )
+        self.assertEqual(args.holistic_mode, "audited")
+        self.assertEqual(args.holistic_samples, 1)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                ["calibrate-eval", "run", "--cache", "unused", "--holistic-mode", "other"]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

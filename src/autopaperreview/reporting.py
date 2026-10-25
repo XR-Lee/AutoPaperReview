@@ -99,6 +99,114 @@ _VISUAL_STATUS = {
 }
 
 
+def _fusion_rank_note(meta: dict[str, object], language: str, rank_value: float, scale_max: float) -> str:
+    """One sentence on the shipped rank. The bin sentence stays with the decision."""
+    variant = str(meta.get("fusion_variant") or "")
+    if language == "zh-Hans":
+        if variant == "forecast-k1":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（模拟三人审稿组各自对官方评分给出概率，取期望评分后的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant in {"rebuttal-k2", "rebuttal"}:
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（模拟三人审稿组经作者回应与讨论后所持官方评分的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant in {"matched-k2", "matched"}:
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（按主题匹配的模拟四人审稿组读正文后所给官方评分的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant in {"panel-k2", "panel"}:
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（模拟四人审稿组所给官方评分的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant in {"expert-k2", "expert"}:
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（领域专家阅读的 1–10 会场均分估计的均值）。档位来自 1–6 决定分。"
+            )
+        if variant == "audited-k1":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（经核验审查后的 1–10 会场均分估计）。档位来自 1–6 决定分。"
+            )
+        if variant == "mean-k3":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（三次会场均分估计的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant == "isolate-k1":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（两极对照的 1–10 均值）。档位来自 1–6 决定分。"
+            )
+        if variant == "place":
+            return (
+                f" 排序分 {rank_value:.2f}"
+                "（合成参照的 1–10 落点）。档位来自 1–6 决定分。"
+            )
+        if scale_max > 6:
+            return f" 排序分 {rank_value:.2f}（1–10 会场均分估计）。档位来自 1–6 决定分。"
+        return f" 排序分 {rank_value:.2f}（1–6 决定分，不是 1–10）。"
+    if variant == "forecast-k1":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean expected official rating of a "
+            "simulated panel of three typical reviewers, each giving a probability over the official "
+            "ratings. The bin comes from the 1–6 decision."
+        )
+    if variant in {"rebuttal-k2", "rebuttal"}:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean official rating a simulated "
+            "panel of three typical reviewers holds at the end of the discussion period, after the "
+            "authors' response. The bin comes from the 1–6 decision."
+        )
+    if variant in {"matched-k2", "matched"}:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean official rating submitted by a "
+            "simulated topic-matched panel of four typical reviewers reading the main text. The bin "
+            "comes from the 1–6 decision."
+        )
+    if variant in {"panel-k2", "panel"}:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean official rating submitted by a "
+            "simulated panel of four typical reviewers. The bin comes from the 1–6 decision."
+        )
+    if variant in {"expert-k2", "expert"}:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean of expert-read venue-mean "
+            "estimates made with the paper's field context. The bin comes from the 1–6 decision."
+        )
+    if variant == "audited-k1":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, a venue-mean estimate made after a "
+            "verified audit. The bin comes from the 1–6 decision."
+        )
+    if variant == "mean-k3":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale, the mean of three venue-mean samples. "
+            "The bin comes from the 1–6 decision."
+        )
+    if variant == "isolate-k1":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 scale from two isolated reference comparisons. "
+            "The bin comes from the 1–6 decision."
+        )
+    if variant == "place":
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 ladder placement. "
+            "The bin comes from the 1–6 decision."
+        )
+    if scale_max > 6:
+        return (
+            f" Rank score {rank_value:.2f} on a 1–10 venue-mean scale. "
+            "The bin comes from the 1–6 decision."
+        )
+    return f" Rank score {rank_value:.2f} on a 1–6 decision scale."
+
+
 def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     score = package.overall_score
     if (
@@ -117,7 +225,8 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
     bin_value = meta.get("venue_bin", score.value)
     rank_note = ""
     if score.coefficient_set == "apr-fusion-v1":
-        rank_note = f" 排序分 {float(meta.get('rank_score', score.value)):.2f}。"
+        rank_value = float(meta.get("rank_score", score.value))
+        rank_note = _fusion_rank_note(meta, "zh-Hans", rank_value, float(score.scale_max))
     if language == "zh-Hans":
         return [
             f"已声明评分 `{score.coefficient_set}`：ICLR 档 **{float(bin_value):.0f}**。"
@@ -131,7 +240,8 @@ def _rating_lines(package: ReviewPackage, language: str) -> list[str]:
         ]
     rank_note_en = ""
     if score.coefficient_set == "apr-fusion-v1":
-        rank_note_en = f" Rank score {float(meta.get('rank_score', score.value)):.2f}."
+        rank_value = float(meta.get("rank_score", score.value))
+        rank_note_en = _fusion_rank_note(meta, "en", rank_value, float(score.scale_max))
     return [
         f"Declared rating `{score.coefficient_set}`: ICLR bin **{float(bin_value):.0f}**. "
         f"This is not a fitted regression.{rank_note_en}",

@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from autopaperreview.fusion import DIAGNOSTIC, SHIPPABLE, selection_report
+from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
@@ -44,6 +44,34 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
                 "candidates": score.get("candidates") or {},
                 "usage_totals": score.get("usage_totals") or {},
                 "holistic": score.get("holistic"),
+                "samples": score.get("samples") or [],
+                "mean_samples": score.get("mean_samples") or [],
+                "place_samples": score.get("place_samples") or [],
+                "count_samples": score.get("count_samples") or [],
+                "isolate_samples": score.get("isolate_samples") or [],
+                "audited_samples": score.get("audited_samples") or [],
+                "checks_samples": score.get("checks_samples") or [],
+                "expert_samples": score.get("expert_samples") or [],
+                "form_samples": score.get("form_samples") or [],
+                "forecast_samples": score.get("forecast_samples") or [],
+                "vote_samples": score.get("vote_samples") or [],
+                "rebuttal_samples": score.get("rebuttal_samples") or [],
+                "initial_samples": score.get("initial_samples") or [],
+                "matched_samples": score.get("matched_samples") or [],
+                "panel_samples": score.get("panel_samples") or [],
+                "chair_samples": score.get("chair_samples") or [],
+                "high_samples": score.get("high_samples") or [],
+                "low_samples": score.get("low_samples") or [],
+                "audit": score.get("audit") or [],
+                "expert": score.get("expert") or [],
+                "panel": score.get("panel") or [],
+                "matched": score.get("matched") or [],
+                "rebuttal": score.get("rebuttal") or [],
+                "forecast": score.get("forecast") or [],
+                "main_text": score.get("main_text") or {},
+                "holistic_mode": score.get("holistic_mode"),
+                "placements": score.get("placements") or [],
+                "poles": score.get("poles") or [],
                 "caps": score.get("caps") or [],
                 "drop_counts": score.get("drop_counts") or {},
             }
@@ -70,7 +98,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ids")
     parser.add_argument("--split")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("candidates", "locked"), default="candidates")
+    parser.add_argument(
+        "--mode",
+        choices=("candidates", "locked"),
+        default="locked",
+        help="locked reports the shipped rank (the preregistered candidate); candidates is diagnostic",
+    )
     parser.add_argument("--resamples", type=int, default=4000)
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
@@ -111,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     output.write_text(
         json.dumps(
             {
+                "preregistered": LOCKED_CANDIDATE,
                 "chosen": chosen,
                 "tied": tied,
                 "n": len(records),
@@ -123,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         + "\n",
         encoding="utf-8",
     )
+    print(f"preregistered={LOCKED_CANDIDATE}")
     print(f"n={len(records)} mode={args.mode}")
     for name in names:
         intervals = table[name]["intervals"]
@@ -132,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if chosen:
         print(f"selected={chosen}")
+        if report and report.get("rule"):
+            print(f"rule={report['rule']}")
+        if report and report.get("cap_adopted"):
+            print("cap_adopted=yes")
         if len(tied) > 1:
             print("tied=" + ",".join(str(name) for name in tied))
     drops: dict[str, int] = {}
