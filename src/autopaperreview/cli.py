@@ -207,6 +207,7 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
         with_holistic=args.with_holistic,
         cheap=args.cheap,
         holistic_samples=args.holistic_samples,
+        holistic_mode=args.holistic_mode,
         only_ids=_load_only_ids(args.only_ids, args.split),
     )
     if result["awaiting_judgment"]:
@@ -648,7 +649,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="holistic samples only; skip contributions, ledger, dimensions, and fatal",
     )
-    eval_run.add_argument("--holistic-samples", type=int, default=3)
+    from .anchors import HOLISTIC_MODES
+    from .model_exec import DEFAULT_HOLISTIC_MODE, DEFAULT_HOLISTIC_SAMPLES
+
+    eval_run.add_argument(
+        "--holistic-samples",
+        type=int,
+        default=DEFAULT_HOLISTIC_SAMPLES,
+        help=(
+            "holistic samples per paper: forecast panels in forecast mode, simulated discussions in "
+            "rebuttal mode, simulated panels in matched and panel modes, expert reads in expert "
+            "mode, audit-then-score pairs in audited mode, venue-mean calls in mean mode; the "
+            "default is the locked evaluation K of 1"
+        ),
+    )
+    eval_run.add_argument(
+        "--holistic-mode",
+        choices=HOLISTIC_MODES,
+        default=DEFAULT_HOLISTIC_MODE,
+        help=(
+            "forecast: one simulated three-reviewer panel on the full manuscript in which each "
+            "reviewer gives a probability over the official ratings, ranked by the mean expected "
+            "rating (the locked candidate forecast-k1); rebuttal: concurrent simulated "
+            "three-reviewer reviews of the full manuscript carried through the authors' response, "
+            "ranked by the mean official rating held at the end of the discussion (the previous "
+            "candidate rebuttal-k2); matched: concurrent simulated "
+            "topic-matched four-reviewer panels reading the main text with the venue's rating "
+            "norms (matched-k2); panel: concurrent simulated mixed-role "
+            "panels on the full manuscript (panel-k2); expert: concurrent expert reads with the "
+            "paper's field context (expert-k2); audited: one verified audit call then one scoring "
+            "call (audited-k1); mean: plain venue-mean calls (mean-k3 at K=3)"
+        ),
+    )
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")
     eval_run.set_defaults(func=command_calibrate_eval_run)

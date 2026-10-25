@@ -17,6 +17,7 @@ from typing import Any, Callable
 from unittest import mock
 
 from autopaperreview.adapters import FixtureReviewAdapter, ReviewRequest
+from autopaperreview.anchors import AUDIT_CHECK_IDS, LOCKED_HOLISTIC_SAMPLES, checks_score
 from autopaperreview.bilingual_coverage import package_bilingual_gaps
 from autopaperreview.hashing import sha256_file
 from autopaperreview.model_exec import (
@@ -273,8 +274,10 @@ def _write_project(
     with_report: bool = False,
     cheap: bool = False,
     holistic_samples: int | None = None,
+    holistic_mode: str | None = None,
+    manuscript: str = MANUSCRIPT,
 ) -> Path:
-    (workspace / "manuscript.txt").write_text(MANUSCRIPT, encoding="utf-8")
+    (workspace / "manuscript.txt").write_text(manuscript, encoding="utf-8")
     prompts = workspace / "prompts"
     prompts.mkdir()
     (prompts / "contribution_audit_v1.md").write_text(
@@ -287,6 +290,7 @@ def _write_project(
     bilingual_line = "bilingual = true\n" if bilingual else ""
     cheap_line = "cheap = true\n" if cheap else ""
     samples_line = f"holistic_samples = {holistic_samples}\n" if holistic_samples is not None else ""
+    mode_line = f'holistic_mode = "{holistic_mode}"\n' if holistic_mode is not None else ""
     report = ""
     if with_report:
         report = """
@@ -342,7 +346,7 @@ requires_network = {"true" if requires_network else "false"}
 network_scope = "fulltext"
 judgments = [{judgment_list}]
 timeout_seconds = 10
-{bilingual_line}{cheap_line}{samples_line}
+{bilingual_line}{cheap_line}{samples_line}{mode_line}
 [stages.params.packet_routes]
 {route_table}
 {report}
@@ -1297,23 +1301,63 @@ class ExcerptMatchTests(unittest.TestCase):
         self.assertIsNone(joined)
 
 
+def _mean_content(*, predicted_mean: float, rating: float) -> str:
+    return json.dumps(
+        {
+            "rationale": "The synthetic comparison shows a gain a reviewer would rely on, so the mean is on the accept side.",
+            "rating": rating,
+            "predicted_mean": predicted_mean,
+        }
+    )
+
+
+def _audit_content(
+    *,
+    bad_excerpt_id: str | None = None,
+    fail_id: str | None = None,
+    unclear_id: str | None = None,
+    flaws: list[dict[str, Any]] | None = None,
+) -> str:
+    checks = []
+    for check_id in AUDIT_CHECK_IDS:
+        row: dict[str, Any] = {
+            "id": check_id,
+            "verdict": "pass",
+            "excerpt": COHORT,
+            "note": "The cohort line shows it.",
+        }
+        if check_id == bad_excerpt_id:
+            row["excerpt"] = "This passage was never written in the synthetic manuscript."
+        if check_id == fail_id:
+            row.update({"verdict": "fail", "excerpt": ACCURACY, "note": "one number with no spread"})
+        if check_id == unclear_id:
+            row.update({"verdict": "unclear", "excerpt": "", "note": ""})
+        checks.append(row)
+    return json.dumps({"checks": checks, "flaws": flaws if flaws is not None else []})
+
+
 class HolisticSampleTests(unittest.TestCase):
-    def test_samples_average_and_a_bad_excerpt_does_not_drop_the_rating(self) -> None:
+    """``holistic_mode = "mean"``: the previous candidate, kept as a declared switch."""
+
+    def test_three_means_average_and_a_shorter_run_stays_short(self) -> None:
+        pending = [(4.2, 3.0), (6.0, 4.0), (7.2, 5.0)]
+        lock = threading.Lock()
+
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
-            self.assertEqual(_judgment_name(payload), "holistic")
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "holistic")
             self.assertEqual(payload["temperature"], 0.7)
-            rating = (6.0, 7.0, 8.0)[attempt - 1]
-            excerpt = "this sentence was not written in the manuscript" if attempt == 1 else ""
-            return _chat(
-                json.dumps(
-                    {
-                        "rating": rating,
-                        "rationale": "Synthetic cohort is a clear decision.",
-                        "strength_excerpt": excerpt,
-                        "weakness_excerpt": "",
-                    }
-                )
-            )
+            user = payload["messages"][1]["content"]
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertNotIn("weak-reject", user)
+            self.assertNotIn("strong-accept", user)
+            self.assertNotIn("## Reference", user)
+            self.assertNotIn("## Verified audit", user)
+            with lock:
+                predicted_mean, rating = pending.pop()
+            return _chat(_mean_content(predicted_mean=predicted_mean, rating=rating))
 
         with ChatServer(reply) as server, tempfile_dir() as workspace:
             config = _write_project(
@@ -1321,17 +1365,52 @@ class HolisticSampleTests(unittest.TestCase):
                 base_url=server.base_url,
                 judgments=["holistic"],
                 holistic_samples=3,
+                holistic_mode="mean",
             )
             manifest = run_pipeline(config)
             stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
             package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
             rating = package["metadata"]["holistic_rating"]
-            self.assertEqual(rating["samples"], [6.0, 7.0, 8.0])
-            self.assertEqual(rating["rating"], 7.0)
+            self.assertEqual(sorted(rating["mean_samples"]), [4.2, 6.0, 7.2])
+            self.assertEqual(sorted(rating["samples"]), [3.0, 4.0, 5.0])
+            self.assertAlmostEqual(rating["predicted_mean"], (4.2 + 6.0 + 7.2) / 3)
+            self.assertAlmostEqual(rating["rating"], 4.0)
+            self.assertEqual(rating["n"], 3)
+            self.assertEqual(rating["mode"], "mean")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertNotIn("audited_samples", rating)
+            self.assertNotIn("expert_samples", rating)
+            self.assertNotIn("panel_samples", rating)
+            self.assertNotIn("isolate_samples", rating)
+            self.assertNotIn("poles", rating)
             self.assertTrue(rating["verified"])
-            review = manifest.stage("review")
-            assert review is not None
-            self.assertEqual(review.metadata["drop_counts"], {"holistic_excerpt": 1})
+            self.assertEqual(server.counts, {"holistic": 3})
+
+    def test_venue_mean_calls_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 3:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("venue-mean calls did not overlap")
+            return _chat(_mean_content(predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=3,
+                holistic_mode="mean",
+            )
+            run_pipeline(config)
             self.assertEqual(server.counts, {"holistic": 3})
 
     def test_schema_failure_fails_the_paper(self) -> None:
@@ -1344,27 +1423,1005 @@ class HolisticSampleTests(unittest.TestCase):
                 workspace,
                 base_url=server.base_url,
                 judgments=["holistic"],
-                holistic_samples=1,
+                holistic_samples=3,
+                holistic_mode="mean",
             )
             with self.assertRaises(PipelineError) as caught:
                 run_pipeline(config)
             self.assertIn("holistic", str(caught.exception))
-            self.assertEqual(server.counts["holistic"], 2)
+            self.assertEqual(server.counts["holistic"], 6)
 
-    def test_cheap_mode_calls_only_the_holistic_judgment(self) -> None:
+    def test_cheap_mode_calls_only_the_venue_means(self) -> None:
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
             del attempt
             name = _judgment_name(payload)
             if name != "holistic":
                 raise AssertionError(name)
+            user = payload["messages"][1]["content"]
+            if "predicted_mean" not in user:
+                raise AssertionError("holistic prompt is missing the venue mean")
+            return _chat(_mean_content(predicted_mean=6.4, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=3,
+                holistic_mode="mean",
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"holistic": 3})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+
+    def test_omitted_sample_count_in_mean_mode_follows_the_locked_k(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "holistic")
+            return _chat(_mean_content(predicted_mean=4.8, rating=3))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_mode="mean",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"holistic": LOCKED_HOLISTIC_SAMPLES})
+            self.assertEqual(rating["mean_samples"], [4.8] * LOCKED_HOLISTIC_SAMPLES)
+            self.assertEqual(rating["mode"], "mean")
+
+    def test_two_samples_keep_their_own_mean(self) -> None:
+        pending = [5.2, 6.8]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "holistic")
+            with lock:
+                predicted_mean = pending.pop()
+            return _chat(_mean_content(predicted_mean=predicted_mean, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="mean",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts["holistic"], 2)
+            self.assertEqual(sorted(rating["mean_samples"]), [5.2, 6.8])
+            self.assertAlmostEqual(rating["predicted_mean"], 6.0)
+
+
+class AuditedPairTests(unittest.TestCase):
+    """The locked ``audited`` mode: one verified audit, then one scoring call."""
+
+    def test_audit_then_score_passes_only_verified_items(self) -> None:
+        seen: list[str] = []
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            user = payload["messages"][1]["content"]
+            with lock:
+                seen.append(name)
+            self.assertEqual(payload["temperature"], 0.7)
+            if name == "audit":
+                self.assertIn("## Audit", user)
+                self.assertIn("You are not scoring it", user)
+                for check_id in AUDIT_CHECK_IDS:
+                    self.assertIn(f"- {check_id}: ", user)
+                self.assertNotIn("predicted_mean", user)
+                self.assertNotIn("## Venue mean", user)
+                self.assertIn(COHORT, user)
+                return _chat(
+                    _audit_content(
+                        bad_excerpt_id="ablation_isolates_claim",
+                        fail_id="variance_reported",
+                        unclear_id="breadth_of_evidence",
+                        flaws=[
+                            {
+                                "id": "F1",
+                                "title": "Single accuracy number",
+                                "excerpt": ACCURACY,
+                                "why": "No spread is reported for the headline number.",
+                                "severity": "major",
+                            },
+                            {
+                                "id": "F2",
+                                "title": "Invented problem",
+                                "excerpt": "A sentence that is not in the synthetic manuscript at all.",
+                                "why": "This flaw has no passage and must be dropped.",
+                                "severity": "blocking",
+                            },
+                        ],
+                    )
+                )
+            self.assertEqual(name, "holistic")
+            self.assertIn("## Verified audit", user)
+            self.assertIn("- claim_quantified: pass", user)
+            self.assertIn("- variance_reported: fail", user)
+            self.assertIn("- ablation_isolates_claim: unclear", user)
+            self.assertIn("- breadth_of_evidence: unclear", user)
+            self.assertIn("F1 [major] Single accuracy number", user)
+            self.assertIn(ACCURACY, user)
+            self.assertNotIn("F2", user)
+            self.assertNotIn("Invented problem", user)
+            self.assertNotIn("never written", user)
+            self.assertIn("not a score sheet", user)
+            self.assertIn("predicted_mean", user)
+            self.assertLess(user.index("## Verified audit"), user.index("## Venue mean"))
+            self.assertLess(user.index("## Source Text"), user.index("## Verified audit"))
+            return _chat(_mean_content(predicted_mean=4.6, rating=3))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="audited",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"audit": 1, "holistic": 1})
+            self.assertEqual(seen, ["audit", "holistic"])
+            self.assertEqual(rating["audited_samples"], [4.6])
+            self.assertAlmostEqual(rating["audited_mean"], 4.6)
+            self.assertEqual(rating["samples"], [3.0])
+            self.assertEqual(rating["rating"], 3.0)
+            self.assertEqual(rating["n"], 1)
+            self.assertEqual(rating["mode"], "audited")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            self.assertNotIn("mean_samples", rating)
+            self.assertNotIn("expert_samples", rating)
+            self.assertNotIn("panel_samples", rating)
+            self.assertNotIn("predicted_mean", rating)
+            audit = rating["audits"][0]
+            self.assertEqual(audit["sample"], 0)
+            self.assertEqual(
+                audit["counts"],
+                {
+                    "pass": 9,
+                    "fail": 1,
+                    "unclear": 2,
+                    "unanchored": 1,
+                    "flaws": 1,
+                    "flaws_dropped": 1,
+                    "blocking": 0,
+                },
+            )
+            self.assertEqual(rating["checks_samples"], [checks_score(9)])
+            self.assertEqual(audit["checks_score"], checks_score(9))
+            self.assertEqual([item["id"] for item in audit["checks"]], list(AUDIT_CHECK_IDS))
+            by_id = {item["id"]: item for item in audit["checks"]}
+            self.assertEqual(by_id["ablation_isolates_claim"]["verdict"], "unclear")
+            self.assertEqual(by_id["ablation_isolates_claim"]["claimed"], "pass")
+            self.assertFalse(by_id["ablation_isolates_claim"]["verified"])
+            self.assertEqual(by_id["ablation_isolates_claim"]["excerpt"], "")
+            self.assertEqual(by_id["variance_reported"]["verdict"], "fail")
+            self.assertTrue(by_id["variance_reported"]["verified"])
+            self.assertEqual(by_id["variance_reported"]["excerpt"], ACCURACY)
+            self.assertEqual(by_id["breadth_of_evidence"]["claimed"], "unclear")
+            self.assertEqual([item["id"] for item in audit["flaws"]], ["F1"])
+            self.assertEqual(audit["flaws"][0]["excerpt"], ACCURACY)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["drop_counts"], {"audit_excerpt": 1, "flaw_excerpt": 1})
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+
+    def test_an_incomplete_checklist_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            if _judgment_name(payload) != "audit":
+                raise AssertionError("the scoring call must not run without an audit")
+            checks = json.loads(_audit_content())["checks"][:-1]
+            return _chat(json.dumps({"checks": checks, "flaws": []}))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="audited",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("audit", str(caught.exception))
+            self.assertIn("missing", str(caught.exception))
+            self.assertEqual(server.counts, {"audit": 2})
+
+    def test_two_audited_pairs_run_two_chains(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            if _judgment_name(payload) == "audit":
+                return _chat(_audit_content())
+            return _chat(_mean_content(predicted_mean=6.4, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="audited",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"audit": 2, "holistic": 2})
+            self.assertEqual(rating["audited_samples"], [6.4, 6.4])
+            self.assertEqual(rating["checks_samples"], [10.0, 10.0])
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual([item["sample"] for item in rating["audits"]], [0, 1])
+
+    def test_cheap_audited_mode_runs_only_the_pair(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name == "audit":
+                return _chat(_audit_content())
+            if name != "holistic":
+                raise AssertionError(name)
+            return _chat(_mean_content(predicted_mean=5.8, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=1,
+                holistic_mode="audited",
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"audit": 1, "holistic": 1})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+
+
+def _expert_content(
+    *,
+    predicted_mean: float,
+    rating: float,
+    contribution_type: str = "method",
+    triad: tuple[int, int, int] = (3, 3, 2),
+    prior_work: list[dict[str, Any]] | None = None,
+    field_context: Any = None,
+) -> str:
+    soundness, presentation, contribution = triad
+    return json.dumps(
+        {
+            "area": "synthetic counting rules",
+            "contribution_type": contribution_type,
+            "prior_work": prior_work
+            if prior_work is not None
+            else [
+                {"name": "an earlier counting rule", "relation": "same rule on one specimen", "cited": True, "sure": True},
+                {"name": "a recalled tally method", "relation": "differs in the pair", "cited": False, "sure": True},
+            ],
+            "field_context": field_context
+            if field_context is not None
+            else ["the area compares against the tally method on the standard pair"],
+            "soundness": soundness,
+            "presentation": presentation,
+            "contribution": contribution,
+            "strengths": ["the rule is stated as an algorithm"],
+            "weaknesses": ["one specimen carries the claim"],
+            "rationale": "A known rule on a new pair; one specimen carries it; the panel lands on the reject side.",
+            "predicted_mean": predicted_mean,
+            "rating": rating,
+        }
+    )
+
+
+class ExpertReadTests(unittest.TestCase):
+    """``holistic_mode = "expert"``: the round-7 candidate, kept as a declared switch."""
+
+    def test_two_expert_reads_run_together_and_average(self) -> None:
+        pending = [
+            _expert_content(predicted_mean=5.2, rating=3),
+            _expert_content(
+                predicted_mean=6.0,
+                rating=4,
+                contribution_type="Benchmark / dataset",
+                triad=(3, 4, 3),
+                prior_work=[],
+                field_context="one line given as a string",
+            ),
+        ]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "expert")
+            self.assertEqual(payload["temperature"], 0.7)
+            system = payload["messages"][0]["content"]
+            self.assertIn("contribution_type is one of", system)
+            self.assertIn("No other keys", system)
+            user = payload["messages"][1]["content"]
+            self.assertIn("## Expert read", user)
+            self.assertIn("prior_work", user)
+            self.assertIn("field_context", user)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertIn(COHORT, user)
+            self.assertLess(user.index("## Source Text"), user.index("## Expert read"))
+            self.assertNotIn("## Venue mean", user)
+            self.assertNotIn("## Review panel", user)
+            self.assertNotIn("## Audit", user)
+            self.assertNotIn("## Verified audit", user)
+            self.assertNotIn("weak-reject", user)
+            with lock:
+                content = pending.pop()
+            return _chat(content)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="expert",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"expert": 2})
+            self.assertEqual(sorted(rating["expert_samples"]), [5.2, 6.0])
+            self.assertAlmostEqual(rating["expert_mean"], 5.6)
+            self.assertEqual(sorted(rating["samples"]), [3.0, 4.0])
+            self.assertAlmostEqual(rating["rating"], 3.5)
+            self.assertEqual(sorted(rating["form_samples"]), [6.0, 8.0])
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual(rating["mode"], "expert")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            for absent in ("mean_samples", "audited_samples", "audits", "predicted_mean", "poles", "panel_samples", "panels"):
+                self.assertNotIn(absent, rating)
+            forms = sorted(rating["forms"], key=lambda item: item["form_score"])
+            self.assertEqual([item["sample"] for item in rating["forms"]], [0, 1])
+            self.assertEqual(
+                forms[0],
+                {
+                    "sample": forms[0]["sample"],
+                    "contribution_type": "method",
+                    "soundness": 3,
+                    "presentation": 3,
+                    "contribution": 2,
+                    "form_score": 6.0,
+                    "prior_work": 2,
+                    "prior_work_sure": 2,
+                    "prior_work_uncited_sure": 1,
+                    "field_context_lines": 1,
+                },
+            )
+            self.assertEqual(forms[1]["contribution_type"], "benchmark")
+            self.assertEqual(forms[1]["prior_work"], 0)
+            self.assertEqual(forms[1]["field_context_lines"], 1)
+            blob = json.dumps(rating)
+            for text in ("synthetic counting rules", "tally method", "stated as an algorithm", "panel lands"):
+                self.assertNotIn(text, blob)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["expert-1", "expert-2"])
+
+    def test_expert_reads_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 2:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("expert reads did not overlap")
+            return _chat(_expert_content(predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="expert",
+            )
+            run_pipeline(config)
+            self.assertEqual(server.counts, {"expert": 2})
+
+    def test_an_unknown_type_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat(_expert_content(predicted_mean=5.0, rating=3, contribution_type="poem"))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="expert",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("expert", str(caught.exception))
+            self.assertIn("contribution_type", str(caught.exception))
+            self.assertEqual(server.counts, {"expert": 2})
+
+    def test_cheap_expert_mode_runs_only_the_reads(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "expert":
+                raise AssertionError(name)
+            return _chat(_expert_content(predicted_mean=5.8, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=2,
+                holistic_mode="expert",
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"expert": 2})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+
+    def test_one_expert_read_when_asked(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "expert")
+            return _chat(_expert_content(predicted_mean=4.4, rating=2))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="expert",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"expert": 1})
+            self.assertEqual(rating["expert_samples"], [4.4])
+            self.assertEqual(rating["samples"], [2.0])
+            self.assertEqual(rating["n"], 1)
+
+
+def _panel_content(
+    *,
+    ratings: tuple[int, int, int, int],
+    predicted_mean: float,
+    rating: float,
+    reviewers: tuple[str, str, str, str] = ("specialist", "generalist", "methodologist", "senior"),
+    confidences: tuple[int, int, int, int] = (4, 3, 4, 3),
+    strengths: Any = None,
+) -> str:
+    reviews = []
+    for index in range(4):
+        reviews.append(
+            {
+                "reviewer": reviewers[index],
+                "summary": "The paper claims a counting rule for the synthetic cohort.",
+                "strengths": strengths if strengths is not None else ["the rule is stated as an algorithm"],
+                "weaknesses": ["one specimen carries the claim"],
+                "rating": ratings[index],
+                "confidence": confidences[index],
+            }
+        )
+    return json.dumps(
+        {
+            "reviews": reviews,
+            "discussion": "The panel splits on novelty; the single specimen decides it.",
+            "predicted_mean": predicted_mean,
+            "rating": rating,
+        }
+    )
+
+
+class ReviewPanelTests(unittest.TestCase):
+    """The locked ``panel`` mode: two concurrent simulated panels, no audit, no verification."""
+
+    def test_two_panels_run_together_and_average_their_means(self) -> None:
+        pending = [
+            _panel_content(ratings=(5, 6, 3, 8), predicted_mean=5.4, rating=3),
+            _panel_content(
+                ratings=(6, 6, 5, 7),
+                predicted_mean=6.1,
+                rating=4,
+                reviewers=("Reviewer 1 (specialist)", "generalist", "area chair", "Senior researcher"),
+                strengths="a single clause as a string",
+            ),
+        ]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "panel")
+            self.assertEqual(payload["temperature"], 0.7)
+            system = payload["messages"][0]["content"]
+            self.assertIn("exactly 4 objects", system)
+            self.assertIn("specialist, generalist, methodologist, senior", system)
+            self.assertIn("No other keys", system)
+            user = payload["messages"][1]["content"]
+            self.assertIn("## Review panel", user)
+            self.assertIn("- specialist:", user)
+            self.assertIn("- senior:", user)
+            self.assertIn("Real panels disagree", user)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertIn(COHORT, user)
+            self.assertLess(user.index("## Source Text"), user.index("## Review panel"))
+            self.assertNotIn("## Venue mean", user)
+            self.assertNotIn("## Expert read", user)
+            self.assertNotIn("## Audit", user)
+            self.assertNotIn("## Verified audit", user)
+            self.assertNotIn("weak-reject", user)
+            with lock:
+                content = pending.pop()
+            return _chat(content)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="panel",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"panel": 2})
+            self.assertEqual(sorted(rating["panel_samples"]), [5.5, 6.0])
+            self.assertAlmostEqual(rating["panel_mean"], 5.75)
+            self.assertEqual(sorted(rating["chair_samples"]), [5.4, 6.1])
+            self.assertAlmostEqual(rating["chair_mean"], 5.75)
+            self.assertEqual(sorted(rating["high_samples"]), [7.0, 8.0])
+            self.assertEqual(sorted(rating["low_samples"]), [3.0, 5.0])
+            self.assertEqual(sorted(rating["samples"]), [3.0, 4.0])
+            self.assertAlmostEqual(rating["rating"], 3.5)
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual(rating["mode"], "panel")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            for absent in ("mean_samples", "expert_samples", "form_samples", "forms", "audited_samples", "audits", "predicted_mean", "poles"):
+                self.assertNotIn(absent, rating)
+            panels = sorted(rating["panels"], key=lambda item: item["panel_mean"])
+            self.assertEqual([item["sample"] for item in rating["panels"]], [0, 1])
+            self.assertEqual(
+                panels[0],
+                {
+                    "sample": panels[0]["sample"],
+                    "reviews": [
+                        {"role": "specialist", "rating": 5, "confidence": 4},
+                        {"role": "generalist", "rating": 6, "confidence": 3},
+                        {"role": "methodologist", "rating": 3, "confidence": 4},
+                        {"role": "senior", "rating": 8, "confidence": 3},
+                    ],
+                    "panel_mean": 5.5,
+                    "high": 8,
+                    "low": 3,
+                    "off_scale": 0,
+                    "chair_mean": 5.4,
+                    "decision": 3.0,
+                },
+            )
+            self.assertEqual(
+                [review["role"] for review in panels[1]["reviews"]],
+                ["specialist", "generalist", "other", "senior"],
+            )
+            self.assertEqual(panels[1]["off_scale"], 1)
+            self.assertEqual((panels[1]["high"], panels[1]["low"]), (7, 5))
+            blob = json.dumps(rating)
+            for text in ("counting rule", "stated as an algorithm", "single specimen", "panel splits", "a single clause"):
+                self.assertNotIn(text, blob)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["panel-1", "panel-2"])
+
+    def test_panel_calls_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 2:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("panel calls did not overlap")
+            return _chat(_panel_content(ratings=(6, 6, 5, 8), predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="panel",
+            )
+            run_pipeline(config)
+            self.assertEqual(server.counts, {"panel": 2})
+
+    def test_a_three_review_panel_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            content = json.loads(_panel_content(ratings=(5, 6, 3, 8), predicted_mean=5.4, rating=3))
+            content["reviews"] = content["reviews"][:3]
+            return _chat(json.dumps(content))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="panel",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("panel", str(caught.exception))
+            self.assertIn("reviews", str(caught.exception))
+            self.assertEqual(server.counts, {"panel": 2})
+
+    def test_cheap_panel_mode_runs_only_the_panels(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "panel":
+                raise AssertionError(name)
+            return _chat(_panel_content(ratings=(5, 6, 6, 8), predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=2,
+                holistic_mode="panel",
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"panel": 2})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+
+    def test_one_panel_when_asked(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "panel")
+            return _chat(_panel_content(ratings=(3, 5, 3, 6), predicted_mean=4.4, rating=2))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="panel",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"panel": 1})
+            self.assertEqual(rating["panel_samples"], [4.25])
+            self.assertEqual(rating["chair_samples"], [4.4])
+            self.assertEqual(rating["high_samples"], [6.0])
+            self.assertEqual(rating["low_samples"], [3.0])
+            self.assertEqual(rating["samples"], [2.0])
+            self.assertEqual(rating["n"], 1)
+            self.assertEqual(rating["panels"][0]["off_scale"], 0)
+
+
+APPENDIX_LINE = "Synthetic appendix detail that only the appendix holds."
+REFERENCE_LINE = "Synthetic reference entry from the reference list."
+# A manuscript with a main text, a reference list, and an appendix. The main
+# text is padded so the heading sits past the floor share of the text.
+LONG_MANUSCRIPT = (
+    MANUSCRIPT
+    + "".join(f"Synthetic main-text sentence {index} about the counting rule.\n" for index in range(12))
+    + "REFERENCES\n"
+    + REFERENCE_LINE
+    + "\n"
+    + "A APPENDIX\n"
+    + APPENDIX_LINE
+    + "\n"
+)
+
+
+class MatchedPanelTests(unittest.TestCase):
+    """The locked ``matched`` mode: two concurrent topic-matched panels on the main text."""
+
+    def test_two_matched_panels_run_together_on_the_main_text(self) -> None:
+        from autopaperreview.model_exec import MAIN_TEXT_CAP_MARKER, MAIN_TEXT_END_MARKER
+
+        pending = [
+            _panel_content(
+                ratings=(5, 6, 3, 8),
+                predicted_mean=5.4,
+                rating=3,
+                reviewers=("insider", "junior", "neighbour", "senior"),
+            ),
+            _panel_content(
+                ratings=(8, 6, 5, 7),
+                predicted_mean=6.6,
+                rating=5,
+                reviewers=("Reviewer 1 (insider)", "PhD student", "area chair", "Senior researcher"),
+                strengths="a single clause as a string",
+            ),
+        ]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "matched")
+            self.assertEqual(payload["temperature"], 0.7)
+            system = payload["messages"][0]["content"]
+            self.assertIn("exactly 4 objects", system)
+            self.assertIn("insider, junior, neighbour, senior", system)
+            self.assertNotIn("methodologist", system)
+            user = payload["messages"][1]["content"]
+            self.assertIn("## Assigned panel", user)
+            self.assertIn("- insider:", user)
+            self.assertIn("- junior:", user)
+            self.assertIn("- neighbour:", user)
+            self.assertIn("- senior:", user)
+            self.assertIn("How reviewers at this venue use the scale", user)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertIn(COHORT, user)
+            self.assertIn("Synthetic main-text sentence 11", user)
+            self.assertIn(MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(MAIN_TEXT_CAP_MARKER, user)
+            self.assertNotIn(REFERENCE_LINE, user)
+            self.assertNotIn(APPENDIX_LINE, user)
+            self.assertNotIn("\nREFERENCES\n", user)
+            self.assertIn("## Listed contributions (audit each one)", user)
+            self.assertLess(user.index("## Source Text"), user.index(MAIN_TEXT_END_MARKER))
+            self.assertLess(user.index(MAIN_TEXT_END_MARKER), user.index("## Listed contributions"))
+            self.assertLess(user.index("## Listed contributions"), user.index("## Assigned panel"))
+            for other in ("## Venue mean", "## Expert read", "## Review panel", "## Audit", "## Verified audit", "weak-reject"):
+                self.assertNotIn(other, user)
+            with lock:
+                content = pending.pop()
+            return _chat(content)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="matched",
+                manuscript=LONG_MANUSCRIPT,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"matched": 2})
+            self.assertEqual(sorted(rating["matched_samples"]), [5.5, 6.5])
+            self.assertAlmostEqual(rating["matched_mean"], 6.0)
+            self.assertEqual(sorted(rating["chair_samples"]), [5.4, 6.6])
+            self.assertAlmostEqual(rating["chair_mean"], 6.0)
+            self.assertEqual(sorted(rating["high_samples"]), [8.0, 8.0])
+            self.assertEqual(sorted(rating["low_samples"]), [3.0, 5.0])
+            self.assertEqual(sorted(rating["samples"]), [3.0, 5.0])
+            self.assertAlmostEqual(rating["rating"], 4.0)
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual(rating["mode"], "matched")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            main_text = rating["main_text"]
+            self.assertEqual(main_text["cut"], "references")
+            self.assertGreater(main_text["source_chars"], main_text["shown_chars"])
+            self.assertEqual(sorted(main_text), ["cut", "shown_chars", "source_chars"])
+            for absent in ("panel_samples", "panel_mean", "panels", "mean_samples", "expert_samples", "forms", "audits", "predicted_mean", "poles"):
+                self.assertNotIn(absent, rating)
+            panels = sorted(rating["matched_panels"], key=lambda item: item["panel_mean"])
+            self.assertEqual([item["sample"] for item in rating["matched_panels"]], [0, 1])
+            self.assertEqual(
+                panels[0],
+                {
+                    "sample": panels[0]["sample"],
+                    "reviews": [
+                        {"role": "insider", "rating": 5, "confidence": 4},
+                        {"role": "junior", "rating": 6, "confidence": 3},
+                        {"role": "neighbour", "rating": 3, "confidence": 4},
+                        {"role": "senior", "rating": 8, "confidence": 3},
+                    ],
+                    "panel_mean": 5.5,
+                    "high": 8,
+                    "low": 3,
+                    "off_scale": 0,
+                    "chair_mean": 5.4,
+                    "decision": 3.0,
+                },
+            )
+            self.assertEqual(
+                [review["role"] for review in panels[1]["reviews"]],
+                ["insider", "junior", "other", "senior"],
+            )
+            self.assertEqual(panels[1]["off_scale"], 1)
+            self.assertEqual((panels[1]["high"], panels[1]["low"]), (8, 5))
+            blob = json.dumps(rating)
+            for text in ("counting rule", "stated as an algorithm", "single specimen", "panel splits", "a single clause", "Synthetic"):
+                self.assertNotIn(text, blob)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["matched-1", "matched-2"])
+
+    def test_a_short_manuscript_without_a_reference_heading_is_shown_whole(self) -> None:
+        from autopaperreview.model_exec import MAIN_TEXT_CAP_MARKER, MAIN_TEXT_END_MARKER
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "matched")
+            user = payload["messages"][1]["content"]
+            self.assertIn(COHORT, user)
+            self.assertIn(ACCURACY, user)
+            self.assertNotIn(MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(MAIN_TEXT_CAP_MARKER, user)
             return _chat(
-                json.dumps(
-                    {
-                        "rating": 6.5,
-                        "rationale": "Synthetic cohort is a borderline accept.",
-                        "strength_excerpt": "",
-                        "weakness_excerpt": "",
-                    }
+                _panel_content(
+                    ratings=(3, 5, 3, 6),
+                    predicted_mean=4.4,
+                    rating=2,
+                    reviewers=("insider", "junior", "neighbour", "senior"),
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="matched",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"matched": 1})
+            self.assertEqual(rating["matched_samples"], [4.25])
+            self.assertEqual(rating["chair_samples"], [4.4])
+            self.assertEqual(rating["high_samples"], [6.0])
+            self.assertEqual(rating["low_samples"], [3.0])
+            self.assertEqual(rating["samples"], [2.0])
+            self.assertEqual(rating["n"], 1)
+            self.assertEqual(rating["main_text"]["cut"], "none")
+            self.assertEqual(rating["main_text"]["shown_chars"], rating["main_text"]["source_chars"])
+            self.assertEqual(rating["matched_panels"][0]["off_scale"], 0)
+
+    def test_matched_calls_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 2:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("matched calls did not overlap")
+            return _chat(
+                _panel_content(
+                    ratings=(6, 6, 5, 8),
+                    predicted_mean=6.2,
+                    rating=4,
+                    reviewers=("insider", "junior", "neighbour", "senior"),
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="matched",
+            )
+            run_pipeline(config)
+            self.assertEqual(server.counts, {"matched": 2})
+
+    def test_a_three_review_matched_panel_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            content = json.loads(
+                _panel_content(
+                    ratings=(5, 6, 3, 8),
+                    predicted_mean=5.4,
+                    rating=3,
+                    reviewers=("insider", "junior", "neighbour", "senior"),
+                )
+            )
+            content["reviews"] = content["reviews"][:3]
+            return _chat(json.dumps(content))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="matched",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("matched", str(caught.exception))
+            self.assertIn("reviews", str(caught.exception))
+            self.assertEqual(server.counts, {"matched": 2})
+
+    def test_cheap_matched_mode_runs_only_the_matched_panels(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "matched":
+                raise AssertionError(name)
+            return _chat(
+                _panel_content(
+                    ratings=(5, 6, 6, 8),
+                    predicted_mean=6.2,
+                    rating=4,
+                    reviewers=("insider", "junior", "neighbour", "senior"),
                 )
             )
 
@@ -1374,13 +2431,657 @@ class HolisticSampleTests(unittest.TestCase):
                 base_url=server.base_url,
                 judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
                 cheap=True,
-                holistic_samples=1,
+                holistic_samples=2,
+                holistic_mode="matched",
             )
             manifest = run_pipeline(config)
-            self.assertEqual(server.counts, {"holistic": 1})
+            self.assertEqual(server.counts, {"matched": 2})
             review = manifest.stage("review")
             assert review is not None
             self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+
+
+def _rebuttal_content(
+    *,
+    ratings: tuple[int, int, int],
+    finals: tuple[int, int, int],
+    predicted_mean: float,
+    rating: float,
+    reviewers: tuple[str, str, str] = ("specialist", "generalist", "senior"),
+    update_reviewers: tuple[str, str, str] | None = None,
+    confidences: tuple[int, int, int] = (4, 3, 3),
+    strengths: Any = None,
+    response: Any = None,
+) -> str:
+    reviews = []
+    for index in range(3):
+        reviews.append(
+            {
+                "reviewer": reviewers[index],
+                "summary": "The paper claims a counting rule for the synthetic cohort.",
+                "strengths": strengths if strengths is not None else ["the rule is stated as an algorithm"],
+                "weaknesses": ["one specimen carries the claim"],
+                "rating": ratings[index],
+                "confidence": confidences[index],
+            }
+        )
+    labels = update_reviewers or reviewers
+    updates = [
+        {
+            "reviewer": labels[index],
+            "change": "the added comparison settled the concern" if finals[index] != ratings[index] else "the objection stands",
+            "final_rating": finals[index],
+        }
+        for index in range(3)
+    ]
+    return json.dumps(
+        {
+            "reviews": reviews,
+            "response": response
+            if response is not None
+            else "The authors point to the appendix for the spread and add the missing comparison.",
+            "updates": updates,
+            "discussion": "The panel lands on the borderline; the single specimen decides it.",
+            "predicted_mean": predicted_mean,
+            "rating": rating,
+        }
+    )
+
+
+class RebuttalDiscussionTests(unittest.TestCase):
+    """The locked ``rebuttal`` mode: two concurrent reviews carried through the discussion on the whole manuscript."""
+
+    def test_two_discussions_run_together_on_the_whole_manuscript(self) -> None:
+        from autopaperreview.model_exec import MAIN_TEXT_CAP_MARKER, MAIN_TEXT_END_MARKER
+
+        pending = [
+            _rebuttal_content(ratings=(5, 6, 3), finals=(6, 6, 3), predicted_mean=5.4, rating=3),
+            _rebuttal_content(
+                ratings=(6, 5, 8),
+                finals=(8, 8, 8),
+                predicted_mean=7.0,
+                rating=5,
+                reviewers=("Reviewer 1 (specialist)", "area chair", "Senior researcher"),
+                update_reviewers=("specialist", "generalist", "generalist"),
+                strengths="a single clause as a string",
+                response=["a clause", "another clause"],
+            ),
+        ]
+        lock = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "rebuttal")
+            self.assertEqual(payload["temperature"], 0.7)
+            system = payload["messages"][0]["content"]
+            self.assertIn("exactly 3 objects", system)
+            self.assertIn("specialist, generalist, senior", system)
+            self.assertIn("final_rating", system)
+            self.assertNotIn("methodologist", system)
+            self.assertIn("No other keys", system)
+            user = payload["messages"][1]["content"]
+            self.assertIn("## Review and discussion", user)
+            self.assertIn("- specialist:", user)
+            self.assertIn("- generalist:", user)
+            self.assertIn("- senior:", user)
+            self.assertNotIn("- methodologist:", user)
+            self.assertIn("Stage two", user)
+            self.assertIn("final_rating", user)
+            self.assertIn("Most ratings do not change", user)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertIn(COHORT, user)
+            self.assertIn("Synthetic main-text sentence 11", user)
+            self.assertIn(REFERENCE_LINE, user)
+            self.assertIn(APPENDIX_LINE, user)
+            self.assertIn("\nREFERENCES\n", user)
+            self.assertNotIn(MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(MAIN_TEXT_CAP_MARKER, user)
+            self.assertIn("## Listed contributions (audit each one)", user)
+            self.assertLess(user.index("## Source Text"), user.index(REFERENCE_LINE))
+            self.assertLess(user.index(REFERENCE_LINE), user.index(APPENDIX_LINE))
+            self.assertLess(user.index(APPENDIX_LINE), user.index("## Listed contributions"))
+            self.assertLess(user.index("## Listed contributions"), user.index("## Review and discussion"))
+            for other in ("## Venue mean", "## Expert read", "## Review panel", "## Assigned panel", "## Audit", "## Verified audit", "weak-reject"):
+                self.assertNotIn(other, user)
+            with lock:
+                content = pending.pop()
+            return _chat(content)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="rebuttal",
+                manuscript=LONG_MANUSCRIPT,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"rebuttal": 2})
+            self.assertEqual(sorted(rating["rebuttal_samples"]), [5.0, 8.0])
+            self.assertAlmostEqual(rating["rebuttal_mean"], 6.5)
+            self.assertEqual(sorted(rating["initial_samples"]), [4.6667, 6.3333])
+            self.assertAlmostEqual(rating["initial_mean"], 5.5)
+            self.assertEqual(sorted(rating["chair_samples"]), [5.4, 7.0])
+            self.assertAlmostEqual(rating["chair_mean"], 6.2)
+            self.assertEqual(sorted(rating["high_samples"]), [6.0, 8.0])
+            self.assertEqual(sorted(rating["low_samples"]), [3.0, 8.0])
+            self.assertEqual(sorted(rating["samples"]), [3.0, 5.0])
+            self.assertAlmostEqual(rating["rating"], 4.0)
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual(rating["mode"], "rebuttal")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            main_text = rating["main_text"]
+            self.assertEqual(main_text["cut"], "none")
+            self.assertGreater(main_text["source_chars"], 0)
+            self.assertEqual(main_text["source_chars"], main_text["shown_chars"])
+            self.assertEqual(sorted(main_text), ["cut", "shown_chars", "source_chars"])
+            for absent in ("panel_samples", "matched_samples", "panel_mean", "matched_mean", "panels", "matched_panels", "mean_samples", "expert_samples", "forms", "audits", "predicted_mean", "poles"):
+                self.assertNotIn(absent, rating)
+            panels = sorted(rating["rebuttal_panels"], key=lambda item: item["final_mean"])
+            self.assertEqual([item["sample"] for item in rating["rebuttal_panels"]], [0, 1])
+            self.assertEqual(
+                panels[0],
+                {
+                    "sample": panels[0]["sample"],
+                    "reviews": [
+                        {"role": "specialist", "rating": 5, "confidence": 4, "final_rating": 6},
+                        {"role": "generalist", "rating": 6, "confidence": 3, "final_rating": 6},
+                        {"role": "senior", "rating": 3, "confidence": 3, "final_rating": 3},
+                    ],
+                    "initial_mean": 4.6667,
+                    "final_mean": 5.0,
+                    "lift": 0.3333,
+                    "raised": 1,
+                    "lowered": 0,
+                    "high": 6,
+                    "low": 3,
+                    "off_scale": 0,
+                    "label_mismatch": 0,
+                    "chair_mean": 5.4,
+                    "decision": 3.0,
+                },
+            )
+            self.assertEqual(
+                [review["role"] for review in panels[1]["reviews"]],
+                ["specialist", "other", "senior"],
+            )
+            self.assertEqual([review["final_rating"] for review in panels[1]["reviews"]], [8, 8, 8])
+            self.assertEqual((panels[1]["raised"], panels[1]["lowered"]), (2, 0))
+            self.assertEqual(panels[1]["label_mismatch"], 1)
+            self.assertEqual(panels[1]["off_scale"], 0)
+            self.assertAlmostEqual(panels[1]["lift"], 1.6667)
+            self.assertEqual((panels[1]["high"], panels[1]["low"]), (8, 8))
+            blob = json.dumps(rating)
+            for text in ("counting rule", "stated as an algorithm", "single specimen", "settled the concern", "objection stands", "point to the appendix", "a single clause", "another clause", "Synthetic"):
+                self.assertNotIn(text, blob)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["rebuttal-1", "rebuttal-2"])
+
+    def test_one_discussion_keeps_a_short_manuscript_whole_and_counts_off_scale_ratings(self) -> None:
+        from autopaperreview.model_exec import MAIN_TEXT_CAP_MARKER, MAIN_TEXT_END_MARKER
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "rebuttal")
+            user = payload["messages"][1]["content"]
+            self.assertIn(COHORT, user)
+            self.assertIn(ACCURACY, user)
+            self.assertNotIn(MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(MAIN_TEXT_CAP_MARKER, user)
+            return _chat(_rebuttal_content(ratings=(3, 5, 6), finals=(3, 5, 7), predicted_mean=4.4, rating=2))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="rebuttal",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"rebuttal": 1})
+            self.assertEqual(rating["rebuttal_samples"], [5.0])
+            self.assertEqual(rating["initial_samples"], [4.6667])
+            self.assertEqual(rating["chair_samples"], [4.4])
+            self.assertEqual(rating["high_samples"], [7.0])
+            self.assertEqual(rating["low_samples"], [3.0])
+            self.assertEqual(rating["samples"], [2.0])
+            self.assertEqual(rating["n"], 1)
+            self.assertEqual(rating["main_text"]["cut"], "none")
+            self.assertEqual(rating["main_text"]["shown_chars"], rating["main_text"]["source_chars"])
+            panel = rating["rebuttal_panels"][0]
+            self.assertEqual(panel["off_scale"], 1)
+            self.assertEqual((panel["raised"], panel["lowered"]), (1, 0))
+            self.assertAlmostEqual(panel["lift"], 0.3333)
+
+    def test_the_longest_manuscripts_are_capped_and_the_cut_is_recorded(self) -> None:
+        from autopaperreview import model_exec as module
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "rebuttal")
+            user = payload["messages"][1]["content"]
+            self.assertIn(COHORT, user)
+            self.assertIn(module.MAIN_TEXT_CAP_MARKER, user)
+            self.assertNotIn(module.MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(APPENDIX_LINE, user)
+            self.assertNotIn(REFERENCE_LINE, user)
+            self.assertIn("## Listed contributions (audit each one)", user)
+            self.assertLess(user.index(COHORT), user.index(module.MAIN_TEXT_CAP_MARKER))
+            self.assertLess(user.index(module.MAIN_TEXT_CAP_MARKER), user.index("## Listed contributions"))
+            return _chat(_rebuttal_content(ratings=(5, 5, 6), finals=(6, 5, 6), predicted_mean=5.6, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace, mock.patch.object(module, "FULL_TEXT_MAX_CHARS", 200):
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="rebuttal",
+                manuscript=LONG_MANUSCRIPT,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"rebuttal": 1})
+            self.assertEqual(rating["main_text"]["cut"], "cap")
+            self.assertEqual(rating["main_text"]["shown_chars"], 200)
+            self.assertGreater(rating["main_text"]["source_chars"], 200)
+            self.assertEqual(rating["rebuttal_samples"], [5.6667])
+
+    def test_discussion_calls_overlap(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 2:
+                    release.set()
+            if not release.wait(3):
+                raise AssertionError("discussion calls did not overlap")
+            return _chat(_rebuttal_content(ratings=(6, 6, 5), finals=(6, 8, 5), predicted_mean=6.2, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="rebuttal",
+            )
+            run_pipeline(config)
+            self.assertEqual(server.counts, {"rebuttal": 2})
+
+    def test_a_two_update_discussion_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            content = json.loads(_rebuttal_content(ratings=(5, 6, 3), finals=(6, 6, 3), predicted_mean=5.4, rating=3))
+            content["updates"] = content["updates"][:2]
+            return _chat(json.dumps(content))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="rebuttal",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("rebuttal", str(caught.exception))
+            self.assertIn("updates", str(caught.exception))
+            self.assertEqual(server.counts, {"rebuttal": 2})
+
+    def test_cheap_rebuttal_mode_runs_only_the_discussions(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            if name != "rebuttal":
+                raise AssertionError(name)
+            return _chat(_rebuttal_content(ratings=(5, 6, 6), finals=(6, 6, 8), predicted_mean=6.4, rating=4))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                holistic_samples=2,
+                holistic_mode="rebuttal",
+            )
+            manifest = run_pipeline(config)
+            self.assertEqual(server.counts, {"rebuttal": 2})
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+
+
+def _forecast_content(
+    *,
+    ratings: tuple[int, int, int],
+    probabilities: tuple[Any, Any, Any],
+    predicted_mean: float,
+    rating: float,
+    reviewers: tuple[str, str, str] = ("specialist", "generalist", "senior"),
+    confidences: tuple[int, int, int] = (4, 3, 3),
+    strengths: Any = None,
+    discussion: Any = None,
+) -> str:
+    reviews = []
+    for index in range(3):
+        reviews.append(
+            {
+                "reviewer": reviewers[index],
+                "summary": "The paper claims a counting rule for the synthetic cohort.",
+                "strengths": strengths if strengths is not None else ["the rule is stated as an algorithm"],
+                "weaknesses": ["one specimen carries the claim"],
+                "rating": ratings[index],
+                "probabilities": probabilities[index],
+                "confidence": confidences[index],
+            }
+        )
+    body: dict[str, Any] = {"reviews": reviews, "predicted_mean": predicted_mean, "rating": rating}
+    if discussion is not None:
+        body["discussion"] = discussion
+    return json.dumps(body)
+
+
+class ForecastPanelTests(unittest.TestCase):
+    """The locked ``forecast`` mode: one three-reviewer panel with a probability per reviewer on the whole manuscript."""
+
+    def test_one_forecast_panel_is_the_cheap_default_and_ranks_by_expected_ratings(self) -> None:
+        from autopaperreview.model_exec import MAIN_TEXT_CAP_MARKER, MAIN_TEXT_END_MARKER
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            self.assertEqual(name, "forecast")
+            self.assertEqual(payload["temperature"], 0.7)
+            system = payload["messages"][0]["content"]
+            self.assertIn("exactly 3 objects", system)
+            self.assertIn("specialist, generalist, senior", system)
+            self.assertIn("probabilities", system)
+            self.assertIn("sum to 1", system)
+            self.assertNotIn("methodologist", system)
+            self.assertNotIn("final_rating", system)
+            self.assertIn("No other keys", system)
+            user = payload["messages"][1]["content"]
+            self.assertIn("## Review forecast", user)
+            self.assertIn("- specialist:", user)
+            self.assertIn("- generalist:", user)
+            self.assertIn("- senior:", user)
+            self.assertNotIn("- methodologist:", user)
+            self.assertIn("probabilities: six numbers that sum to one", user)
+            self.assertIn("not a hedge", user)
+            self.assertIn("predicted_mean", user)
+            self.assertIn("borderline reject", user)
+            self.assertNotIn("Stage two", user)
+            self.assertNotIn("final_rating", user)
+            self.assertIn(COHORT, user)
+            self.assertIn("Synthetic main-text sentence 11", user)
+            self.assertIn(REFERENCE_LINE, user)
+            self.assertIn(APPENDIX_LINE, user)
+            self.assertNotIn(MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(MAIN_TEXT_CAP_MARKER, user)
+            self.assertIn("## Listed contributions (audit each one)", user)
+            self.assertLess(user.index("## Source Text"), user.index(REFERENCE_LINE))
+            self.assertLess(user.index(APPENDIX_LINE), user.index("## Listed contributions"))
+            self.assertLess(user.index("## Listed contributions"), user.index("## Review forecast"))
+            for other in ("## Venue mean", "## Expert read", "## Review panel", "## Assigned panel", "## Review and discussion", "## Audit", "## Verified audit", "weak-reject"):
+                self.assertNotIn(other, user)
+            return _chat(
+                _forecast_content(
+                    ratings=(5, 6, 3),
+                    probabilities=(
+                        [0, 0.1, 0.5, 0.3, 0.1, 0],
+                        {"1": 0, "3": 0, "5": 0.4, "6": 1.0, "8": 0.6, "10": 0},
+                        [0.1, 0.6, 0.3, 0, 0, 0],
+                    ),
+                    predicted_mean=5.2,
+                    rating=3,
+                    reviewers=("Reviewer 1 (specialist)", "area chair", "Senior researcher"),
+                    strengths="a single clause as a string",
+                    discussion="The panel lands on the borderline; the single specimen decides it.",
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger", "dimensions", "fatal", "holistic"],
+                cheap=True,
+                manuscript=LONG_MANUSCRIPT,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"forecast": 1})
+            self.assertEqual(rating["forecast_samples"], [5.0667])
+            self.assertAlmostEqual(rating["forecast_mean"], 5.0667)
+            self.assertEqual(rating["vote_samples"], [4.6667])
+            self.assertAlmostEqual(rating["vote_mean"], 4.6667)
+            self.assertEqual(rating["chair_samples"], [5.2])
+            self.assertEqual(rating["high_samples"], [6.4])
+            self.assertEqual(rating["low_samples"], [3.4])
+            self.assertEqual(rating["samples"], [3.0])
+            self.assertEqual(rating["rating"], 3.0)
+            self.assertEqual(rating["n"], 1)
+            self.assertEqual(rating["mode"], "forecast")
+            self.assertEqual(rating["locked_candidate"], "forecast-k1")
+            self.assertTrue(rating["verified"])
+            main_text = rating["main_text"]
+            self.assertEqual(main_text["cut"], "none")
+            self.assertGreater(main_text["source_chars"], 0)
+            self.assertEqual(main_text["source_chars"], main_text["shown_chars"])
+            for absent in ("rebuttal_samples", "initial_samples", "panel_samples", "matched_samples", "rebuttal_panels", "panels", "matched_panels", "mean_samples", "expert_samples", "forms", "audits", "predicted_mean", "poles"):
+                self.assertNotIn(absent, rating)
+            self.assertEqual(
+                rating["forecast_panels"],
+                [
+                    {
+                        "sample": 0,
+                        "reviews": [
+                            {"role": "specialist", "rating": 5, "confidence": 4, "expected": 5.4, "peak": 0.5, "probabilities": [0.0, 0.1, 0.5, 0.3, 0.1, 0.0]},
+                            {"role": "other", "rating": 6, "confidence": 3, "expected": 6.4, "peak": 0.5, "probabilities": [0.0, 0.0, 0.2, 0.5, 0.3, 0.0]},
+                            {"role": "senior", "rating": 3, "confidence": 3, "expected": 3.4, "peak": 0.6, "probabilities": [0.1, 0.6, 0.3, 0.0, 0.0, 0.0]},
+                        ],
+                        "forecast_mean": 5.0667,
+                        "vote_mean": 4.6667,
+                        "high": 6.4,
+                        "low": 3.4,
+                        "off_scale": 0,
+                        "renormalized": 1,
+                        "mode_mismatch": 0,
+                        "chair_mean": 5.2,
+                        "decision": 3.0,
+                    }
+                ],
+            )
+            blob = json.dumps(rating)
+            for text in ("counting rule", "stated as an algorithm", "single specimen", "a single clause", "borderline", "Synthetic"):
+                self.assertNotIn(text, blob)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(review.metadata["judgments"], ["holistic"])
+            self.assertEqual(review.metadata["drop_counts"], {})
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["forecast-1"])
+
+    def test_two_forecast_panels_run_together_and_keep_their_order(self) -> None:
+        release = threading.Event()
+        seen: list[str] = []
+        gate = threading.Lock()
+        pending = [
+            _forecast_content(ratings=(6, 6, 8), probabilities=([0, 0, 0.2, 0.6, 0.2, 0], [0, 0, 0.1, 0.7, 0.2, 0], [0, 0, 0, 0.3, 0.6, 0.1]), predicted_mean=6.6, rating=4),
+            _forecast_content(ratings=(5, 5, 6), probabilities=([0, 0.2, 0.6, 0.2, 0, 0], [0, 0.1, 0.7, 0.2, 0, 0], [0, 0, 0.4, 0.5, 0.1, 0]), predicted_mean=5.3, rating=3),
+        ]
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            name = _judgment_name(payload)
+            with gate:
+                seen.append(name)
+                if len(seen) >= 2:
+                    release.set()
+                content = pending.pop()
+            if not release.wait(3):
+                raise AssertionError("forecast calls did not overlap")
+            return _chat(content)
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=2,
+                holistic_mode="forecast",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"forecast": 2})
+            self.assertEqual(rating["n"], 2)
+            self.assertEqual(sorted(rating["forecast_samples"]), [5.2, 6.7])
+            self.assertEqual(sorted(rating["vote_samples"]), [5.3333, 6.6667])
+            self.assertEqual([item["sample"] for item in rating["forecast_panels"]], [0, 1])
+            for item in rating["forecast_panels"]:
+                self.assertEqual(item["renormalized"], 0)
+                self.assertEqual(item["mode_mismatch"], 0)
+                self.assertEqual([review["role"] for review in item["reviews"]], ["specialist", "generalist", "senior"])
+            review = manifest.stage("review")
+            assert review is not None
+            names = sorted(row["judgment"] for row in review.metadata["model_exchanges"])
+            self.assertEqual(names, ["forecast-1", "forecast-2"])
+
+    def test_the_longest_manuscripts_are_capped_and_off_scale_and_mismatched_votes_are_counted(self) -> None:
+        from autopaperreview import model_exec as module
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            self.assertEqual(_judgment_name(payload), "forecast")
+            user = payload["messages"][1]["content"]
+            self.assertIn(COHORT, user)
+            self.assertIn(module.MAIN_TEXT_CAP_MARKER, user)
+            self.assertNotIn(module.MAIN_TEXT_END_MARKER, user)
+            self.assertNotIn(APPENDIX_LINE, user)
+            self.assertNotIn(REFERENCE_LINE, user)
+            self.assertLess(user.index(module.MAIN_TEXT_CAP_MARKER), user.index("## Listed contributions"))
+            return _chat(
+                _forecast_content(
+                    ratings=(7, 6, 5),
+                    probabilities=([0, 0, 0, 0.5, 0.5, 0], [0, 0, 0.6, 0.4, 0, 0], [0, 0, 1, 0, 0, 0]),
+                    predicted_mean=5.9,
+                    rating=4,
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace, mock.patch.object(module, "FULL_TEXT_MAX_CHARS", 200):
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="forecast",
+                manuscript=LONG_MANUSCRIPT,
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"forecast": 1})
+            self.assertEqual(rating["main_text"]["cut"], "cap")
+            self.assertEqual(rating["main_text"]["shown_chars"], 200)
+            self.assertGreater(rating["main_text"]["source_chars"], 200)
+            panel = rating["forecast_panels"][0]
+            self.assertEqual(panel["off_scale"], 1)
+            # 7 is not the rating with the most mass (a 6/8 tie), and 6 is not the mode of a 5-heavy forecast.
+            self.assertEqual(panel["mode_mismatch"], 2)
+            self.assertEqual([review["expected"] for review in panel["reviews"]], [7.0, 5.4, 5.0])
+            self.assertEqual(rating["forecast_samples"], [5.8])
+            self.assertEqual(rating["vote_samples"], [6.0])
+
+    def test_a_five_probability_forecast_retries_once_then_fails_the_paper(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload, attempt
+            return _chat(
+                _forecast_content(
+                    ratings=(5, 6, 3),
+                    probabilities=([0, 0.1, 0.5, 0.3, 0.1], [0, 0, 0.2, 0.5, 0.3, 0], [0.1, 0.6, 0.3, 0, 0, 0]),
+                    predicted_mean=5.2,
+                    rating=3,
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="forecast",
+            )
+            with self.assertRaises(PipelineError) as caught:
+                run_pipeline(config)
+            self.assertIn("forecast", str(caught.exception))
+            self.assertIn("probabilities", str(caught.exception))
+            self.assertEqual(server.counts, {"forecast": 2})
+
+    def test_an_all_zero_forecast_is_corrected_on_the_retry(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del payload
+            third = [0, 0, 0, 0, 0, 0] if attempt == 1 else [0, 0.5, 0.5, 0, 0, 0]
+            return _chat(
+                _forecast_content(
+                    ratings=(5, 6, 3),
+                    probabilities=([0, 0.1, 0.5, 0.3, 0.1, 0], [0, 0, 0.2, 0.5, 0.3, 0], third),
+                    predicted_mean=5.2,
+                    rating=3,
+                )
+            )
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["holistic"],
+                holistic_samples=1,
+                holistic_mode="forecast",
+            )
+            manifest = run_pipeline(config)
+            stage_dir = workspace / ".runs" / manifest.run_id / "stages" / "review"
+            package = json.loads((stage_dir / "package.json").read_text(encoding="utf-8"))
+            rating = package["metadata"]["holistic_rating"]
+            self.assertEqual(server.counts, {"forecast": 2})
+            self.assertEqual(rating["forecast_samples"], [5.2667])
+            self.assertEqual(rating["forecast_panels"][0]["reviews"][2]["expected"], 4.0)
+            review = manifest.stage("review")
+            assert review is not None
+            self.assertEqual(max(row["attempt"] for row in review.metadata["model_exchanges"]), 2)
 
 
 class tempfile_dir:

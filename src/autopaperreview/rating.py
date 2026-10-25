@@ -215,21 +215,127 @@ def _read_related_work_comparison(package: ReviewPackage) -> dict[str, Any] | No
     return comparison
 
 
-def _holistic_rating(package: ReviewPackage) -> float | None:
-    raw = package.metadata.get("holistic_rating")
-    if not isinstance(raw, dict) or raw.get("verified") is not True:
+def _bounded_sample_list(
+    raw: dict[str, Any],
+    key: str,
+    *,
+    low: float,
+    high: float,
+    lone: str | None,
+) -> tuple[float, ...] | None:
+    """Verified samples on one scale. A lone field counts as one sample."""
+    if raw.get("verified") is not True:
         return None
-    rating = raw.get("rating")
-    if isinstance(rating, bool) or not isinstance(rating, (int, float)):
+    raw_samples = raw.get(key)
+    if isinstance(raw_samples, list) and raw_samples:
+        source: list[Any] = list(raw_samples)
+    elif lone is not None and raw.get(lone) is not None:
+        source = [raw.get(lone)]
+    else:
         return None
-    value = float(rating)
-    if value < 1.0 or value > 10.0:
-        return None
-    return value
+    values: list[float] = []
+    for item in source:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        value = float(item)
+        if value < low or value > high:
+            return None
+        values.append(value)
+    return tuple(values)
 
 
-def _clamp_rank(value: float) -> float:
-    return min(10.0, max(1.0, value))
+def _decision_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–6.0 decision samples. A lone rating counts as one sample."""
+    return _bounded_sample_list(raw, "samples", low=1.0, high=6.0, lone="rating")
+
+
+def _mean_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 venue-mean samples. A lone predicted_mean counts as one."""
+    return _bounded_sample_list(raw, "mean_samples", low=1.0, high=10.0, lone="predicted_mean")
+
+
+def _place_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 ladder placements. A lone place value counts as one."""
+    return _bounded_sample_list(raw, "place_samples", low=1.0, high=10.0, lone="place")
+
+
+def _count_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 vote counts. A lone count value counts as one."""
+    return _bounded_sample_list(raw, "count_samples", low=1.0, high=10.0, lone="count")
+
+
+def _isolate_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 isolated-pair scores. A lone isolate value counts as one."""
+    return _bounded_sample_list(raw, "isolate_samples", low=1.0, high=10.0, lone="isolate")
+
+
+def _audited_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 audited venue means. A lone audited_mean counts as one."""
+    return _bounded_sample_list(raw, "audited_samples", low=1.0, high=10.0, lone="audited_mean")
+
+
+def _checks_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 audit pass counts. Diagnostic. A lone checks_score counts as one."""
+    return _bounded_sample_list(raw, "checks_samples", low=1.0, high=10.0, lone="checks_score")
+
+
+def _expert_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 expert-read venue means. A lone expert_mean counts as one."""
+    return _bounded_sample_list(raw, "expert_samples", low=1.0, high=10.0, lone="expert_mean")
+
+
+def _form_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 review-form triads. Diagnostic. A lone form_score counts as one."""
+    return _bounded_sample_list(raw, "form_samples", low=1.0, high=10.0, lone="form_score")
+
+
+def _forecast_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 mean expected ratings of a simulated forecast panel. A lone forecast_mean counts as one."""
+    return _bounded_sample_list(raw, "forecast_samples", low=1.0, high=10.0, lone="forecast_mean")
+
+
+def _vote_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 means of a forecast panel's integer ratings. Diagnostic. A lone vote_mean counts as one."""
+    return _bounded_sample_list(raw, "vote_samples", low=1.0, high=10.0, lone="vote_mean")
+
+
+def _rebuttal_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 final-rating means after a simulated discussion. A lone rebuttal_mean counts as one."""
+    return _bounded_sample_list(raw, "rebuttal_samples", low=1.0, high=10.0, lone="rebuttal_mean")
+
+
+def _initial_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 first-rating means before the discussion. Diagnostic. A lone initial_mean counts as one."""
+    return _bounded_sample_list(raw, "initial_samples", low=1.0, high=10.0, lone="initial_mean")
+
+
+def _matched_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 matched-panel means. A lone matched_mean counts as one."""
+    return _bounded_sample_list(raw, "matched_samples", low=1.0, high=10.0, lone="matched_mean")
+
+
+def _panel_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 panel means. A lone panel_mean counts as one."""
+    return _bounded_sample_list(raw, "panel_samples", low=1.0, high=10.0, lone="panel_mean")
+
+
+def _chair_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 chair estimates after a panel. Diagnostic. A lone chair_mean counts as one."""
+    return _bounded_sample_list(raw, "chair_samples", low=1.0, high=10.0, lone="chair_mean")
+
+
+def _high_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 highest simulated ratings per panel. Diagnostic."""
+    return _bounded_sample_list(raw, "high_samples", low=1.0, high=10.0, lone=None)
+
+
+def _low_sample_list(raw: dict[str, Any]) -> tuple[float, ...] | None:
+    """Verified 1.0–10.0 lowest simulated ratings per panel. Diagnostic."""
+    return _bounded_sample_list(raw, "low_samples", low=1.0, high=10.0, lone=None)
+
+
+def _clamp_span(value: float, low: float, high: float) -> float:
+    return min(high, max(low, value))
 
 
 def rate_venue(
@@ -241,7 +347,13 @@ def rate_venue(
     """Compute the discrete ICLR bin and store provenance on OverallScore."""
     if confidence not in {1, 2, 3, 4, 5}:
         raise ValueError("rating confidence must be an integer from 1 to 5")
-    from .fusion import FUSION_COEFFICIENT_SET, FUSION_VARIANT, RankSignals, candidate_scores
+    from .fusion import (
+        FUSION_COEFFICIENT_SET,
+        FUSION_VARIANT,
+        RankSignals,
+        candidate_scores,
+        decision_bin,
+    )
 
     chosen = coefficient_set or COEFFICIENT_SET
     if chosen not in {COEFFICIENT_SET, FUSION_COEFFICIENT_SET}:
@@ -277,6 +389,48 @@ def rate_venue(
         claims = bands[SarDimension.claims_supported]
         soundness = bands[SarDimension.experimental_soundness]
     venue = snap_down(capped) if bands is not None else 1
+    raw_decision = package.metadata.get("holistic_rating")
+    decision_samples = (
+        _decision_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    )
+    mean_samples = _mean_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    place_samples = _place_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    count_samples = _count_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    isolate_samples = _isolate_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    audited_samples = _audited_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    checks_samples = _checks_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    expert_samples = _expert_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    form_samples = _form_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    forecast_samples = _forecast_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    vote_samples = _vote_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    rebuttal_samples = _rebuttal_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    initial_samples = _initial_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    matched_samples = _matched_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    panel_samples = _panel_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    chair_samples = _chair_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    high_samples = _high_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    low_samples = _low_sample_list(raw_decision) if isinstance(raw_decision, dict) else None
+    raw_audits = raw_decision.get("audits") if isinstance(raw_decision, dict) else None
+    audits = list(raw_audits) if isinstance(raw_audits, list) else []
+    raw_forms = raw_decision.get("forms") if isinstance(raw_decision, dict) else None
+    forms = list(raw_forms) if isinstance(raw_forms, list) else []
+    raw_panels = raw_decision.get("panels") if isinstance(raw_decision, dict) else None
+    panels = list(raw_panels) if isinstance(raw_panels, list) else []
+    raw_matched = raw_decision.get("matched_panels") if isinstance(raw_decision, dict) else None
+    matched_panels = list(raw_matched) if isinstance(raw_matched, list) else []
+    raw_rebuttal = raw_decision.get("rebuttal_panels") if isinstance(raw_decision, dict) else None
+    rebuttal_panels = list(raw_rebuttal) if isinstance(raw_rebuttal, list) else []
+    raw_forecast = raw_decision.get("forecast_panels") if isinstance(raw_decision, dict) else None
+    forecast_panels = list(raw_forecast) if isinstance(raw_forecast, list) else []
+    raw_main_text = raw_decision.get("main_text") if isinstance(raw_decision, dict) else None
+    main_text = dict(raw_main_text) if isinstance(raw_main_text, dict) else {}
+    holistic_mode = raw_decision.get("mode") if isinstance(raw_decision, dict) else None
+    raw_placements = raw_decision.get("placements") if isinstance(raw_decision, dict) else None
+    placements = list(raw_placements) if isinstance(raw_placements, list) else []
+    raw_poles = raw_decision.get("poles") if isinstance(raw_decision, dict) else None
+    poles = list(raw_poles) if isinstance(raw_poles, list) else []
+    raw_ladder = raw_decision.get("ladder") if isinstance(raw_decision, dict) else None
+    ladder = list(raw_ladder) if isinstance(raw_ladder, list) else []
     signals = RankSignals(
         weighted=weighted,
         gate=gate,
@@ -284,30 +438,397 @@ def rate_venue(
         soundness=soundness,
         band_mean=band_mean,
         venue_cap=venue_cap,
-        holistic=_holistic_rating(package),
+        holistic=None if not decision_samples else sum(decision_samples) / len(decision_samples),
+        samples=decision_samples or (),
+        mean_samples=mean_samples or (),
+        place_samples=place_samples or (),
+        count_samples=count_samples or (),
+        isolate_samples=isolate_samples or (),
+        audited_samples=audited_samples or (),
+        checks_samples=checks_samples or (),
+        expert_samples=expert_samples or (),
+        form_samples=form_samples or (),
+        forecast_samples=forecast_samples or (),
+        vote_samples=vote_samples or (),
+        rebuttal_samples=rebuttal_samples or (),
+        initial_samples=initial_samples or (),
+        matched_samples=matched_samples or (),
+        panel_samples=panel_samples or (),
+        chair_samples=chair_samples or (),
+        high_samples=high_samples or (),
+        low_samples=low_samples or (),
         bands_available=bands is not None,
     )
     candidates = {name: round(value, 4) for name, value in candidate_scores(signals).items()}
+    scale_max = 10.0
+    variant: str | None = None
     if chosen == FUSION_COEFFICIENT_SET:
-        if FUSION_VARIANT not in candidates:
+        if FUSION_VARIANT in candidates:
+            variant = FUSION_VARIANT
+        elif "rebuttal-k2" in candidates:
+            variant = "rebuttal-k2"
+        elif "rebuttal" in candidates:
+            variant = "rebuttal"
+        elif "matched-k2" in candidates:
+            variant = "matched-k2"
+        elif "matched" in candidates:
+            variant = "matched"
+        elif "panel-k2" in candidates:
+            variant = "panel-k2"
+        elif "panel" in candidates:
+            variant = "panel"
+        elif "expert-k2" in candidates:
+            variant = "expert-k2"
+        elif "expert" in candidates:
+            variant = "expert"
+        elif "audited-k1" in candidates:
+            variant = "audited-k1"
+        elif "mean-k3" in candidates:
+            variant = "mean-k3"
+        elif "isolate-k1" in candidates:
+            variant = "isolate-k1"
+        elif "place" in candidates:
+            variant = "place"
+        elif "mean" in candidates:
+            variant = "mean"
+        else:
+            variant = "decision"
+        if variant not in candidates or "decision" not in candidates:
             raise ValueError(
-                "apr-fusion-v1 requires a holistic rating; refusing to fall back to dimension bands"
+                "apr-fusion-v1 requires a decision score; refusing to fall back to dimension bands"
             )
-        rank_score = round(_clamp_rank(candidates[FUSION_VARIANT]), 4)
-        venue = snap_down(rank_score)
+        venue = decision_bin(candidates["decision"])
+        if variant == "forecast-k1":
+            rank_score = round(_clamp_span(candidates["forecast-k1"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by forecast-k1, one call's mean expected rating on 1.0-10.0. "
+                "The call saw the whole manuscript (the source text capped only for the longest "
+                "manuscripts), simulated three of the reviewers the venue would assign, in declared "
+                "seats, and had each write a review, the official rating they would most likely "
+                "submit, and a probability over the six official ratings; each reviewer's expected "
+                "rating is taken under that probability, and the sample is the mean of the three "
+                "expected ratings. The 1-6 decision from the same call sets the ICLR bin and is not "
+                "the rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The mean of the "
+                "three integer ratings is recorded as vote-k1 and is not the rank; the model's own "
+                "estimate of the mean is chair-k1 and is not the rank; the highest and lowest "
+                "expected rating are high-k1 and low-k1 and are not the rank. A verified venue cap "
+                "is not applied to this rank. Dimension bands are not a gate. A missing decision "
+                "score fails the paper. A second call is not this candidate. It is not a fitted "
+                "regression."
+            )
+            formula = (
+                "rank = forecast-k1; "
+                "rank = clamp(mean expected rating of the first forecast panel on 1.0-10.0, 1, 10); "
+                "expected rating = sum(probability of each official rating 1, 3, 5, 6, 8, 10 times "
+                "that rating), probabilities normalised to one; "
+                "mean expected rating = mean(three simulated reviewers' expected ratings from one "
+                "call on the full manuscript); "
+                "vote-k1 = mean(three most-likely integer ratings) (diagnostic); "
+                "chair-k1 = chair estimate (diagnostic); "
+                "high-k1 and low-k1 = highest and lowest expected rating (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "rebuttal-k2":
+            rank_score = round(_clamp_span(candidates["rebuttal-k2"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by rebuttal-k2, the mean of two final-rating means on "
+                "1.0-10.0 from two calls that ran together and did not see each other. Each call "
+                "saw the whole manuscript (the source text capped only for the longest "
+                "manuscripts), simulated three of the reviewers the venue would assign, in "
+                "declared seats, had each write a first review and submit an official rating, "
+                "wrote the authors' response, and had each reviewer give the official rating "
+                "they hold at the end of the discussion; the per-call sample is the mean of "
+                "those three final ratings. The 1-6 decision from the same calls sets the ICLR "
+                "bin and is not the rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "The mean of the first ratings is recorded as initial-k2 and is not the rank; "
+                "the model's own estimate of the final mean is chair-k2 and is not the rank; the "
+                "per-call highest and lowest final rating are high-k2 and low-k2 and are not the "
+                "rank. A verified venue cap is not applied to this rank. Dimension bands are not "
+                "a gate. A missing decision score fails the paper. A third call is not this "
+                "candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = rebuttal-k2; "
+                "rank = clamp(mean(first two final-rating means on 1.0-10.0), 1, 10); "
+                "final-rating mean = mean(three simulated official ratings held at the end of the "
+                "discussion from one call on the full manuscript); "
+                "initial-k2 = mean(first two first-rating means) (diagnostic); "
+                "chair-k2 = mean(first two chair estimates) (diagnostic); "
+                "high-k2 and low-k2 = mean(per-call highest and lowest final rating) (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "rebuttal":
+            rank_score = round(_clamp_span(candidates["rebuttal"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of the stored final-rating means on 1.0-10.0; "
+                "this package does not hold the two calls of the locked rebuttal-k2. Each "
+                "final-rating mean is the mean of the three official ratings a simulated panel "
+                "holds at the end of the discussion period in one call on the full manuscript. "
+                "The 1-6 decision from the same calls sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The first-rating mean, "
+                "the chair estimate and the panel extremes are recorded and are not the rank. A "
+                "verified venue cap is not applied to this rank. Dimension bands are not a gate. "
+                "A missing decision score fails the paper. It is not a fitted regression."
+            )
+            formula = (
+                "rank = rebuttal; "
+                "rank = clamp(mean(final-rating means on 1.0-10.0), 1, 10); "
+                "final-rating mean = mean(three simulated official ratings held at the end of the "
+                "discussion from one call on the full manuscript); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "matched-k2":
+            rank_score = round(_clamp_span(candidates["matched-k2"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by matched-k2, the mean of two panel means on 1.0-10.0 from "
+                "two calls that ran together and did not see each other. Each call saw the "
+                "manuscript's main text (the reference list and the appendix cut from the packet, "
+                "the text capped), simulated the four topic-matched reviewers of mixed seniority "
+                "the venue would assign, in declared seats, with the venue's rating norms stated, "
+                "wrote their reviews, and had each submit an official rating; the panel mean is "
+                "the mean of those four ratings. The 1-6 decision from the same calls sets the "
+                "ICLR bin and is not the rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, "
+                "and 6. The model's own estimate of the mean after writing its panel is recorded "
+                "as chair-k2 and is not the rank; the per-call highest and lowest rating are "
+                "high-k2 and low-k2 and are not the rank. A verified venue cap is not applied to "
+                "this rank. Dimension bands are not a gate. A missing decision score fails the "
+                "paper. A third panel is not this candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = matched-k2; "
+                "rank = clamp(mean(first two matched-panel means on 1.0-10.0), 1, 10); "
+                "panel mean = mean(four simulated official ratings from one call on the main text); "
+                "chair-k2 = mean(first two chair estimates) (diagnostic); "
+                "high-k2 and low-k2 = mean(per-call highest and lowest rating) (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "matched":
+            rank_score = round(_clamp_span(candidates["matched"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of the stored matched-panel means on 1.0-10.0; "
+                "this package does not hold the two panels of the locked matched-k2. Each panel "
+                "mean is the mean of the four official ratings a simulated topic-matched panel "
+                "submitted in one call after reading the manuscript's main text. The 1-6 decision "
+                "from the same calls sets the ICLR bin and is not the rank. Levels 1, 2, 3, and 4 "
+                "map to ICLR bins 1, 3, 5, and 6. The chair estimate and the panel extremes are "
+                "recorded and are not the rank. A verified venue cap is not applied to this rank. "
+                "Dimension bands are not a gate. A missing decision score fails the paper. It is "
+                "not a fitted regression."
+            )
+            formula = (
+                "rank = matched; "
+                "rank = clamp(mean(matched-panel means on 1.0-10.0), 1, 10); "
+                "panel mean = mean(four simulated official ratings from one call on the main text); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "panel-k2":
+            rank_score = round(_clamp_span(candidates["panel-k2"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by panel-k2, the mean of two panel means on 1.0-10.0 from "
+                "two calls that ran together and did not see each other. Each call simulated the "
+                "four reviewers the venue would assign, in declared roles, wrote their reviews, and "
+                "had each submit an official rating; the panel mean is the mean of those four "
+                "ratings. The 1-6 decision from the same calls sets the ICLR bin and is not the "
+                "rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The model's own "
+                "estimate of the mean after writing its panel is recorded as chair-k2 and is not "
+                "the rank; the per-call highest and lowest rating are high-k2 and low-k2 and are "
+                "not the rank. A verified venue cap is not applied to this rank. Dimension bands "
+                "are not a gate. A missing decision score fails the paper. A third panel is not "
+                "this candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = panel-k2; "
+                "rank = clamp(mean(first two panel means on 1.0-10.0), 1, 10); "
+                "panel mean = mean(four simulated official ratings from one call); "
+                "chair-k2 = mean(first two chair estimates) (diagnostic); "
+                "high-k2 and low-k2 = mean(per-call highest and lowest rating) (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "panel":
+            rank_score = round(_clamp_span(candidates["panel"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of the stored panel means on 1.0-10.0; this "
+                "package does not hold the two panels of the locked panel-k2. Each panel mean is "
+                "the mean of the four official ratings a simulated review panel submitted in one "
+                "call. The 1-6 decision from the same calls sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The chair estimate and the "
+                "panel extremes are recorded and are not the rank. A verified venue cap is not "
+                "applied to this rank. Dimension bands are not a gate. A missing decision score "
+                "fails the paper. It is not a fitted regression."
+            )
+            formula = (
+                "rank = panel; "
+                "rank = clamp(mean(panel means on 1.0-10.0), 1, 10); "
+                "panel mean = mean(four simulated official ratings from one call); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "expert-k2":
+            rank_score = round(_clamp_span(candidates["expert-k2"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by expert-k2, the mean of two venue-scale estimates on "
+                "1.0-10.0 from two expert reads that ran together and did not see each other. "
+                "Each read named the contribution type, the closest prior work and the field "
+                "context it recalled, and filled the review form before estimating the mean "
+                "official rating. The 1-6 decision from the same calls sets the ICLR bin and is "
+                "not the rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The "
+                "review-form triad is recorded as form-k2 and is not the rank. A verified venue "
+                "cap is not applied to this rank. Dimension bands are not a gate. A missing "
+                "decision score fails the paper. A third read is not this candidate. It is not a "
+                "fitted regression."
+            )
+            formula = (
+                "rank = expert-k2; "
+                "rank = clamp(mean(first two expert-read venue-scale estimates on 1.0-10.0), 1, 10); "
+                "form-k2 = mean(1 + soundness + presentation + contribution - 3) (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "expert":
+            rank_score = round(_clamp_span(candidates["expert"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of the stored expert-read venue-scale estimates "
+                "on 1.0-10.0; this package does not hold the two reads of the locked expert-k2. "
+                "The 1-6 decision from the same calls sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The review-form triad is "
+                "recorded as form and is not the rank. A verified venue cap is not applied to "
+                "this rank. Dimension bands are not a gate. A missing decision score fails the "
+                "paper. It is not a fitted regression."
+            )
+            formula = (
+                "rank = expert; "
+                "rank = clamp(mean(expert-read venue-scale estimates on 1.0-10.0), 1, 10); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "audited-k1":
+            rank_score = round(_clamp_span(candidates["audited-k1"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by audited-k1, one venue-scale estimate on 1.0-10.0 from "
+                "a scoring call that saw a verified audit of the manuscript beside the "
+                "manuscript. The audit answered twelve fixed questions and listed flaws; each "
+                "pass, fail, and flaw kept only when its excerpt resolved in the manuscript. "
+                "The 1-6 decision from the same scoring call sets the ICLR bin and is not the "
+                "rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. The verified "
+                "pass count is recorded as checks-k1 and is not the rank. A verified venue cap "
+                "is not applied to this rank. Dimension bands are not a gate. A missing "
+                "decision score fails the paper. A second pair is not this candidate. It is "
+                "not a fitted regression."
+            )
+            formula = (
+                "rank = audited-k1; "
+                "rank = clamp(audited venue-scale estimate from the first audit-then-score pair, 1, 10); "
+                "checks-k1 = 1 + 9 * verified_passes / 12 (diagnostic); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "mean-k3":
+            rank_score = round(_clamp_span(candidates["mean-k3"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by mean-k3, the mean of three independent venue-scale "
+                "samples on 1.0-10.0. Each sample estimates the mean official rating. "
+                "The 1-6 decision sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "A verified venue cap is not applied to this rank. Dimension bands are not a "
+                "gate. A missing decision score fails the paper. A fourth sample is not this "
+                "candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = mean-k3; "
+                "rank = mean(first three venue-scale samples on 1.0-10.0); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "isolate-k1":
+            rank_score = round(_clamp_span(candidates["isolate-k1"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by isolate-k1, the mean of two implied scores from one "
+                "pair of isolated comparisons on 1.0-10.0. weak-reject is at 2.5 and "
+                "strong-accept is at 8.5. Better adds the margin, worse subtracts it, and a "
+                "tie stays on that pole. The margin stops at 6, the declared gap between the "
+                "poles, and the result is clamped to 1.0-10.0. The 1-6 decision sets the ICLR "
+                "bin and is not the rank. Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "A verified venue cap is not applied to this rank. Dimension bands are not a "
+                "gate. A missing decision score fails the paper. Further pairs are not this "
+                "candidate. It is not a fitted regression."
+            )
+            formula = (
+                "rank = isolate-k1; "
+                "rank = mean(implied(weak-reject), implied(strong-accept)) from the first pair; "
+                "implied = clamp(position + margin if better, position - margin if worse, position if tie, 1, 10); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "place":
+            rank_score = round(_clamp_span(candidates["place"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by placement against a fixed ladder of synthetic references "
+                "on 1.0-10.0. The 1-6 decision sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "The venue-scale mean is recorded and is not the rank. "
+                "A verified venue cap is not applied to this rank. "
+                "Dimension bands are not a gate. A missing decision score fails the paper. "
+                "It is not a fitted regression."
+            )
+            formula = (
+                "rank = place; "
+                "rank = mean(ladder placements on 1.0-10.0); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        elif variant == "mean":
+            rank_score = round(_clamp_span(candidates["mean"], 1.0, 10.0), 4)
+            scale_max = 10.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of independent venue-scale samples on 1.0-10.0. "
+                "The 1-6 decision sets the ICLR bin and is not the rank. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "A verified venue cap is not applied to this rank. "
+                "Dimension bands are not a gate. A missing decision score fails the paper. "
+                "It is not a fitted regression."
+            )
+            formula = (
+                "rank = mean; "
+                "rank = mean(venue-scale samples on 1.0-10.0); "
+                "venue_bin maps decision levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
+        else:
+            rank_score = round(_clamp_span(candidates["decision"], 1.0, 6.0), 4)
+            scale_max = 6.0
+            notes = (
+                "apr-fusion-v1 ranks by the mean of independent decision samples on a 1.0-6.0 scale. "
+                "Levels 1, 2, 3, and 4 map to ICLR bins 1, 3, 5, and 6. "
+                "A verified venue cap is not applied to this rank. "
+                "Dimension bands are not a gate. A missing decision score fails the paper. "
+                "It is not a fitted regression."
+            )
+            formula = (
+                "rank = decision; "
+                "rank = mean(decision samples on 1.0-6.0); "
+                "venue_bin maps levels 1/2/3/4/5/6 onto 1/3/5/6/8/10; "
+                "a verified venue cap does not change this rank"
+            )
         reported = rank_score
-        notes = (
-            "apr-fusion-v1 ranks by the mean of the holistic samples on a 1.0-10.0 scale. "
-            "A verified venue cap is a downward adjustment and nothing else. "
-            "Dimension bands are not a gate. A missing holistic rating fails the paper. "
-            "It is not a fitted regression. venue_bin is snap_down of the rank score."
-        )
-        formula = (
-            f"rank = {FUSION_VARIANT}; "
-            "rank = mean(holistic samples); "
-            "a verified venue cap may only lower the rank; "
-            "venue_bin = snap_down(rank)"
-        )
     else:
         rank_score = round(capped, 4)
         reported = float(venue)
@@ -343,7 +864,36 @@ def rate_venue(
         "venue_bin": int(venue),
         "rank_score": rank_score,
         "candidates": candidates,
-        "holistic": signals.holistic,
+        "holistic": None if signals.holistic is None else round(signals.holistic, 4),
+        "samples": [round(item, 4) for item in signals.samples],
+        "mean_samples": [round(item, 4) for item in signals.mean_samples],
+        "place_samples": [round(item, 4) for item in signals.place_samples],
+        "count_samples": [round(item, 4) for item in signals.count_samples],
+        "isolate_samples": [round(item, 4) for item in signals.isolate_samples],
+        "audited_samples": [round(item, 4) for item in signals.audited_samples],
+        "checks_samples": [round(item, 4) for item in signals.checks_samples],
+        "expert_samples": [round(item, 4) for item in signals.expert_samples],
+        "form_samples": [round(item, 4) for item in signals.form_samples],
+        "forecast_samples": [round(item, 4) for item in signals.forecast_samples],
+        "vote_samples": [round(item, 4) for item in signals.vote_samples],
+        "rebuttal_samples": [round(item, 4) for item in signals.rebuttal_samples],
+        "initial_samples": [round(item, 4) for item in signals.initial_samples],
+        "matched_samples": [round(item, 4) for item in signals.matched_samples],
+        "panel_samples": [round(item, 4) for item in signals.panel_samples],
+        "chair_samples": [round(item, 4) for item in signals.chair_samples],
+        "high_samples": [round(item, 4) for item in signals.high_samples],
+        "low_samples": [round(item, 4) for item in signals.low_samples],
+        "audits": audits,
+        "forms": forms,
+        "panels": panels,
+        "matched_panels": matched_panels,
+        "rebuttal_panels": rebuttal_panels,
+        "forecast_panels": forecast_panels,
+        "main_text": main_text,
+        "holistic_mode": holistic_mode,
+        "placements": placements,
+        "poles": poles,
+        "ladder": ladder,
         "cap_ids": [item.record_id for item in caps],
         "caps": [
             {"id": item.record_id, "fatal_class": item.fatal_class.value, "cap": item.cap, "exempted": item.exempted}
@@ -369,12 +919,12 @@ def rate_venue(
             }
         ),
         "formula": formula,
-        "fusion_variant": FUSION_VARIANT if chosen == FUSION_COEFFICIENT_SET else None,
+        "fusion_variant": variant,
     }
     return OverallScore(
         value=reported,
         scale_min=1.0,
-        scale_max=10.0,
+        scale_max=scale_max,
         method=OverallScoreMethod.declared_formula,
         coefficient_set=chosen,
         notes=notes,
