@@ -4,35 +4,109 @@ AutoPaperReview is a local-first, evidence-traceable harness for repeatable scho
 
 Version: `0.1.10`
 
-## Code harness, not a prompt-only skill
+[![CI](https://github.com/XR-Lee/AutoPaperReview/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/XR-Lee/AutoPaperReview/actions/workflows/ci.yml)
+[![Confidentiality check](https://github.com/XR-Lee/AutoPaperReview/actions/workflows/confidentiality.yml/badge.svg?branch=main)](CONFIDENTIALITY.md)
+[![Version](https://img.shields.io/badge/version-0.1.10-informational)](CHANGELOG.md)
+[![Python 3.11–3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776ab)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-AutoPaperReview is an executable Python harness. The TOML DAG, Pydantic schemas, artifact hashing, cache/resume logic, migration, plugin registry, and CLI are code. Files under `src/autopaperreview/prompts/` are packaged, versioned route assets that can be replaced without changing the canonical data model.
+The `0.1.x` line may still change the CLI. Additive schema fields can ship in a minor release. See [Maintenance](docs/maintenance.md).
 
-The core does not parse PDF/DOCX by itself. It calls a model only when a stage selects the bundled OpenAI-compatible adapter. Fixture JSON and the deterministic adapter remain equal options. Any other model provider, parser, retrieval worker, or journal platform is connected through a stage plugin or adapter and must convert its output into AutoPaperReview records.
+## Why AutoPaperReview
 
-## What v0.1 provides
+| | The problem | What this harness does |
+| --- | --- | --- |
+| Traceability | A score arrives with no passage to check. | Dimension scores, claims, and fatal flaws cite an evidence id that resolves to a manuscript excerpt or a retrieved-source snapshot. The report links every `[E2]`. |
+| Reproducibility | A second run has no record of the first. | A TOML DAG with content-hash caching. Prompts and raw model responses are stored with their SHA-256. A matching signature skips the model call. |
+| Confidentiality | The manuscript leaves the machine without a record. | Network policy defaults to `deny`. The model endpoint defaults to loopback. A remote call requires an explicit policy change and is recorded as `manuscript_left_machine`. |
+| Lock-in | The review database becomes the agent framework's store. | The core depends only on Pydantic. Parsers, models, retrieval, and journal platforms sit behind adapters and convert into canonical records. |
 
-- Strict Pydantic models for artifacts, sources, evidence, issues, review packages, stages, and run manifests.
-- A TOML-defined DAG with validation, resumable execution, content-hash caching, and atomic stage promotion.
-- Built-in stages for source ingest, deterministic commands, prompt packets, legacy issue import, consensus, and Markdown/JSON reports. A report can emit one Markdown file with both `en` and `zh-Hans` (`bilingual = true` or `languages = ["en", "zh-Hans"]`). Missing translations are filled into `LocalizedText.translations` only for short fixture phrases; bilingual rendering does not silently fall back to the primary language, and incomplete pairing is refused before Markdown/PDF export.
-- A deny-by-default network declaration gate. Commands never use a shell, and network-requiring stages must declare their scope.
-- Python entry-point plugins under `autopaperreview.stages`.
-- Migration support for the earlier bare issue-array and review-package JSON formats.
-- Generated JSON Schema, a synthetic end-to-end example, unit tests, CI, and an open-source reference-stack snapshot.
-- Optional SAR-shaped records: seven dimension scores on a 1–10 scale, narrative claims that require evidence IDs, related-work query sets, retrieved-source snapshots, and venue-specific conclusions for conferences and journals. No overall score is emitted by default. Report Markdown (and PDF, if `reportlab` is installed) links each `[E2]` to the Evidence Index.
-- A `literature_grounding` stage that emits multi-perspective queries and optional offline snapshots behind the network declaration gate.
-- P0–P2 contract stages: `execute_review` (fixture JSON, deterministic checks, or an OpenAI-compatible chat adapter), snapshot excerpts, typed `Anchor`s, a report export gate, `ledger` / `agenda`, read-only `workspace_inspect`, `integrity`, and matched-setting `novelty`.
-- Figure-grounded review: a visual route (`figure_grounded_v1`) plus prompt packets that require inspecting every numbered figure on the sibling PDF page. Caption paraphrase is not inspection.
-- Listed contributions: the 3–4 author-numbered items are extracted, retrieved against, and audited one by one for evidence completeness. A single paper-level novelty paragraph is not sufficient.
-- First-read review writing: issues can carry a `FirstReadNote` (what the paper said, a quote, why it matters). Prompt packets prepend a shared writing contract. Reports lead with a how-to-read note and inline quotes so a first-time reader can follow the argument without already knowing the paper.
-- Declared ICLR rating (`rate`, coefficient set `apr-iclr-cap-v2`): seven anchored bands (`sar_bands_v1`, scores 2/4/6/8/10), fatal-flaw caps, and a snap onto 1/3/5/6/8/10. The venue bin is the largest bin that does not exceed the capped raw score, so a raw 7 stays in 6. The gate is `min(claims, soundness) + 1`. Weights are unchanged from v1 (experimental soundness 0.30, claims 0.25, originality 0.15, importance 0.12, prior work 0.08, writing 0.05, community 0.05). Caps and exemptions are stored on the score. This is not a fitted regression. `calibrate` orders several packages and requires `same_bin_justified` when two neighbors share a bin.
-- Public calibration eval (`calibrate-eval`): fetches public ICLR submissions, runs prompt packets plus a judgment adapter, and reports Spearman, Kendall tau-b, MAE, bin agreement, accept/reject AUC, a bin confusion table, and score spread for `apr-iclr-cap-v2`. `scripts/select_public_calibration.py` draws a seeded 100-paper stratified sample into a gitignored cache. The generated run includes `related_work_search` before `rate`. Search mode defaults to `off`. `--related-work agent` reads a local findings drop, and `--related-work live` queries metadata providers. `--mode adapter` can select `OpenAICompatibleAdapter` with `--base-url` and `--model`. The command does not fit weights or caps. Manuscripts, forum ids, and the numeric report stay outside git. See [public calibration eval](docs/public-calibration.md).
-- Visual and format review (`pip install 'autopaperreview[visual]'`): `render_pages` writes hashed page PNGs, including an optional supplement as `S1`, `S2`, ... . `format_check` applies a pinned venue profile (`iclr2027` or `aaai2027`) to the main PDF and does not count supplement pages toward the page limit. `visual_inspect` accepts an adapter whose findings cite the page-image hash and a non-caption locator. `AgentFindingsInspector` reads a JSON drop after the pages were opened. `OpenAICompatibleVisionInspector` sends those page images to an OpenAI-compatible chat model. `HostedVisionInspector` can POST page images only when the network policy is `allow` and an API key is set; a missing key sends nothing. Findings move the rating only through fatal classes or clause ceilings. `init` mounts `visual_qa_v1` as route M9.
-- Related-work search before scoring: `related_work_search` derives the problem formulation and searches five keyword families (same problem, same technique, alternative formulations, standard baselines, adjacent tasks), plus name-only lookups for methods the manuscript itself names. Keyword queries are generic tokens. Live calls use arXiv, OpenAlex, and Semantic Scholar. HTTP 429 is retried and does not abort the rest of that provider. If every provider fails, times out, or none are available, `status=degraded` and the score does not drop. If at least one provider succeeds and another fails, `status=partial` names the failed providers and the report says the search may be incomplete. A failed provider never creates or strengthens a retrieval cap. Must-compare requires task overlap and technique or setting overlap, excludes surveys, reviews, datasets, benchmarks, and generators, and keeps at most three neighbours the judging agent confirmed. Live search writes a confirmation packet and stays `awaiting_confirmation` until a confirmation file or an explicitly configured confirmation adapter answers it. The judge's reason is kept verbatim. Cited bibliography entries are looked up by title, a batched arXiv id list, and DOI. Numeric markers and author-year cites count, wrapped reference lines stay with their entry, and the default bibliography budget is 60. OpenAlex title filters drop commas, colons, and quotes. HTTP 400 responses are cached with successful metadata. Semantic Scholar paces requests and can use `S2_API_KEY`; without a key, a remaining 429 skips that provider inside a short budget. Successful metadata is cached on disk under the project directory. Agent mode accepts a findings file and keeps a paper only when its id resolves in a provider payload. A confirmed pre-deadline paper that a successful provider returned, and that is absent from the baselines, can raise `missing_closest_neighbor` (cap 6) on a complete or partial search. A privileged or different-task baseline raises `unfair_baseline` (cap 5) on a complete or partial search, without a verified candidate, and always cites the manuscript baseline anchor. Concurrent work is discussion only. `novelty` and `rate` must depend on that search when it is in the same DAG. See [related-work search](docs/related-work-search.md).
+## Quick start
 
-See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) for an honest comparison with paperreview.ai, [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) for a prioritized review against DeepReviewer 2.0, ResearchArena, AgentReview, MARG, OpenReviewer, PaperQA2, and related work, and [first-read review writing](docs/first-read-review.md) for the ICLR / ARR / Reviewer2 / Conventional Comments strategy this slice implements. This repository does not claim Stanford's ICLR Spearman numbers.
+Python 3.11 or newer. The synthetic example needs no model, no API key, and no network.
 
-The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API. Those systems belong behind adapters so their release cadence does not become the review database schema.
+```bash
+git clone https://github.com/XR-Lee/AutoPaperReview.git
+cd AutoPaperReview
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[pdf,visual]"
+
+autopaperreview run examples/synthetic/review.toml
+```
+
+That reviews a short fictional manuscript through twelve stages and writes `examples/synthetic/review_report.md` (and `review_report.pdf` when `reportlab` is installed), in English and Simplified Chinese. The same command again reuses every stage. CI fails the job if the second synthetic run is not a full cache hit.
+
+The manuscript is [`examples/synthetic/manuscript.txt`](examples/synthetic/manuscript.txt). One sentence it contains is "Eight temporally related images from one specimen were randomly divided at image level." The fixture's claims-supported rationale is "The deployment claim is not supported by the reported split or uncertainty."
+
+Start a project with [`autopaperreview init`](#start-a-review-project), or connect a model with the [OpenAI-compatible adapter](#closed-loop-model-review). The locked fusion rank is [forecast-k1](#forecast-rank-forecast-k1).
+
+## Benchmark
+
+### Published reference points
+
+These numbers are from other projects. This repository has not reproduced them.
+
+| Reviewer | Spearman vs one human reviewer | Accept/reject AUC | Setting | Source |
+| --- | ---: | ---: | --- | --- |
+| Another human reviewer | 0.41 | 0.84 | ICLR 2025, 147 test papers | [Stanford SAR tech overview](https://paperreview.ai/tech-overview) |
+| Stanford Agentic Reviewer (hosted, fitted regression) | 0.42 | 0.75 | same | same |
+
+The same sources, already discussed in [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md) and the [gap review](docs/oss-experiment-gaps.md):
+
+- SAR's rank agreement matches human–human agreement, and its accept/reject AUC is 0.75 against 0.84 for one human score.
+- On 200 ICLR 2025 papers, the human accept/reject gap is 1.52 points and SAR's is 0.25 ([How Far Are We From True Auto-Research?](https://arxiv.org/abs/2605.19156)).
+- A simulation of reviewer, author, and area-chair phases attributes a 37.1% decision swing to reviewer bias ([AgentReview](https://github.com/Ahren09/AgentReview), EMNLP 2024).
+
+### How this repository is measured
+
+`calibrate-eval` compares a declared score with public human scores. It does not fit weights, caps, bins, or the locked rank.
+
+| Part | Protocol |
+| --- | --- |
+| Sample | 100 public ICLR 2024 and 2025 submissions, seed `20261021`, drawn by [`scripts/select_public_calibration.py`](scripts/select_public_calibration.py) |
+| Strata | By mean official rating: clear reject 20, low 15, borderline 25, high 20, strong 20 |
+| Split | 60% tuning / 40% held out inside each stratum, chosen before any model score exists |
+| Default formula | `apr-iclr-cap-v2` |
+| Locked fusion rank | `forecast-k1`, when `--coefficient-set apr-fusion-v1` |
+| Metrics | Spearman, Kendall tau-b, MAE, bin agreement, accept/reject AUC, a bin confusion table, and score spread |
+
+This README does not publish a correlation for AutoPaperReview. Manuscripts, forum ids, per-paper rows, and the numeric report stay in a gitignored cache. Protocol: [public calibration eval](docs/public-calibration.md).
+
+CI on every push and pull request runs the unit suite on CPython 3.11, 3.12, and 3.13, diffs the committed JSON Schema, builds a wheel, and runs the synthetic pipeline twice. A separate workflow runs `scripts/check_confidentiality.py`.
+
+## How it works
+
+AutoPaperReview is an executable Python harness. A review is a DAG of stages in TOML. Each stage reads hashed inputs, writes hashed artifacts, and records a signature. When the signature and output hashes still match, the next `run` skips the stage.
+
+```mermaid
+flowchart LR
+  ingest --> prompt_packet
+  ingest --> ledger
+  prompt_packet --> execute_review
+  execute_review --> consensus
+  consensus --> rate
+  rate --> report
+```
+
+That is one closed-loop shape. The synthetic example uses a fixture adapter and does not call `rate` or a model. `related_work_search`, `render_pages`, `format_check`, `visual_inspect`, `literature_grounding`, `agenda`, `workspace_inspect`, `integrity`, and `novelty` are further stage types. `autopaperreview plugins` lists them.
+
+The TOML DAG, Pydantic schemas, artifact hashing, cache/resume logic, migration, plugin registry, and CLI are code. Files under `src/autopaperreview/prompts/` are packaged, versioned route assets. The core calls a model only when a stage selects the bundled OpenAI-compatible adapter. Fixture JSON and the deterministic adapter remain equal options. Any other model provider, parser, retrieval worker, or journal platform is connected through a stage plugin or adapter.
+
+The core does not depend on LangChain, LangGraph, Prefect, Docling, GROBID, PaperQA, LiteLLM, or a specific model API.
+
+## Features
+
+- Canonical Pydantic records, generated JSON Schema, and migration from older review JSON.
+- A resumable TOML DAG with content-hash caching and entry-point plugins.
+- Evidence-bound review: anchors, an export gate, a claim ledger, an investigation agenda, integrity checks, and matched-setting novelty.
+- Related-work search before scoring, over arXiv, OpenAlex, and Semantic Scholar. A failed provider does not lower a score. [Details](docs/related-work-search.md).
+- Figure and format review: hashed page renders and venue profiles `iclr2027` and `aaai2027`.
+- Declared ICLR rating `apr-iclr-cap-v2`, and the opt-in fusion rank [`forecast-k1`](#forecast-rank-forecast-k1).
+- First-read writing, bilingual English / Simplified Chinese reports, and an annotated manuscript PDF.
+
+The detailed list is [docs/features.md](docs/features.md).
+
+See [Stanford SAR vs AutoPaperReview](docs/stanford-sar-comparison.md), [feature gaps versus stronger open experiments](docs/oss-experiment-gaps.md) (status through 0.1.10), and [first-read review writing](docs/first-read-review.md). This repository does not claim Stanford's ICLR Spearman numbers.
 
 ## Install
 
@@ -91,11 +165,13 @@ autopaperreview validate reviews/my-paper/review.toml
 autopaperreview run reviews/my-paper/review.toml
 ```
 
+`reviews/` is gitignored. Keep real manuscripts and reviews there. See [Confidentiality](CONFIDENTIALITY.md).
+
 ## Closed-loop model review
 
-`OpenAICompatibleAdapter` reads the prompt packets already written for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. `OpenAICompatibleVisionInspector` reads the visual packet and sends each rendered page image. The pipeline validates the JSON and retries a schema failure once, including an empty contribution list or an empty ledger list. A dimension excerpt that does not resolve is retried once with that unresolved-anchor error; if any of the seven dimensions is still missing, the stage fails. It does not fall back to the deterministic adapter.
+`OpenAICompatibleAdapter` reads the prompt packets already written for contributions, ledger and agenda items, the seven rating dimensions, and fatal classification. An optional `holistic` judgment is what `forecast-k1` uses; it is off unless the stage lists it. `OpenAICompatibleVisionInspector` reads the visual packet and sends each rendered page image. The pipeline validates the JSON and retries a schema failure once, including an empty contribution list or an empty ledger list. A dimension excerpt that does not resolve is retried once with that unresolved-anchor error; if any of the seven dimensions is still missing, the stage fails. It does not fall back to the deterministic adapter.
 
-Loopback is the default, including a hostname that resolves only to loopback addresses. A remote host also needs `allow_remote = true`, `network_policy = "allow"`, and a key in the environment. The key is not written to the run and is not part of the stage signature, so replacing it does not rerun a cached stage. A remote call sets `manuscript_left_machine` on the run manifest. Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times. Any other HTTP 4xx fails immediately.
+Loopback is the default, including a hostname that resolves only to loopback addresses. A remote host also needs `allow_remote = true`, `network_policy = "allow"`, and a key in the environment. The key is not written to the run and is not part of the stage signature, so replacing it does not rerun a cached stage. A remote call sets `manuscript_left_machine` on the run manifest. Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times. Any other HTTP 4xx fails immediately. The timeout defaults to 900 seconds.
 
 ```toml
 [project]
@@ -138,9 +214,77 @@ packet_route = "M6"
 allow_remote = false
 ```
 
-Set `bilingual = true` on `execute_review` for one `zh-Hans` judgment over the accepted English fields. A bilingual `report` stage can then export. To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. `rate` still applies `apr-iclr-cap-v2`. The chat adapter does not emit the overall score.
+Set `bilingual = true` on `execute_review` for one `zh-Hans` judgment over the accepted English fields. A bilingual `report` stage can then export. To keep the model outside the process, use `adapter = "autopaperreview.adapters:FixtureReviewAdapter"` with `fixture_path`, or `AgentFindingsInspector` with `findings_path`. The default `rate` coefficient set is `apr-iclr-cap-v2`. The chat adapter does not emit that score; `rate` does.
 
 Raw requests and responses are stored under `stages/<id>/model/` with their SHA-256 on the stage record. A second `run` reuses that stage while the signature matches and does not call the endpoint again.
+
+## Forecast rank (`forecast-k1`)
+
+`apr-fusion-v1` ranks by one simulated forecast panel. The locked mode is `forecast` and the locked sample count is 1 (`LOCKED_HOLISTIC_MODE`, `LOCKED_HOLISTIC_SAMPLES` in `anchors`). The default `rate` formula stays `apr-iclr-cap-v2` until the coefficient set is `apr-fusion-v1`.
+
+The call reads the full manuscript packet. The source text is capped at `anchors.FULL_TEXT_MAX_CHARS` (240,000 characters); a shorter manuscript is sent unchanged. It simulates the three seats in `anchors.FORECAST_SEATS` — specialist, generalist, and senior — who have read the whole manuscript and have not seen each other's reviews. For each seat the model writes a one-sentence summary, up to two strengths, up to two weaknesses, the official rating that reviewer would most likely submit (1, 3, 5, 6, 8, or 10), six probabilities that this rating is 1, 3, 5, 6, 8, and 10 in that order, and a confidence from 1 to 5. It then writes its own `predicted_mean` on 1.0–10.0 and a decision from 1 to 6.
+
+The pipeline normalizes each probability vector (a sum other than one is counted as `renormalized`). One reviewer's expected rating is the sum of probability times official rating. The per-call sample is the mean of the three expected ratings. The shipped rank is that sample clamped to 1.0–10.0. The decision sets the ICLR bin: levels 1, 2, 3, 4, 5, and 6 map onto 1, 3, 5, 6, 8, and 10. The temperature is 0.7.
+
+Stored beside the rank, and not used as the rank: `vote-k1` (mean of the three integer ratings), `chair-k1` (the model's own mean), `high-k1` and `low-k1` (the highest and lowest expected rating). An integer off the official list is counted as `off_scale`. An integer that is not the rating with the most mass is counted as `mode_mismatch`. Neither is retried. This mode does not check excerpts against the manuscript. A verified venue cap does not change this rank. Dimension bands stay on the package and stay off this rank.
+
+`--holistic-samples 2` runs two forecast calls and still ranks by the first. `holistic_mode` can be `rebuttal`, `matched`, `panel`, `expert`, `audited`, or `mean`. Those modes keep their earlier candidates and their prompt text. A package that stored only one of those families still ranks by `rebuttal-k2`, `matched-k2`, `panel-k2`, `expert-k2`, `audited-k1`, or `mean-k3`. `scripts/rank_eval.py` defaults to `--mode locked`, which reports `forecast-k1`. The locked candidate stays `forecast-k1` after tune or held-out metrics are known.
+
+`our_score.json` records `forecast_samples`, `vote_samples`, and a `forecast` summary of seat ids and numbers without the review text. The full field list and the other modes are in [public calibration eval](docs/public-calibration.md).
+
+### Run it on one manuscript
+
+`prompt_packet` must set `include_source_text = true`. `execute_review` must list the `holistic` judgment. `cheap = true` keeps that judgment and skips contributions, ledger, dimensions, and fatal. `holistic_mode` and `holistic_samples` below are the defaults. `rate` must use `apr-fusion-v1`. Put a `consensus` stage between `review` and `rate` when the DAG follows the calibration shape.
+
+```toml
+[[stages]]
+id = "review"
+type = "execute_review"
+depends_on = ["prompt_packets"]
+[stages.params]
+adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+base_url = "http://127.0.0.1:8000/v1"
+model = "local-reviewer"
+api_key_env = "APR_MODEL_API_KEY"
+allow_remote = false
+cheap = true
+judgments = ["holistic"]
+holistic_mode = "forecast"
+holistic_samples = 1
+
+[stages.params.packet_routes]
+holistic = "M0"
+
+[[stages]]
+id = "consensus"
+type = "consensus"
+depends_on = ["review"]
+[stages.params]
+min_independent_routes = 1
+
+[[stages]]
+id = "rate"
+type = "rate"
+depends_on = ["consensus"]
+[stages.params]
+coefficient_set = "apr-fusion-v1"
+```
+
+The fragment assumes a `prompt_packets` stage and a route `M0`. A full review appends `"holistic"` to the other judgments and leaves `cheap` unset. The same `rate` coefficient set still ranks by `forecast-k1` when the forecast panel is present.
+
+### Run it on the public calibration cache
+
+`calibrate-eval run` defaults to `--holistic-mode forecast --holistic-samples 1` and to `--coefficient-set apr-iclr-cap-v2`. The fusion flag is what selects `forecast-k1` and includes the holistic judgment. `--cheap` runs that judgment only.
+
+```bash
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval run \
+  --cache workdir/calibration-eval --mode adapter \
+  --adapter autopaperreview.model_exec:OpenAICompatibleAdapter \
+  --base-url http://127.0.0.1:8000/v1 --model local-reviewer \
+  --coefficient-set apr-fusion-v1 --cheap --holistic-mode forecast --holistic-samples 1
+```
+
+The cache has to be fetched and prepared first. Those commands, and the rule that the report stays outside git, are in [public calibration eval](docs/public-calibration.md).
 
 ## Migrate an existing review package
 
@@ -167,8 +311,9 @@ autopaperreview schema     Export canonical JSON Schema
 autopaperreview templates  Export packaged prompt templates
 autopaperreview plugins    List installed stage types
 autopaperreview doctor     Inspect optional adapter availability
+autopaperreview calibrate  Order rated packages and require same-bin reasons
 autopaperreview calibrate-eval
-                   Compare the declared ICLR formula to public human scores (report only)
+                   Compare a declared score to public human scores (report only)
 ```
 
 ## Design principles
@@ -184,4 +329,56 @@ The built-in network policy validates declared requirements but is not an operat
 
 Command stages inherit an explicit environment-variable allowlist rather than the complete parent environment. Add secret variable names with `inherit_env`; their values affect the cache signature but are not written to command records. Never put secret values in the TOML `env` table because configuration is snapshotted.
 
-See [Architecture](docs/architecture.md), [Stanford SAR comparison](docs/stanford-sar-comparison.md), [Open-source reference stack](docs/oss-reference-stack.md), and [Maintenance policy](docs/maintenance.md).
+## Documentation
+
+| If you want to… | Read |
+| --- | --- |
+| See every feature in detail | [docs/features.md](docs/features.md) |
+| Understand the data model and stages | [docs/architecture.md](docs/architecture.md) |
+| Run the public calibration benchmark | [docs/public-calibration.md](docs/public-calibration.md) |
+| Configure related-work search | [docs/related-work-search.md](docs/related-work-search.md) |
+| Learn the first-read writing contract | [docs/first-read-review.md](docs/first-read-review.md) |
+| Compare with Stanford SAR (paperreview.ai) | [docs/stanford-sar-comparison.md](docs/stanford-sar-comparison.md) |
+| Compare with DeepReviewer, AgentReview, MARG, PaperQA2, and others | [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) |
+| See which open-source tools fit behind adapters | [docs/oss-reference-stack.md](docs/oss-reference-stack.md) |
+| Know what is planned | [docs/roadmap.md](docs/roadmap.md) and [CHANGELOG.md](CHANGELOG.md) |
+| Know how releases are maintained | [docs/maintenance.md](docs/maintenance.md) |
+| Keep real papers out of the repository | [CONFIDENTIALITY.md](CONFIDENTIALITY.md) and [SECURITY.md](SECURITY.md) |
+
+## FAQ
+
+**Do I need a model API?** The fixture and deterministic adapters run the pipeline without one. To call a model, point `OpenAICompatibleAdapter` at an OpenAI-compatible server. Loopback is the default. A remote host needs an explicit network policy.
+
+**Does the manuscript leave the machine?** The network policy defaults to `deny`, and the model endpoint defaults to loopback. A remote call is recorded on the run manifest as `manuscript_left_machine`.
+
+**Can I use it on a paper I was assigned to review?** Check the venue's rule on LLM use in peer review before you do. Many venues forbid sending a confidential submission to a third-party service. This harness keeps the manuscript local unless the project policy allows a remote call. The venue's rule is yours to follow.
+
+**Does it give an overall score?** No score is emitted by default, and the chat adapter does not emit one. `rate` assigns the bin. The default coefficient set, `apr-iclr-cap-v2`, snaps seven dimension bands and fatal caps onto ICLR bins. It is a declared formula. `apr-fusion-v1` ranks by `forecast-k1` when that panel was stored. Venue conclusions are still written per venue from the dimension scores.
+
+**Is it affiliated with ICLR, OpenReview, or Stanford?** Their names appear where this repository compares against published work or reads public data.
+
+## Contributing
+
+Bug reports, questions, and pull requests are welcome. Open an [issue](https://github.com/XR-Lee/AutoPaperReview/issues). A title prefix such as `[idea]`, `[question]`, or `[bench]` is enough. English or Chinese is fine.
+
+Ways to help without a large change:
+
+- Run the [quick start](#quick-start) and say what was confusing.
+- Run [calibrate-eval](docs/public-calibration.md) and share aggregate metrics. Leave out titles, forum ids, and per-paper rows.
+- Add an adapter or stage plugin. The [reference stack](docs/oss-reference-stack.md) lists candidates.
+- Add a venue profile next to `iclr2027` and `aaai2027` in [`src/autopaperreview/profiles/`](src/autopaperreview/profiles).
+
+Never paste a real manuscript, review, rating, or submission id into an issue or a pull request. Use a synthetic example. See [CONFIDENTIALITY.md](CONFIDENTIALITY.md).
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md), then:
+
+```bash
+python3 scripts/check_confidentiality.py
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+Coding agents in this tree should read [AGENTS.md](AGENTS.md) first.
+
+## License
+
+[MIT](LICENSE).
