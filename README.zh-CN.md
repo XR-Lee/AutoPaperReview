@@ -13,18 +13,9 @@
 
 ### 结果一览
 
-留出集上的 Spearman 和 AUC，只列点估计。
+![各系统在留出集上的 Spearman 和 AUC。误差线是 95% 自助法区间。APR Opus 的 AUC 画成点，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
 
-| 系统 | 模型 | n | Spearman | AUC |
-| --- | --- | --- | --- | --- |
-| APR | Opus 5.5 | 14 | 0.851 | 1.000 |
-| OpenJudge | Opus 5.5 | 15 | 0.883 | 0.890 |
-| APR | Grok 4.7 | 15 | 0.761 | 0.800 |
-| OpenJudge | Grok，两次的平均 | 15 | 0.724 | 0.740 |
-| ProReviewer | 未记录 | 15 | 0.327 | 0.560 |
-| Sakana AI Scientist reviewer | 未记录 | 15 | 0.372 | 0.540 |
-
-这些是只算排序分的 `forecast-k1`。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
+只算排序分的 `forecast-k1`。误差线是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 只画点：在已完成的 14 篇上，分数把录用和拒稿完全分开，所以区间是 [1.000, 1.000]。APR Opus 的 n=14，其余行的 n=15，区间很宽。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
 
 <a id="track-a"></a>
 

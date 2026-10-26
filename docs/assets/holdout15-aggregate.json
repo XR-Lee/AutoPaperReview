@@ -1,5 +1,5 @@
 {
-  "note": "Holdout-15 public OpenReview papers. Spearman and Kendall compare each system's score with the mean human official rating. AUC is accept versus reject. Intervals are a 95% paper-level percentile bootstrap with 4000 resamples and seed 20261021, the same procedure as src/autopaperreview/rank_metrics.py. Aggregates only: no paper ids, titles, or review text.",
+  "note": "Holdout-15 public OpenReview papers. Spearman and Kendall compare each system's score with the mean human official rating. AUC is accept versus reject. Intervals are a 95% paper-level percentile bootstrap with 4000 resamples and seed 20261021, the same procedure as src/autopaperreview/rank_metrics.py. Aggregates only: no paper ids, titles, or review text. APR AUC intervals are that bootstrap on docs/assets/holdout15-apr-scores.json. The Opus interval is degenerate because those scores separate accept from reject.",
   "sakana_ai_scientist_reviewer": {
     "n": 15,
     "point": {
@@ -108,6 +108,7 @@
       "spearman": 0.8505,
       "spearman_ci": [0.425, 0.987],
       "auc": 1.0,
+      "auc_ci": [1.0, 1.0],
       "mae": 0.7957,
       "bias": -0.513,
       "cost_per_paper": 0.6645
@@ -117,6 +118,7 @@
       "spearman": 0.7614,
       "spearman_ci": [0.389, 0.939],
       "auc": 0.8,
+      "auc_ci": [0.5185185185185185, 1.0],
       "mae": 1.3302,
       "bias": -0.848,
       "cost_per_paper": 0.1135

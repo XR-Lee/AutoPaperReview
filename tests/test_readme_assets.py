@@ -19,11 +19,13 @@ PNGS = (
     "docs/assets/holdout-ranking.png",
     "docs/assets/annotated-preview.png",
     "docs/assets/forecast-panel.png",
+    "docs/assets/holdout-glance.png",
 )
 PNGS_ZH = (
     "docs/assets/hero.zh-CN.png",
     "docs/assets/holdout-ranking.zh-CN.png",
     "docs/assets/forecast-panel.zh-CN.png",
+    "docs/assets/holdout-glance.zh-CN.png",
 )
 
 
@@ -89,7 +91,7 @@ class ReadmeAssetTests(unittest.TestCase):
             self.assertIn(token, english)
             self.assertIn(token, chinese)
         self.assertNotIn("openreview.net/forum", chinese.lower())
-        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/annotated-preview.png"):
+        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/holdout-glance.zh-CN.png", "docs/assets/annotated-preview.png"):
             self.assertIn(relative, chinese)
 
     def test_chinese_figure_labels_are_allowlisted(self) -> None:
@@ -103,6 +105,35 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assertIsNotNone(HAN.search(svg))
         self.assertIn(r3(0.8505), svg)
         self.assertNotIn("openreview.net", svg.lower())
+        glance = (ROOT / "docs" / "assets" / "holdout-glance.svg").read_text(encoding="utf-8")
+        self.assertIsNone(HAN.search(glance))
+        glance_zh = (ROOT / "docs" / "assets" / "holdout-glance.zh-CN.svg").read_text(encoding="utf-8")
+        self.assertIsNotNone(HAN.search(glance_zh))
+
+    def test_apr_auc_intervals_match_the_anonymized_scores(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(ROOT / "src"))
+        from autopaperreview.public_calibration import roc_auc
+        from autopaperreview.rank_metrics import bootstrap_interval
+
+        scores = json.loads((ROOT / "docs" / "assets" / "holdout15-apr-scores.json").read_text(encoding="utf-8"))
+        aggregate = json.loads(AGGREGATE.read_text(encoding="utf-8"))
+        payload = json.dumps(scores["apr_opus55"] + scores["apr_grok47"]).lower()
+        self.assertNotIn("forum", payload)
+        self.assertNotIn("openreview", payload)
+        self.assertNotIn("title", payload)
+        expected = {"apr_opus55": (14, 1.0), "apr_grok47": (15, 0.8)}
+        stored = aggregate["APR_main_r11_forecast_k1"]
+        for key, (count, auc) in expected.items():
+            rows = scores[key]
+            self.assertEqual(len(rows), count)
+            values = [float(row["rank_score"]) for row in rows]
+            labels = [int(row["accept"]) for row in rows]
+            self.assertEqual(roc_auc(values, labels), auc)
+            interval = bootstrap_interval(values, [0.0] * count, labels, "auc")
+            field = "holdout_opus55" if key.endswith("opus55") else "holdout_grok47"
+            self.assertEqual(stored[field]["auc_ci"], [interval["low"], interval["high"]])
 
 
 if __name__ == "__main__":

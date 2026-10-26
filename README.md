@@ -13,18 +13,9 @@ Version `0.1.10`. Alpha. Python 3.11–3.13. MIT license. Not a substitute for a
 
 ### Results at a glance
 
-Holdout Spearman and AUC. Point estimates only.
+![Holdout Spearman and AUC by system. Error bars are 95% bootstrap intervals. APR Opus AUC is a point at 1.000.](docs/assets/holdout-glance.png)
 
-| System | Model | n | Spearman | AUC |
-| --- | --- | --- | --- | --- |
-| APR | Opus 5.5 | 14 | 0.851 | 1.000 |
-| OpenJudge | Opus 5.5 | 15 | 0.883 | 0.890 |
-| APR | Grok 4.7 | 15 | 0.761 | 0.800 |
-| OpenJudge | Grok, mean of the two runs | 15 | 0.724 | 0.740 |
-| ProReviewer | not recorded | 15 | 0.327 | 0.560 |
-| Sakana AI Scientist reviewer | not recorded | 15 | 0.372 | 0.540 |
-
-These are rank-only `forecast-k1` scores. Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
+Rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). APR Opus AUC is a point: on the 14 finished papers the scores separate accept from reject, so the interval is [1.000, 1.000]. APR Opus has n=14 and the other rows have n=15, and the intervals are wide. Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
 
 <a id="track-a"></a>
 
