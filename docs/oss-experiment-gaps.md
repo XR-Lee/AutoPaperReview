@@ -1,8 +1,8 @@
 # Feature gaps versus stronger open review experiments
 
-This is a review of AutoPaperReview `0.1.6` against stronger open-source and openly documented review experiments. It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist. v0.1.5 implemented the first P0–P2 slice (excerpts, anchors, export gate, execute_review, ledger/agenda, workspace inspect, integrity, matched-setting novelty). v0.1.6 added first-read review writing so comments are self-contained for a reader who has not yet internalized the paper. The remaining holes are live adapters and richer PDF locators.
+This note started as a review of AutoPaperReview `0.1.4`–`0.1.6` on 2026-08-29. The status sections below are updated to `0.1.10` (2026-10-25). It is a decision document, not a claim that this repository should become paperreview.ai, DeepReviewer, or The AI Scientist, and not a claim that AutoPaperReview matches their scores. Versions and paper claims belong to those projects; this repository has not reproduced them.
 
-The comparison date is 2026-08-29. Versions and paper claims belong to those projects; this repository has not reproduced their scores.
+v0.1.5 implemented the first P0–P2 slice (excerpts, anchors, export gate, `execute_review`, ledger/agenda, workspace inspect, integrity, matched-setting novelty). v0.1.6 added first-read review writing. v0.1.7–v0.1.9 added the declared ICLR rating, page renders, format check, visual inspect, and related-work search. v0.1.10 added the OpenAI-compatible adapter, report-only `calibrate-eval`, `apr-iclr-cap-v2`, manuscript PDF annotation, and the locked fusion rank `forecast-k1`. Items below are marked done, partial, or still open. A recommendation that the code now implements is marked superseded as a next step.
 
 Related documents: [Architecture](architecture.md), [Roadmap](roadmap.md), [Stanford SAR comparison](stanford-sar-comparison.md), [Open-source reference stack](oss-reference-stack.md).
 
@@ -16,11 +16,11 @@ Strengths that most generation-first reviewers still lack:
 - A TOML DAG with a stable project run directory, per-stage signatures, atomic promotion, and resume.
 - Deny-by-default network *declaration* (not an OS sandbox) and shell-free commands.
 - Claims, dimension scores, and venue conclusions must cite evidence IDs.
-- No default overall 0–10. Venue conclusions are separate from dimension scores and are not a fitted ICLR map.
+- Venue conclusions stay separate from the seven dimension scores. `rate` defaults to the declared formula `apr-iclr-cap-v2` (snap onto 1/3/5/6/8/10). Opt-in `apr-fusion-v1` ranks by `forecast-k1`. Neither is a fitted ICLR regression.
 - Packaged, versioned route prompts whose file hashes participate in cache signatures.
 - A synthetic end-to-end example, migration, CI on CPython 3.11–3.13, and an honest SAR note.
 
-The core still does not call a model, parse PDF/DOCX, or retrieve live literature. That boundary is intentional. The gaps below are about making the *contract* executable and auditable, not about absorbing another project's agent loop.
+The core calls a model only when a stage selects the bundled OpenAI-compatible adapter. It does not parse PDF or DOCX into the review schema. Live literature is the optional `related_work_search` stage (arXiv, OpenAlex, Semantic Scholar), not a bundled search package. The gaps below are what is still missing from the contract, not a plan to absorb another project's agent loop.
 
 ## Reference experiments
 
@@ -40,64 +40,58 @@ The core still does not call a model, parse PDF/DOCX, or retrieve live literatur
 | [The AI Scientist](https://sakana.ai/ai-scientist-first-publication/) | Full research loop plus an internal reviewer; still hallucinates citations | Reproducibility and citation-integrity routes; repeated-run checks | Automating paper *writing* in this repo |
 | ReviewEval / TreeReview / PaperBench / CORE-Bench | Review *quality* metrics; hierarchical questions; artifact replication benches | Evaluate the review package (coverage, constructiveness, unsupported claims); first-read notes already encode constructiveness as restatement + quote + feasible repair | Replacing evidence hashes with LLM-as-judge scores |
 
-DeepReviewer 2.0's own comparison table is the most useful framing: a fluent "full review" is not the same output as an evidence-bound package with traceable anchors. AutoPaperReview already chose the second target. The work left is to make that target *complete and executable*.
+DeepReviewer 2.0's own comparison table is the most useful framing: a fluent "full review" is not the same output as an evidence-bound package with traceable anchors. AutoPaperReview already chose the second target. Much of the executable slice has landed. The work left is the holes marked open below, not a second hosted reviewer.
 
-## Priority 0 — the current contract is incomplete
+## Priority 0 — contract completeness
 
-v0.1.5 ships the first executable slice of items 1–4 and 6–8: snapshot excerpts, typed anchors, a report export gate, literature attached to prompt packets, honest `doctor`/`init`, and `execute_review` with bundled deterministic/fixture adapters. An OpenAI-compatible chat adapter is now bundled for those judgments and for visual page images. `pydantic_ai` is still not an adapter. The synthetic example still imports fixture JSON.
+The 0.1.4 heading "the current contract is incomplete" is superseded as a description of `0.1.10`. The slice that made records executable has landed. What remains is named under each item.
 
-### 1. The harness cannot produce a review
+### 1. Produce a review from `run` — done for one adapter
 
-`prompt_packet` still only writes Markdown. `execute_review` can now call the bundled OpenAI-compatible adapter, which snapshots the prompt and the raw response and validates them into canonical records. A schema failure, including an empty contribution or ledger list, retries once and then fails the stage. A missing rating dimension after anchor resolution fails the same way. Transport errors retry separately. `bilingual = true` adds a `zh-Hans` pass. The synthetic example still imports a finished `review_input.json`. `doctor` lists `pydantic_ai` as an optional module; it is not an adapter.
+`execute_review` calls `OpenAICompatibleAdapter`, which snapshots the prompt and the raw response and validates them into canonical records. A schema failure, including an empty contribution or ledger list, retries once and then fails the stage. A missing rating dimension after anchor resolution fails the same way. Transport errors retry separately. `bilingual = true` adds a `zh-Hans` pass. `OpenAICompatibleVisionInspector` sends rendered page images. Fixture JSON and `DeterministicManuscriptAdapter` remain equal options. The synthetic example still imports `review_input.json` and does not call a model.
 
-PydanticAI stays optional. The remaining hole in this item is a provider-neutral SDK and a seed field, not the absence of any model call.
+Still open: a provider-neutral SDK, and a seed on the model call. `doctor` lists `pydantic_ai` as `importable, not bundled` or `not installed`. It is not an adapter. That absence is no longer "the harness cannot produce a review."
 
-### 2. Retrieved snapshots have no citable content
+### 2. Citable snapshot content — partial
 
-`RetrievedSourceSnapshot` stores title, arXiv ID, date, and `content_kind`, but not an excerpt, abstract text, or content hash. `snapshots_to_records` then invents evidence of the form "abstract snapshot of {title}". A claim can cite `E-RW1` without anyone being able to re-read what was retrieved.
+`RetrievedSourceSnapshot` has optional `excerpt`, `excerpt_hash`, and `raw_artifact`. The excerpt hash must match the excerpt. The export gate can set `require_excerpt_on_snapshots`. When the excerpt is empty, `snapshots_to_records` still uses a claim of the form `{content_kind} snapshot of {title}`. A snapshot used as evidence should carry the passage. That requirement is not automatic.
 
-PaperQA2 and OpenScholar treat passage text as the evidence. DeepReviewer 2.0 keeps retrieved comparators in an explicit trail. Add optional `excerpt`, `excerpt_hash`, and `raw_artifact` fields; require one of them when a snapshot is used as evidence.
+### 3. Locators — partial
 
-### 3. Locators are display strings
+`Anchor` exists, with kinds `display`, `text_offset`, `quote`, `pdf_region`, `docx_paragraph`, and `external_snapshot`. The excerpt hash is checked against the excerpt. `ReviewIssue.location` and `EvidenceRecord.locator` are still free-form strings. Annotation finds a quote in the PDF text and draws a highlight; it does not store a bbox as the database. The roadmap families for table cells, OOXML, and image regions are not shipped. This is still more urgent than ObservationRecord for auditability, and it is not done.
 
-`ReviewIssue.location` and `EvidenceRecord.locator` are free-form (`"Methods and Results"`). DeepReviewer 2.0 stores `(page, line-span or bbox)`. OpenAIReview / reviewer2 fuzzy-match quotes to paragraphs. Without typed locators, authors cannot jump to the span and excerpt hashes cannot be checked.
+### 4. Export gate — done
 
-This is already on the roadmap. Open experiments show it is more urgent than ObservationRecord for *auditability*.
+`report` can refuse an incomplete package. The synthetic example sets minimums for issues, claims, anchored issues, literature snapshots, novelty assessments, ledger, integrity, anchors, first-read notes, and quotes. The defaults on the gate are zero, so a project that does not turn the checks on can still export a thin package. The gate itself shipped in 0.1.5. The 0.1.6 writeup that said there was no gate is superseded.
 
-### 4. There is no export gate
+### 5. Multi-specificity queries — done for the generator
 
-`report` succeeds on an empty package. DeepReviewer 2.0 refuses to export until schema, retrieval, and anchored-annotation budgets are met. AutoPaperReview already refuses silent bilingual fallback; it should likewise refuse a "complete" report that has claims without evidence, literature routes without snapshots, or zero issues and zero claims.
+As of 0.1.4, `literature_grounding` emits distinct narrow / mid / broad variants instead of appending `" 2"`. It is still deterministic. `related_work_search` adds five keyword families plus name-only lookups. Live query rewriting is not in core.
 
-### 5. Related-work queries are not multi-specificity
+### 6. Literature on the review routes — done
 
-SAR generates queries at several specificities. The early v0.1 generator was a title + bag-of-words template and, when `max_queries_per_perspective > 1`, appended `" 2"`. As of 0.1.4 it emits distinct narrow / mid / broad variants. It is still deterministic and LLM-free. Live query rewriting belongs in a declared retriever, not in core.
+In the synthetic DAG, `prompt_packets` depends on `literature` and sets `include_literature = true`. When that upstream package is present, a literature route attaches its queries and snapshots, and `include_literature = true` attaches them to the other routes as well.
 
-### 6. Literature output does not reach the review routes
+### 7. Specialist prompts — done on `init`
 
-In the synthetic DAG, `literature` and `prompt_packets` are siblings. The M3 SAR packet never receives the snapshot fixture. A grounded-review route that cannot see retrieved sources will hallucinate related work.
-
-Packets for `kind = literature` should attach query and snapshot artifacts (or refuse `include_source_text` without them).
-
-### 7. Packaged specialist prompts are unused
-
-`closed_book_v1`, `metric_protocol_v1`, and `sar_grounded_review_v1` are wired. `literature_audit_v1`, `reproducibility_v1`, and `visual_qa_v1` are shipped but absent from `init` and the synthetic example. MARG's result — specialist reviewers beat a generalist — only holds if those routes actually run.
+`init` mounts `closed_book_v1`, `metric_protocol_v1`, `sar_grounded_review_v1`, `literature_audit_v1`, `reproducibility_v1`, `figure_grounded_v1`, `contribution_audit_v1`, `first_read_v1`, and `visual_qa_v1`. The synthetic example runs M0, M2, M3, M4 (literature audit), M5 (reproducibility), and M6 (first-read). It does not run the visual routes. The 0.1.6 claim that those prompts were absent from `init` is superseded.
 
 ## Priority 1 — artifact-aware integrity (ResearchArena)
 
 Zhang, Wang, Galhotra, and Cardie review 117 agent-written papers with a 9-dimension, artifact-aware protocol. Under SAR the picture is optimistic; under artifact-aware review scores drop (Claude Code −0.85, Codex −0.42, Kimi Code −0.86). Experimental rigor is the lowest dimension. Failure modes are fabricated results, underpowered experiments, and plan/execution mismatch. Reference integrity is checked against arXiv, Semantic Scholar, and Crossref. Reviewer agents get *read-only* workspace access.
 
-This repository already cites that paper as a reason not to clone SAR's score. The missing product is the records:
+This repository already cites that paper as a reason not to clone SAR's score. The integrity family shipped in 0.1.5. The "add these records" recommendation is superseded. What is still missing is a citation-support verdict and a layout parser.
 
-| ResearchArena dimension | Current AutoPaperReview surface |
+| ResearchArena dimension | AutoPaperReview at 0.1.10 |
 |---|---|
-| Novelty / soundness / significance / clarity | Partial overlap with SAR dimensions |
-| Reproducibility | Prompt only (`reproducibility_v1.md`); no structured release-package check |
-| Experimental rigor | Prompt only (`metric_protocol_v1.md`); no protocol/counterexample records |
-| References | Query + snapshot metadata |
-| Reference integrity | None (no DOI/arXiv resolve, no "citation does not support sentence") |
-| Results integrity | None (no paper-vs-`results.json` / table / log mismatch) |
+| Novelty / soundness / significance / clarity | Seven SAR dimensions, plus matched-setting `novelty` tags |
+| Reproducibility | `reproducibility_v1` route and `reproducibility_attestation` on `integrity` |
+| Experimental rigor | `metric_protocol_v1` route. No separate protocol/counterexample record type |
+| References | `literature_grounding` queries and `related_work_search` (arXiv, OpenAlex, Semantic Scholar) |
+| Reference integrity | `reference_integrity` records whether a snapshot has a DOI or arXiv id. It does not call a registry. `related_work_search` does the live metadata lookup. There is no "this sentence is not supported by the cited paper" verdict |
+| Results integrity | `IntegrityKind.results_integrity` compares one manuscript accuracy percentage with `accuracy` in a workspace `results.json`. It is not a general table parser |
 
-Do **not** replace the seven SAR dimensions. Add an optional integrity family (`reference_integrity`, `results_integrity`, `reproducibility_attestation`) bound to artifact hashes. Workspace inspection must be read-only and must not mutate the manuscript or run cache.
+Do **not** replace the seven SAR dimensions. Workspace inspection stays read-only.
 
 The AI Scientist's own post-mortem (wrong citations, missing figures, unaudited numbers) is the same gap from the generator side.
 
@@ -105,51 +99,51 @@ The AI Scientist's own post-mortem (wrong citations, missing figures, unaudited 
 
 DeepReviewer 2.0's output is `Y = (R, A, P, N)`: structured report, anchored annotations, prioritized repair plan, novelty/value assessment. Stage I builds a manuscript-only claim–evidence–risk ledger and an investigation agenda. Stage II retrieves under a *matched-setting* gate (same task, dataset, metric) and writes anchors. Export is gated.
 
-AutoPaperReview already has `R`-like fields (`ReviewClaim`, issues, `required_action`, `acceptance_gate`) and query/snapshot hooks. It is missing:
+AutoPaperReview already has `R`-like fields (`ReviewClaim`, issues, `required_action`, `acceptance_gate`) and query/snapshot hooks. Status of the 0.1.6 gap list:
 
-1. **Claim–evidence–risk ledger** — what the paper claims, what in-paper evidence is supposed to support it, and residual risk. This is the right precursor to ObservationRecord: an immutable pre-consensus object.
-2. **Investigation agenda** — typed questions that drive literature_grounding instead of three static templates.
-3. **Matched-setting novelty tags** — `supported` / `overlap` / `unclear` / `not_comparable`, with comparability recorded. A paper on a different dataset must not count as novelty overlap.
-4. **Typed anchors** — page + paragraph/line or bbox, plus excerpt hash.
-5. **Export budgets** — minimum anchored notes, minimum literature checks, no export if major claims lack anchors.
+1. **Claim–evidence–risk ledger** — done. The `ledger` stage is in the synthetic DAG and in `init`.
+2. **Investigation agenda** — done. The `agenda` stage feeds `literature_grounding`.
+3. **Matched-setting novelty tags** — done. Tags are `supported`, `overlap`, `unclear`, and `not_comparable`, with task, dataset, and metric flags.
+4. **Typed anchors** — partial. See Priority 0 item 3. `Anchor` shipped; free-form `location` remains; a bbox is not the database.
+5. **Export budgets** — done as optional `report` gate flags. Defaults are off.
 
-Do not take MinerU, PASA, or the MCP agent loop into core. Map those behind parser and retriever adapters.
+Do not take MinerU, PASA, or the MCP agent loop into core. Map those behind parser and retriever adapters. The "missing ledger / agenda / novelty / export gate" recommendation is superseded. The anchor hole is not.
 
 ## Priority 3 — review process features (optional stages)
 
 Worth having as *stages*, not as a new framework:
 
-- **Author rebuttal and area-chair meta-review** (AgentReview). `RouteKind.human` exists but has no handler. A human stage should pause for a JSON/Markdown drop and record the attestor.
-- **Dissent-preserving consensus** (MARG + the existing roadmap). The current stage picks one representative, counts distinct `route_id`s, and *drops* groups below `min_independent_routes`. Opposition and contradiction are not first-class.
-- **Review-quality eval** (ReviewEval): factuality of the review, constructiveness, unsupported claims. v0.1.6 ships the writing contract and optional first-read/quote budgets; Promptfoo stays external and deterministic checks remain the release gate. See [first-read review writing](first-read-review.md).
-- **Venue checklists**, not only `VenueConclusion` labels. ICLR/NeurIPS/ARR/TMLR have different required questions (code, limitations, compute, dual submission). Bind checklist answers to evidence IDs.
-- **Citation accuracy pass** (reviewer2, CiteME, CiteCheck): resolve each bibliography entry; test whether the citing sentence is supported.
+- **Author rebuttal and area-chair meta-review** (AgentReview). Still open. `RouteKind.human` has no handler. `holistic_mode = "rebuttal"` is a simulated discussion inside one model call (`rebuttal-k2`). It does not pause for an author drop or record an attestor. That mode does not close this item.
+- **Dissent-preserving consensus** (MARG + the existing roadmap). Still open. The stage picks one representative, counts distinct `route_id`s, and drops groups below `min_independent_routes`. Opposition and contradiction are not first-class.
+- **Review-quality eval** (ReviewEval). Partial. v0.1.6 ships the writing contract and optional first-read/quote budgets. `calibrate-eval` compares a declared score with public human scores and does not fit the formula. Promptfoo stays external. See [first-read review writing](first-read-review.md) and [public calibration eval](public-calibration.md).
+- **Venue checklists**. Partial. `format_check` pins `iclr2027` and `aaai2027` (page limits, template markers, anonymity metadata). It is not the full ICLR/NeurIPS/ARR/TMLR question list (code, limitations, compute, dual submission).
+- **Citation accuracy pass** (reviewer2, CiteME, CiteCheck). Partial. `related_work_search` resolves bibliography entries by title, arXiv id, and DOI, and can cap a missing pre-deadline neighbour. It does not test whether the citing sentence is supported.
 
-Fine-tuned critic models (OpenReviewer, CycleReviewer, DeepReviewer-14B) belong in `doctor` as optional adapters. They are not a reason to change the canonical schema.
+Fine-tuned critic models (OpenReviewer, CycleReviewer, DeepReviewer-14B) belong behind an adapter, not in the canonical schema. `doctor` does not list those weights.
 
 ## Priority 4 — document and visual understanding
 
-`include_source_text` and `literature_grounding` are UTF-8 text only. Real submissions are PDF or DOCX.
+`include_source_text` is UTF-8 text. `calibrate-eval` can extract text with `pdftotext`, `pypdfium2`, or `pypdf` when one of those is installed. That extraction is not a layout parser, and the core schema still does not ingest PDF or DOCX structure.
 
-- Parser adapter (Docling first, GROBID as academic-PDF sidecar, PaperMage if page entities are required). Dual-parser disagreement stays as two artifacts until adjudicated.
-- `visual_qa_v1.md` remains layout QA (clipping, broken tables). Scientific reading of plots, diagrams, and photos is `figure_grounded_v1`: inspect the PDF page, cite a visible mark that is not in the caption. Prompt packets now attach a sibling-PDF inventory. Rendering page PNGs into hashed artifacts is still optional.
-- Quote excerpts should be hashed and checked against the parsed text.
+- Parser adapter (Docling first, GROBID as academic-PDF sidecar, PaperMage if page entities are required). Still open. Dual-parser disagreement stays as two artifacts until adjudicated.
+- Page images and visual routes. Shipped, so "rendering page PNGs is still optional" is superseded as a gap. `render_pages` writes hashed PNGs, including an optional supplement as `S1`, `S2`, ... . `visual_qa_v1` is layout QA. `figure_grounded_v1` requires a visible mark that is not the caption. `visual_inspect` accepts findings that cite the page-image hash. `init` mounts both visual routes.
+- Quote excerpts. The stored excerpt hash must match the excerpt. The chat adapter can accept a manuscript span after Unicode normalization, ligatures, a line-break hyphen, collapsed whitespace, or a fuzzy word window at similarity 0.90. Annotation searches the PDF text, including small wording gaps. None of that is a check against a parsed layout tree.
 
 ## Priority 5 — internal quality
 
 These are optimizations of code that already shipped.
 
-| Issue | Why it matters |
+| Issue | Status at 0.1.10 |
 |---|---|
-| Bilingual fill is a fixture phrase table plus word substitution | Long review prose now fails instead of becoming word-salad, and unpaired Markdown/PDF is refused. Short fixture phrases can still be auto-filled. Real papers still need human or model `LocalizedText`. |
-| `strengths` / `acceptance_gate` are `dict[str, list[str]]` | Inconsistent with `LocalizedText` on claims and issues. |
-| `init` writes a three-stage stub | No routes, no prompts, no literature, no bilingual report. First-run UX under-sells the product. |
-| `doctor` lists adapters that are not implemented | Misleading. Report "not bundled" vs "importable". |
-| `excerpt_hash` is never verified | The field is ornamental. |
-| Network policy is declaration-only | Documented, but command stages can still open sockets. Container/sandbox notes should be in `init` output. |
-| Consensus conflicts use exact model equality | Two routes that phrase the same claim differently explode; two that disagree on severity silently pick `max(severity)`. |
-| Tests are synthetic-only | No frozen real-paper fixture, no review-quality regression, no parser contract tests. |
-| Independence = distinct `route_id` | Two prompts from the same model and seed are not independent reviewers. |
+| Bilingual fill is a fixture phrase table plus word substitution | Partially fixed in 0.1.6. Long review prose fails closed, and unpaired Markdown/PDF is refused. Short fixture phrases can still be auto-filled. Real papers still need human or model `LocalizedText`. |
+| `strengths` / `acceptance_gate` are `dict[str, list[str]]` | Still open. Inconsistent with `LocalizedText` on claims and issues. |
+| `init` writes a three-stage stub | Superseded as a stub. `init` writes the specialist routes and prompts, ledger, agenda, workspace inspect, a deterministic `execute_review`, integrity, consensus, and a report. It does not add `literature_grounding`, `novelty`, or `rate`. |
+| `doctor` lists adapters that are not implemented | Superseded. It reports `importable, not bundled` or `not installed`. |
+| `excerpt_hash` is never verified | Superseded for the hash itself: a stored hash that does not match the excerpt is rejected. Checking the excerpt against parsed PDF structure is still open (Priority 4). |
+| Network policy is declaration-only | Still open. Command stages can open sockets. The policy is not an OS sandbox. |
+| Consensus conflicts use exact model equality | Still open. Two routes that phrase the same claim differently stay split; severity takes the max. |
+| Tests are synthetic-only | Still the policy. No frozen real-paper fixture. `calibrate-eval` scores public papers only in a gitignored cache. |
+| Independence = distinct `route_id` | Still open. Two prompts from the same model and seed are not independent reviewers. The forecast panel's three seats are one model call, not three independence groups. |
 
 ## What this repository should not become
 
@@ -158,7 +152,7 @@ Keep the [scope guard](roadmap.md#scope-guard):
 - No hosted multi-tenant service or manuscript-text telemetry.
 - No LangGraph / Prefect / ChatArena in core.
 - No vector index as the review database.
-- No bundled Tavily, OpenAlex, or PaperQA dependency.
+- No bundled Tavily, OpenAlex, or PaperQA dependency. `related_work_search` calls arXiv, OpenAlex, and Semantic Scholar over HTTP when the stage asks for live retrieval. Those clients are not third-party packages.
 - No fitted ICLR regression and no reproduced Spearman/AUC claims.
 - No silent semantic merge of issues.
 - Do not treat manuscript-only SAR scores as acceptance decisions (ResearchArena).
@@ -167,31 +161,31 @@ Keep the [scope guard](roadmap.md#scope-guard):
 
 Order is by *auditability per unit of schema change*, not by research fashion.
 
-| Slice | Ships | Why now |
+| Slice | Ships | Status at 0.1.10 |
 |---|---|---|
-| **A. Contract completeness** | Snapshot excerpt + hash; report export gate; literature attached to literature-route packets; honest `doctor` / `init` | Makes 0.1.x records mean what they say |
-| **B. Typed locators** | Discriminated page / paragraph / quote / external-snapshot locators (already designed in the roadmap) | DeepReviewer 2.0 and reviewer2 show this is the audit boundary |
-| **C. Integrity family** | Optional `reference_integrity` and `results_integrity` records; read-only workspace inspect stage; Crossref/arXiv resolve adapter | ResearchArena's actual finding |
-| **D. Thin model adapter** | Optional PydanticAI (or equivalent) stage: raw response artifact → canonical records | Makes `run` able to review a new manuscript |
-| **E. Observation + dissent** | Immutable observations; `ConsensusDecision` with support / oppose / abstain | Current consensus is a representative picker |
-| **F. Parser + visual** | Docling adapter; rendered-page QA records | Unlocks PDF submissions without changing the database |
+| **A. Contract completeness** | Snapshot excerpt + hash; report export gate; literature attached to literature-route packets; honest `doctor` / `init` | Done in 0.1.5. An empty snapshot excerpt can still become a title line (Priority 0 item 2). |
+| **B. Typed locators** | Discriminated page / paragraph / quote / external-snapshot locators | Partial. `Anchor` covers several of those kinds. Free-form `location` remains. Table-cell, OOXML, and image-region locators are not shipped. |
+| **C. Integrity family** | Optional `reference_integrity` and `results_integrity` records; read-only workspace inspect; Crossref/arXiv resolve | Partial. The records and `workspace_inspect` shipped in 0.1.5. arXiv, OpenAlex, and Semantic Scholar metadata search shipped in 0.1.9. Crossref and a citation-support verdict did not. |
+| **D. Thin model adapter** | Optional stage: raw response artifact → canonical records | Done as `OpenAICompatibleAdapter` (#13), not as PydanticAI. The "no model call" recommendation is superseded. |
+| **E. Observation + dissent** | Immutable observations; `ConsensusDecision` with support / oppose / abstain | Open. Consensus is still a representative picker. |
+| **F. Parser + visual** | Docling adapter; rendered-page QA records | Partial. `render_pages`, `format_check`, `visual_inspect`, and `annotate` shipped. No Docling (or other layout) adapter. |
 
-Slice A is the only one that should land before ObservationRecord if the goal is a usable 0.1 line. B and C are the first *scientific* upgrades. D is what users will assume already exists. E and F stay on the published roadmap.
+The 0.1.4 advice that only slice A should land before ObservationRecord is superseded: A and D have landed, and parts of B, C, and F have landed with them. The schema milestone that is still next is E. The open holes inside B, C, and F stay on the [roadmap](roadmap.md).
 
-## Honest scorecard (0.1.4)
+## Honest scorecard (0.1.10)
 
 | Capability | SAR | DeepReviewer 2.0 | ResearchArena PR | AutoPaperReview |
 |---|---|---|---|---|
 | Local canonical package + hash resume | No | Partial (export package) | Experiment scripts | **Yes** |
 | Evidence IDs required on claims | No | Yes (anchors) | Yes (artifact check) | **Yes** |
-| Venue conclusions without a fake 0–10 | ICLR 0–10 when selected | Overall judgment | ICLR 0–10 + 9 dims | **Yes** (0.1.3) |
-| PDF parse + page anchors | LandingAI ADE | MinerU + page/bbox | Agent workspace | No |
-| Live literature | Tavily + arXiv | PASA + matched-setting | arXiv / S2 / Crossref | Query + offline snapshot |
-| Snapshot *content* as evidence | Summaries | Retrieved comparators | Lookups | Metadata only |
-| Artifact / workspace inspect | No | No (manuscript-centric) | **Yes, read-only** | Prompt only |
-| Export gate / coverage budget | No | **Yes** | Human meta-review | No |
-| Model call in-tree | Hosted | Agent loop | CLI agents | No (by design) |
-| Multi-agent social simulation | No | No | No | No (out of scope) |
+| Venue conclusions without a fitted 0–10 | ICLR 0–10 when selected | Overall judgment | ICLR 0–10 + 9 dims | Venue conclusions (0.1.3). `apr-iclr-cap-v2` snaps a declared bin. `forecast-k1` is an opt-in model rank, not a fitted regression |
+| PDF parse + page anchors | LandingAI ADE | MinerU + page/bbox | Agent workspace | Page PNGs, format check, quote annotation. No layout parser. `Anchor` can store `pdf_region` |
+| Live literature | Tavily + arXiv | PASA + matched-setting | arXiv / S2 / Crossref | Optional arXiv, OpenAlex, and Semantic Scholar. Not Tavily or Crossref. A failed search does not lower the score |
+| Snapshot *content* as evidence | Summaries | Retrieved comparators | Lookups | Optional excerpt and hash. Empty excerpt falls back to a title line |
+| Artifact / workspace inspect | No | No (manuscript-centric) | **Yes, read-only** | `workspace_inspect` and `integrity` |
+| Export gate / coverage budget | No | **Yes** | Human meta-review | Optional budgets on `report` |
+| Model call in-tree | Hosted | Agent loop | CLI agents | Optional OpenAI-compatible adapter. The synthetic example uses fixture JSON |
+| Simulated reviewers | No | No | No | One call can simulate a forecast, rebuttal, matched, or mixed-role panel. That is the fusion rank, not a ChatArena loop |
 | Trained critic weights | Hosted regression | Optional 7B/14B/196B | No | No (by design) |
 
-The remaining work that *this* repository should close is the left-hand side of DeepReviewer 2.0 (anchors, ledger, matched-setting, export gate) plus the ResearchArena integrity checks, all behind the existing adapter boundary. The remaining work it should refuse is a second hosted reviewer.
+The 0.1.4 scorecard marked PDF anchors, live literature, snapshot content, workspace inspect, the export gate, and in-tree model calls as absent. Those cells are updated above. The work this repository should still close is the open locator, citation-support, parser, and dissent items. The work it should refuse is a second hosted reviewer.

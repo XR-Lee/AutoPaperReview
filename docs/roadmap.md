@@ -4,12 +4,17 @@ The roadmap separates the implemented `0.1.x` contract from planned data-model a
 
 ## v0.1 baseline
 
-Implemented in the current package:
+Implemented in the current package (`0.1.10`):
 
 - Strict canonical review, artifact, stage, and run models.
 - TOML configuration with DAG validation.
 - A project run directory, per-stage signatures, output validation, resume, and atomic promotion.
 - Built-in ingest, command, prompt-packet, legacy-import, exact-normalized consensus, and report stages.
+- Contract stages from 0.1.5: `execute_review`, `ledger`, `agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, snapshot excerpts, `Anchor`, and a report export gate.
+- `literature_grounding`, and `related_work_search` against arXiv, OpenAlex, and Semantic Scholar when that stage is configured.
+- `render_pages`, `format_check` (`iclr2027`, `aaai2027`), `visual_inspect`, and `autopaperreview annotate` for a manuscript PDF.
+- `rate` (`apr-iclr-cap-v2` by default) and `calibrate_batch`. Opt-in `apr-fusion-v1` ranks by the locked candidate `forecast-k1`.
+- An OpenAI-compatible chat adapter for text judgments and page images. Fixture JSON and the deterministic adapter remain equal options.
 - Deny-by-default declared network policy.
 - Entry-point stage plugins.
 - Legacy bare-issue and package migration.
@@ -18,30 +23,34 @@ Implemented in the current package:
 Known v0.1 constraints:
 
 - Route output enters the pipeline as `ReviewIssue`; there is no immutable raw observation entity.
-- Evidence and issue locations are free-form strings.
+- `ReviewIssue.location` is still a free-form string. An optional `Anchor` can record `display`, `text_offset`, `quote`, `pdf_region`, `docx_paragraph`, or `external_snapshot`, and its excerpt hash must match the excerpt. Table-cell, OOXML, and image-region locators from the typed-locator milestone are not shipped. Excerpt checks in the chat adapter are against manuscript text, not a layout parser.
 - Stage handlers have versions and Pydantic parameter validation, but plugins still lack a complete versioned adapter contract and capability manifest.
-- Consensus chooses one representative record and records support, but opposition and contradiction are not first-class.
+- Consensus chooses one representative record and records support, but opposition and contradiction are not first-class. Independence is distinct `route_id`s.
 - Declared network policy is not an operating-system sandbox.
-- Parser, model, retrieval, rendered-document QA, release packaging, and journal-platform adapters are not built in.
+- A PDF/DOCX layout parser and journal-platform import/export are not built in. `RouteKind.human` has no stage handler.
 
 ## Priority after 0.1.3
 
-The four data-boundary milestones below remain the schema work. Open experiments change the *order of the next executable slices*. The full comparison is [feature gaps versus stronger open experiments](oss-experiment-gaps.md).
+The four data-boundary milestones below remain the schema work. The comparison that set their order is [feature gaps versus stronger open experiments](oss-experiment-gaps.md), updated through `0.1.10`.
 
-v0.1.5 shipped the first executable slice of items 1–4: snapshot excerpts, `Anchor`, export gate, literature attached to prompt packets, honest `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with bundled deterministic/fixture adapters. An OpenAI-compatible chat adapter now runs those judgments inside one `run`. PydanticAI is still not bundled.
+Shipped, and no longer the next slice:
 
-v0.1.6 shipped first-read review writing: optional `FirstReadNote`, a packaged writing contract prepended to prompt packets, reader-facing report prose, and optional export-gate checks for restated arguments and quotes. See [first-read review writing](first-read-review.md).
+- v0.1.5: snapshot excerpts, `Anchor`, export gate, literature on prompt packets, `doctor`/`init`, `ledger`/`agenda`, `workspace_inspect`, `integrity`, matched-setting `novelty`, and `execute_review` with deterministic and fixture adapters.
+- v0.1.6: first-read review writing. See [first-read review writing](first-read-review.md).
+- v0.1.7–0.1.8: declared ICLR rating `apr-iclr-cap-v1`, page renders, format check, visual inspect, AAAI-27 profile.
+- v0.1.9: related-work search and retrieval caps. The confidentiality check landed in that same release.
+- v0.1.10: OpenAI-compatible adapter, report-only `calibrate-eval`, `apr-iclr-cap-v2` (with `math.fsum` so Python 3.11 snaps the same bins as 3.12 and 3.13), the fusion rank now locked to `forecast-k1`, and manuscript PDF annotation. PydanticAI is still not an adapter.
 
-Remaining after 0.1.6:
+Still open after 0.1.10:
 
-1. Richer locator families and excerpt verification against parsed PDF/DOCX text.
-2. Live citation resolve (Crossref/arXiv) behind a declared adapter.
-3. Optional model-execution adapter that snapshots prompts and raw responses. The OpenAI-compatible adapter does this for the text judgments and for visual page images. Richer provider SDKs are still out of scope.
-4. Then ObservationRecord, dissent-preserving consensus, parser/visual adapters, and journal-platform adapters as already designed.
+1. The rest of the typed-locator family, and excerpt verification against parsed PDF/DOCX text. Quote search for annotation is not that parser.
+2. A citation-support check (the citing sentence against the retrieved paper). Related-work search already resolves arXiv, OpenAlex, and Semantic Scholar metadata. Crossref is not a client.
+3. A provider-neutral model SDK and a seed on the model call. The OpenAI-compatible adapter already snapshots prompts and raw responses for text judgments and visual page images.
+4. ObservationRecord, dissent-preserving consensus, a parser adapter, and journal-platform adapters, as designed below.
 
 Do not take MinerU, PASA, Tavily, ChatArena, a vector index, or a fitted ICLR map into core.
 
-`calibrate-eval` measures the declared formula against public human scores (Spearman, MAE, bin agreement, accept/reject AUC, and score spread). The measurement is report-only. It must not be used to update weights, caps, or bins. Cached manuscripts and forum ids stay outside git. See [public calibration eval](public-calibration.md).
+`calibrate-eval` measures a declared score against public human scores (Spearman, Kendall tau-b, MAE, bin agreement, accept/reject AUC, a bin confusion table, and score spread). The default formula is `apr-iclr-cap-v2`. `--coefficient-set apr-fusion-v1` ranks by `forecast-k1` and does not fit that rank. The measurement must not be used to update weights, caps, bins, or the locked candidate. Cached manuscripts and forum ids stay outside git. See [public calibration eval](public-calibration.md).
 
 ## Observation records
 
@@ -136,9 +145,9 @@ Acceptance criteria:
 After the four data-boundary milestones above:
 
 - Parser adapters with dual-parser comparison and extraction QA.
-- External-source snapshot and literature retrieval adapters. v0.1.1 ships query generation, snapshot records, and an optional declared retriever hook; it does not add Tavily, OpenAlex, PaperQA, a vector index, or a hosted search service.
-- Typed model-execution adapters with prompt/response provenance.
-- Rendered PDF/DOCX structural and visual QA records.
+- External-source snapshot and literature retrieval adapters. v0.1.1 shipped query generation and snapshot records. v0.1.9 added optional live metadata search (arXiv, OpenAlex, Semantic Scholar) without a Tavily, OpenAlex, or PaperQA package dependency, a vector index, or a hosted search service. A citation-support verdict is still open.
+- Typed model-execution adapters with prompt/response provenance. The OpenAI-compatible adapter covers one chat API. A versioned adapter contract for other providers is still the milestone above.
+- Rendered PDF/DOCX structural and visual QA records. v0.1.7 shipped page renders, a format checklist, and visual findings that cite the page-image hash. v0.1.10 annotates cited quotes on a manuscript PDF. A layout parser is still open.
 - Release manifests that bind QA attestations to exact artifact hashes.
 - Optional durable workflow runner for multi-day or approval-heavy reviews.
 - OpenReview and OJS import/export adapters.
