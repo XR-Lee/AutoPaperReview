@@ -745,10 +745,10 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
     width, height = 1480, 980
     image = Image.new("RGB", (width, height), PAPER)
     draw = ImageDraw.Draw(image)
-    draw.text((48, 32), "Holdout-15  ·  排序分与人类评分的一致性", font=_cjk(30), fill=INK)
+    draw.text((48, 32), "Holdout-15  ·  排序分和人类评分", font=_cjk(30), fill=INK)
     subtitle = _wrap_chars(
         draw,
-        "同一批 15 篇公开 OpenReview 论文。误差线为 95% 自助法区间（4000 次重抽样，种子 20261021）。",
+        "同一批 15 篇公开 OpenReview 论文。误差线是 95% 自助法区间（重抽样 4000 次，种子 20261021）。",
         _cjk(16),
         width - 96,
     )
@@ -758,8 +758,8 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
         y += 24
 
     panels = [
-        ("Spearman · 相对人类平均评分", "spearman", "spearman_ci", -0.25, 1.0),
-        ("AUC · 接收相对拒稿", "auc", "auc_ci", 0.25, 1.0),
+        ("Spearman · 和人类均分的相关性", "spearman", "spearman_ci", -0.25, 1.0),
+        ("AUC · 录用对拒稿", "auc", "auc_ci", 0.25, 1.0),
     ]
     top = 188
     bottom = 720
@@ -787,7 +787,7 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
         if key == "auc":
             chance = y_of(0.5)
             draw.line((plot_left, chance, plot_right, chance), fill=(196, 164, 132), width=1)
-            draw.text((plot_left + 6, chance - 18), "随机 0.50", font=_cjk(12), fill=AMBER)
+            draw.text((plot_left + 6, chance - 18), "随机线 0.50", font=_cjk(12), fill=AMBER)
 
         count = len(rows)
         slot = (plot_right - plot_left) / count
@@ -829,8 +829,8 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
             draw.text((cx - nw / 2, name_y + 40), n_text, font=_cjk(11), fill=FAINT)
 
     notes = [
-        "白点：汇总文件没有 APR 的 AUC 区间。OpenJudge 的 “Grok” 没有写版本。文件里没有 ProReviewer 和 Sakana 的模型。",
-        "区间在 n=15 时重叠。OpenJudge Opus 的 Spearman 高于 APR Opus。APR Opus 的 AUC 为 1.00，样本是 14 篇。",
+        "白点表示汇总里没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。",
+        "n=15 时区间是重叠的。OpenJudge Opus 的 Spearman 高于 APR Opus。APR Opus 的 AUC 是 1.00，只有 14 篇。",
     ]
     note_y = 860
     for note in notes:
@@ -846,12 +846,12 @@ def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#faf8f4"/>',
-        f'<text x="48" y="64" font-family="{CJK_FAMILY}" font-size="30" font-weight="700" fill="#1c1917">Holdout-15 · 排序分与人类评分的一致性</text>',
-        f'<text x="48" y="96" font-family="{CJK_FAMILY}" font-size="16" fill="#57534e">同一批 15 篇公开 OpenReview 论文。误差线为 95% 自助法区间（4000 次重抽样，种子 20261021）。</text>',
+        f'<text x="48" y="64" font-family="{CJK_FAMILY}" font-size="30" font-weight="700" fill="#1c1917">Holdout-15 · 排序分和人类评分</text>',
+        f'<text x="48" y="96" font-family="{CJK_FAMILY}" font-size="16" fill="#57534e">同一批 15 篇公开 OpenReview 论文。误差线是 95% 自助法区间（重抽样 4000 次，种子 20261021）。</text>',
     ]
     panels = [
-        ("Spearman · 相对人类平均评分", "spearman", "spearman_ci", -0.25, 1.0, 78),
-        ("AUC · 接收相对拒稿", "auc", "auc_ci", 0.25, 1.0, 788),
+        ("Spearman · 和人类均分的相关性", "spearman", "spearman_ci", -0.25, 1.0, 78),
+        ("AUC · 录用对拒稿", "auc", "auc_ci", 0.25, 1.0, 788),
     ]
     for heading, key, ci_key, y_min, y_max, left in panels:
         parts.append(
@@ -894,7 +894,7 @@ def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
                 f'<text x="{cx:.1f}" y="{plot_bottom + 48}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="12" fill="#57534e">{row["name"]}</text>'
             )
     parts.append(
-        f'<text x="48" y="860" font-family="{CJK_FAMILY}" font-size="13" fill="#57534e">汇总文件没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有写版本。文件里没有 ProReviewer 和 Sakana 的模型。此样本量下区间重叠。</text>'
+        f'<text x="48" y="860" font-family="{CJK_FAMILY}" font-size="13" fill="#57534e">汇总里没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。这个样本量下区间重叠。</text>'
     )
     parts.append("</svg>")
     path.write_text("\n".join(parts) + "\n", encoding="utf-8")
@@ -918,10 +918,10 @@ def render_forecast_png_zh(path: Path) -> None:
     width, height = 1280, 860
     image = Image.new("RGB", (width, height), PAPER)
     draw = ImageDraw.Draw(image)
-    draw.text((48, 36), "forecast-k1  ·  一次调用，三位审稿人", font=_cjk(30), fill=INK)
+    draw.text((48, 36), "forecast-k1  ·  一次调用，三个席位", font=_cjk(30), fill=INK)
     draw.text(
         (48, 84),
-        "合成示意。这些概率是编造的，不是留出集中的论文。",
+        "示意图。这些概率是编的，不是留出集里的论文。",
         font=_cjk(16),
         fill=MUTED,
     )
@@ -964,7 +964,7 @@ def render_forecast_png_zh(path: Path) -> None:
     draw.text((280, 732), expectation_text, font=_cjk(18), fill=TEAL_DARK)
     formula = _wrap_chars(
         draw,
-        "期望评分 = p(r)×r 之和，r 取 1、3、5、6、8、10。最可能的整数只作诊断。",
+        "期望评分 = p(r)×r 之和，r 取 1、3、5、6、8、10。最可能的整数只作对照，不是排序分。",
         _cjk(15),
         1100,
     )
@@ -982,7 +982,7 @@ def render_forecast_svg_zh(path: Path) -> None:
     lines = [
         '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="220" viewBox="0 0 1280 220">',
         '<rect width="100%" height="100%" fill="#faf8f4"/>',
-        f'<text x="32" y="48" font-family="{CJK_FAMILY}" font-size="24" font-weight="700" fill="#1c1917">forecast-k1 合成示意（不是留出集论文）</text>',
+        f'<text x="32" y="48" font-family="{CJK_FAMILY}" font-size="24" font-weight="700" fill="#1c1917">forecast-k1 示意图（不是留出集论文）</text>',
         f'<text x="32" y="96" font-family="{CJK_FAMILY}" font-size="20" fill="#1c1917">排序分 {rank:.4f} = 三个期望评分的平均</text>',
     ]
     y = 140
@@ -1018,11 +1018,11 @@ def render_hero_zh(page_image, payload: dict, dest: Path) -> None:
     right = left + crop.width + 36
     text_w = width - right - 40
     draw.text((right, 56), "AUTOPAPERREVIEW", font=_cjk(14), fill=TEAL_DARK)
-    draw.text((right, 88), "审稿会引用", font=_cjk(40), fill=INK)
-    draw.text((right, 140), "它所质疑的句子。", font=_cjk(40), fill=INK)
+    draw.text((right, 88), "审稿会标出", font=_cjk(40), fill=INK)
+    draw.text((right, 140), "它质疑的句子。", font=_cjk(40), fill=INK)
     blurb = _wrap_chars(
         draw,
-        "在本地读稿。得到带证据链接的报告、致命缺陷检查、三位审稿人的预测，以及带批注的 PDF。",
+        "在本地读稿。输出带证据的审稿报告、致命问题检查、三个席位的预测，以及带批注的 PDF。",
         _cjk(18),
         text_w,
     )
@@ -1056,7 +1056,7 @@ def render_hero_zh(page_image, payload: dict, dest: Path) -> None:
         y += 172
     footer = _wrap_chars(
         draw,
-        "公开 OpenReview 留出集。区间很宽。左侧页面是合成稿，正文为英文。",
+        "公开 OpenReview 留出集。区间很宽。左侧是合成稿，正文是英文。",
         _cjk(14),
         text_w,
     )
