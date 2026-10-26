@@ -26,6 +26,14 @@ The offline example under `examples/synthetic/` uses a fixture adapter. It write
 
 ## How well the rank tracks human scores
 
+These holdout and tune-30 numbers measure the rank, not a full review.
+
+They were produced in rank-only mode: `calibrate-eval` with `--cheap --holistic-mode forecast --holistic-samples 1 --related-work off --coefficient-set apr-fusion-v1`. That is one forecast call per paper. Contributions, the ledger, dimension scores, the fatal-flaw check and `fatal-verify`, and related-work search did not run. Spearman, Kendall, AUC, MAE, and bias below validate the continuous `forecast-k1` rank only. They do not validate the written review, the weaknesses, the dimension bands or sub-scores, the fatal labels, or the annotated PDF. The USD/paper figures further down are those rank-only costs. A full-mode review, which also writes the other outputs, costs considerably more.
+
+In a full review the reported venue rating is the decision bin: the same forecast call's 1–6 decision, mapped to the ICLR bins 1 / 3 / 5 / 6 / 8 / 10. It is not the rank snapped down to a bin, so the rating can differ from the rank by one bin. Invented example, not a holdout paper and not the forecast figure later on this page: rank 5.53 with decision 4 reports rating 6 (`decision_bin`), while snapping that rank down reports 5 (`snap_down`). Spearman and AUC in the table are computed on the rank. The decision-bin rating has not itself been evaluated on this holdout.
+
+Confidence printed on the review form is a configured parameter of the `rate` stage. It is not a model output.
+
 Holdout of **15 public OpenReview papers**. Spearman and Kendall compare the system score with the **mean official human rating**. AUC is accept versus reject. Intervals are a 95% paper-level percentile bootstrap: 4000 resamples, seed `20261021`, the procedure in `src/autopaperreview/rank_metrics.py`.
 
 APR’s score in this table is the shipped rank: `forecast-k1`, the mean expected rating on 1–10. Full precision is in [`docs/assets/holdout15-aggregate.json`](docs/assets/holdout15-aggregate.json). Figures below are rounded to three decimals. No paper id or title is in that file or in this README.
@@ -65,7 +73,7 @@ Read this table as a small sample, not a leaderboard:
 | ProReviewer | 364 (~24 / paper) | 12.77 | 0.85 | not recorded |
 | Sakana reviewer | 137 (~9 / paper) | 12.88 | 0.86 | not recorded |
 
-These dollars are the ranking runs behind the table. The aggregate does not split them into the forecast call versus contributions, dimensions, and the fatal-flaw pass. Turning those stages on costs more than a rank-only call.
+These dollars are the rank-only forecast calls behind the table. A full-mode review costs considerably more.
 
 ### Tuning split, same aggregate
 
@@ -308,6 +316,7 @@ The network policy is a declaration the runner enforces on stage metadata. It is
 
 ## Limitations
 
+- The table scores a rank-only forecast call. It does not measure the written review, dimension bands, fatal labels, or the annotated PDF, and the decision-bin venue rating was not the number correlated with humans. A full review costs considerably more than the USD/paper column.
 - Fifteen papers, one Opus timeout, and bootstrap intervals that run from about 0.4 to about 1.0. A 0.02 Spearman gap is not a result.
 - Both models under-score relative to the human mean.
 - Opus at the reported effort is about $0.66 and several minutes per paper, and it can time out (default budget 900 seconds).

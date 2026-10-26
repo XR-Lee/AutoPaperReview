@@ -85,7 +85,8 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assertTrue(chinese.startswith("[English](README.md) | 简体中文\n"))
         numerals = re.compile(r"\d+(?:\.\d+)?")
         self.assertEqual(Counter(numerals.findall(english)), Counter(numerals.findall(chinese)))
-        for token in ("0.851", "0.883", "1.000", "−0.513", "−0.848", "| 14 |", "forecast-k1"):
+        for token in ("0.851", "0.883", "1.000", "−0.513", "−0.848", "| 14 |", "forecast-k1", "5.53", "--cheap", "decision_bin", "snap_down"):
+            self.assertIn(token, english)
             self.assertIn(token, chinese)
         self.assertNotIn("openreview.net/forum", chinese.lower())
         for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/annotated-preview.png"):
