@@ -20,12 +20,14 @@ PNGS = (
     "docs/assets/annotated-preview.png",
     "docs/assets/forecast-panel.png",
     "docs/assets/holdout-glance.png",
+    "docs/assets/ablation-holdout.png",
 )
 PNGS_ZH = (
     "docs/assets/hero.zh-CN.png",
     "docs/assets/holdout-ranking.zh-CN.png",
     "docs/assets/forecast-panel.zh-CN.png",
     "docs/assets/holdout-glance.zh-CN.png",
+    "docs/assets/ablation-holdout.zh-CN.png",
 )
 
 
@@ -91,7 +93,7 @@ class ReadmeAssetTests(unittest.TestCase):
             self.assertIn(token, english)
             self.assertIn(token, chinese)
         self.assertNotIn("openreview.net/forum", chinese.lower())
-        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/holdout-glance.zh-CN.png", "docs/assets/annotated-preview.png"):
+        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/holdout-glance.zh-CN.png", "docs/assets/ablation-holdout.zh-CN.png", "docs/assets/annotated-preview.png"):
             self.assertIn(relative, chinese)
 
     def test_chinese_figure_labels_are_allowlisted(self) -> None:
@@ -107,8 +109,17 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assertNotIn("openreview.net", svg.lower())
         glance = (ROOT / "docs" / "assets" / "holdout-glance.svg").read_text(encoding="utf-8")
         self.assertIsNone(HAN.search(glance))
+        self.assertIn("degenerate", glance)
+        self.assertNotIn("is a point", glance)
         glance_zh = (ROOT / "docs" / "assets" / "holdout-glance.zh-CN.svg").read_text(encoding="utf-8")
         self.assertIsNotNone(HAN.search(glance_zh))
+        self.assertIn("退化", glance_zh)
+        ablation = (ROOT / "docs" / "assets" / "ablation-holdout.svg").read_text(encoding="utf-8")
+        self.assertIsNone(HAN.search(ablation))
+        ablation_zh = (ROOT / "docs" / "assets" / "ablation-holdout.zh-CN.svg").read_text(encoding="utf-8")
+        self.assertIsNotNone(HAN.search(ablation_zh))
+        renderer = (ROOT / "scripts" / "render_holdout_glance.py").read_text(encoding="utf-8")
+        self.assertNotIn("scatter", renderer)
 
     def test_apr_auc_intervals_match_the_anonymized_scores(self) -> None:
         import sys
@@ -134,6 +145,46 @@ class ReadmeAssetTests(unittest.TestCase):
             interval = bootstrap_interval(values, [0.0] * count, labels, "auc")
             field = "holdout_opus55" if key.endswith("opus55") else "holdout_grok47"
             self.assertEqual(stored[field]["auc_ci"], [interval["low"], interval["high"]])
+
+    def test_ablation_aggregate_is_quoted_and_has_no_ids(self) -> None:
+        path = ROOT / "docs" / "assets" / "ablation-aggregate.json"
+        text = path.read_text(encoding="utf-8")
+        lowered = text.lower()
+        self.assertNotIn("forum", lowered)
+        self.assertNotIn("openreview.net", lowered)
+        self.assertNotIn("title", lowered)
+        payload = json.loads(text)
+        order = (
+            "pre-fusion 7-dim weighted",
+            "pre-fusion 7-dim bin",
+            "pre-fusion 7-dim capped",
+            "r2 mean-k1",
+            "r8 panel-k2",
+            "r11 forecast-k1",
+        )
+        self.assertEqual(list(payload["holdout15_grok47"]), list(order))
+        readme = README.read_text(encoding="utf-8").replace("−", "-")
+        chinese = README_ZH.read_text(encoding="utf-8").replace("−", "-")
+        for key in order:
+            row = payload["holdout15_grok47"][key]
+            for token in (
+                r3(row["spearman"]),
+                r3(row["auc"]),
+                r3(row["spearman_ci"][0]),
+                r3(row["spearman_ci"][1]),
+                r3(row["auc_ci"][0]),
+                r3(row["auc_ci"][1]),
+            ):
+                self.assertIn(token, readme)
+                self.assertIn(token, chinese)
+        self.assertIn("0.601/0.780", readme)
+        self.assertIn("0.485/0.658", readme)
+        self.assertIn("0.601/0.780", chinese)
+        self.assertIn("0.485/0.658", chinese)
+        for banned in ("twin-k2", "r13"):
+            self.assertNotIn(banned, readme)
+            self.assertNotIn(banned, chinese)
+        self.assertIn("r13-opus55 twin-k2", text)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@
 
 Reads the published aggregate and the anonymized APR score file. APR AUC
 intervals are recomputed with ``rank_metrics.bootstrap_interval`` and checked
-against the aggregate. A degenerate interval is drawn as a point.
+against the aggregate. Every series is a bar with an error bar. A degenerate
+interval stays a bar, with a short cap at the value.
 
 Requires matplotlib. The committed PNG and SVG are what the README shows.
 """
@@ -116,7 +117,7 @@ def _labels(language: str) -> dict[str, str]:
     if language == "en":
         return {
             "title": "Holdout  ·  Spearman and AUC",
-            "note": "APR Opus AUC is a point: the 14 finished scores separate accept from reject.",
+            "note": "APR Opus AUC is a bar. The interval is degenerate: 14 finished scores separate accept from reject.",
             "spearman": "Spearman",
             "auc": "AUC",
             "apr_spearman": "APR Spearman",
@@ -130,7 +131,7 @@ def _labels(language: str) -> dict[str, str]:
     if language == "zh":
         return {
             "title": "留出集  ·  Spearman 和 AUC",
-            "note": "APR Opus 的 AUC 只画成点：14 篇已完成的分数把录用和拒稿完全分开。",
+            "note": "APR Opus 的 AUC 仍是柱。区间退化：14 篇已完成的分数把录用和拒稿完全分开。",
             "spearman": "Spearman",
             "auc": "AUC",
             "apr_spearman": "APR 的 Spearman",
@@ -253,32 +254,33 @@ def render(language: str, png: Path, svg: Path) -> None:
 
 
 def _bar(axis, x: float, value: float, ci: tuple[float, float], color: str, legend: dict, label: str) -> None:
-    import matplotlib.pyplot as plt
-
-    if _degenerate(value, ci):
-        axis.scatter(
-            [x],
-            [value],
-            s=58,
-            color=color,
-            edgecolor=INK,
-            linewidth=0.8,
-            zorder=4,
-        )
-        return
     low, high = ci
     bar = axis.bar([x], [value], width=0.32, color=color, zorder=3, label=label if label not in legend else None)
+    y_low = value - low
+    y_high = high - value
     axis.errorbar(
         [x],
         [value],
-        yerr=[[value - low], [high - value]],
+        yerr=[[y_low], [y_high]],
         fmt="none",
         ecolor=INK,
         elinewidth=0.85,
-        capsize=3,
-        capthick=0.85,
+        capsize=3.5,
+        capthick=0.9,
         zorder=4,
     )
+    # A zero-length interval has no stem. Draw the cap in data coordinates so
+    # it stays visible at the top of the bar.
+    if _degenerate(value, ci):
+        half = 0.07
+        axis.plot(
+            [x - half, x + half],
+            [value, value],
+            color=INK,
+            linewidth=0.9,
+            solid_capstyle="butt",
+            zorder=5,
+        )
     if label not in legend:
         legend[label] = bar
 

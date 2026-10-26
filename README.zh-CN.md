@@ -13,9 +13,9 @@
 
 ### 结果一览
 
-![各系统在留出集上的 Spearman 和 AUC。误差线是 95% 自助法区间。APR Opus 的 AUC 画成点，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
+![各系统在留出集上的 Spearman 和 AUC。误差线是 95% 自助法区间。APR Opus 的 AUC 画成柱，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
 
-只算排序分的 `forecast-k1`。误差线是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 只画点：在已完成的 14 篇上，分数把录用和拒稿完全分开，所以区间是 [1.000, 1.000]。APR Opus 的 n=14，其余行的 n=15，区间很宽。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
+只算排序分的 `forecast-k1`。误差线是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 仍画成柱；区间退化（已完成的 14 篇把录用和拒稿完全分开），所以区间是 [1.000, 1.000]。APR Opus 的 n=14，其余行的 n=15，区间很宽。流程差在哪、分数从哪一步来：[方法和消融](#method)。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
 
 <a id="track-a"></a>
 
@@ -229,6 +229,104 @@ autopaperreview annotate        高亮、页边编号和评论
 autopaperreview doctor          检查可选依赖和适配器
 ```
 
+<a id="method"></a>
+
+## 方法和消融
+
+上面的图是已发布的排序分 `forecast-k1`，旁边是另外三个系统。这一节写审稿流程本身、它和那三个系统差在哪，以及 Grok 留出集上的分数是哪一步抬上去的。
+
+### 流程差在哪
+
+本仓库不包含 OpenJudge、ProReviewer 或 Sakana 的代码。下面没有新增对它们的说法。已有说法见 [对照系统的模型](#other-models)，逐项对照见 [分数之外](#comparison)。
+
+APR 默认写出的是一份审稿。模型提出判断，流水线只在引用的原句能在稿件或检索快照里对上时才保留。
+
+- **七个维度、证据表、引用原句。** 每个维度的分数就是模型引用的那一档（`sar_bands_v1`）。原句对不上时，`execute_review` 重试一次，仍然失败就停。证据表记下主张、证据，以及还缺什么。报告用证据编号引用这些原句。
+- **贡献核对。** 至少一条列出的贡献，原句用同一条规则。空列表会让这个阶段失败。
+- **致命问题先给候选，再单独核对一次。** `fatal` 判断给流水线已经分配的 issue id 标一个类别。另一次调用 `fatal-verify` 必须同意这段原句说的就是这个类别。不同意就丢掉。`missing_closest_neighbor` 在这条路上会被拒绝，它归相关工作检索。
+- **`forecast-k1`：三个席位的分数预测，再用 decision 档读出。** 一次 `holistic` 调用模拟 specialist、generalist 和 senior（`anchors.FORECAST_SEATS`）。每个席位在 1/3/5/6/8/10 上给概率。排序分是三个期望分的平均，夹到 1–10。同一次调用的 1–6 决策不是排序分。`decision_bin` 把它映射成审稿表上的 ICLR 档。`vote`、`chair`、`high`、`low` 是同一次调用的诊断读法。
+- **相关工作检索，带网络策略。** 只有 TOML 写了这个阶段才跑。查询是关键词和元数据（arXiv、OpenAlex、Semantic Scholar），不发送正文。在线检索要求 `network_policy` 为 `metadata_only` 或 `allow`。状态是 `degraded` 时不会把分数压低。
+- **会议配置上的格式检查。** `render_pages` 和 `format_check` 的 `profile` 接受 `iclr2027` 或 `aaai2027`：页数上限、匿名，以及该配置里的其他格式检查。`related_work_search` 的 `venue` 只加载该会议的截止日期文件。两个名字都不选评分公式。
+- **带批注的原稿 PDF。** 文本旁边有 `manuscript.pdf` 且装了 PyMuPDF 时，报告阶段写出 `annotated_manuscript.pdf`：页边编号（`E1`、`E2`）、高亮，以及作者为 `APR reviewer` 的弹出评论。
+
+OpenJudge 的公开论文审稿流程，按本 README 里已经写过的说明，分几路打分：安全、正确性、1–6 的学术分、可以把一条发现标成假阳性的关键性检查，以及对照 CrossRef 的 BibTeX。它不保存「引文对上哪一段」的约定，公开流程也不写带编号的 PDF 弹出评论。公布的分数是整数 1–6。
+
+ProReviewer，按这里已经写过的说明，是带审稿日志的多步代理。公开检查点是 Qwen3-8B。这次留出集没有记下实际跑的模型。项目页把日志行链回论文。文档没有把它写成第二次原句核对，也没有写成 PDF 弹出评论。
+
+Sakana 的 `perform_review`，按这里已经写过的说明，从抽出的 PDF 文本给出 NeurIPS 式分数、优点和不足。上游默认审稿模型是 `gpt-4o-2024-05-13`，并且用了集成。这次留出集没有记下模型，也没有记下集成设置。已发表的审稿人是整数总分的集成，不是概率向量，`perform_review` 也不写带编号的 PDF 标记。
+
+### 留出集上的分数从哪来
+
+`forecast-k1` 不用七个维度的分数档。`apr-fusion-v1` 就按这一次调用排序。更早的公式 `apr-iclr-cap-v2` 仍在代码里，但不是融合候选（`fusion.py`）。它用 `rating.WEIGHTS` 给七档加权，再做最弱环节（claims-supported 和 experimental-soundness 里较小的那个，再加 1），然后套上当前生效的会议上限。前三根柱是这个公式在 Grok 4.7 留出集上的三种读法（n=15）：
+
+- **weighted** — 加权和，还没套最弱一环，也还没套上限。
+- **capped** — 套过最弱一环和会议上限之后。
+- **bin** — 把 capped 用 `snap_down` 落到 1/3/5/6/8/10，也就是不超过 capped 的最大档。
+
+后三根是同一批公开论文上更晚的排序调用，仍是 Grok 4.7，n=15：
+
+- **r2 mean-k1** — 一次会议均分调用（`holistic_mode = mean`，K=1）。
+- **r8 panel-k2** — 两次混合角色小组，取平均（`holistic_mode = panel`，K=2）。
+- **r11 forecast-k1** — 已发布的三席位预测（K=1），预先登记在 `anchors.py` 的 `LOCKED_CANDIDATE`。
+
+Holdout-15 在第 2、8、11 轮打开过。这不是一份未动过的留出集事后算了六遍。
+
+![Grok 4.7 留出集消融。分组柱是 Spearman 和 AUC，误差线是 95% 自助法区间。最后一对是已发布的 forecast-k1。](docs/assets/ablation-holdout.zh-CN.png)
+
+Grok 4.7，n=15。Spearman 对照的是官方评分的均值。AUC 是录用对拒稿。区间是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`），存在 [`docs/assets/ablation-aggregate.json`](docs/assets/ablation-aggregate.json)。最后一对是已发布的排序分。下表保留三位小数：
+
+| Series | Spearman | AUC |
+| --- | --- | --- |
+| pre-fusion 7-dim weighted | 0.452 [−0.130, 0.870] | 0.790 [0.518, 0.982] |
+| pre-fusion 7-dim bin | 0.174 [−0.438, 0.662] | 0.650 [0.409, 0.917] |
+| pre-fusion 7-dim capped | 0.147 [−0.478, 0.686] | 0.650 [0.266, 0.972] |
+| r2 mean-k1 | 0.667 [0.228, 0.895] | 0.700 [0.398, 0.954] |
+| r8 panel-k2 | 0.705 [0.313, 0.890] | 0.740 [0.453, 0.980] |
+| r11 forecast-k1 | 0.761 [0.389, 0.939] | 0.800 [0.537, 1.000] |
+
+在这一片上，加权和比分档或封顶后的分数更能排（Spearman 0.452，对照 0.174 和 0.147）。后面的排序调用更高。区间仍然重叠，而且 n=15。
+
+### 同一次运行，不同读法
+
+这些行是同一次候选运行的不同读法，不是确认集。文件里是点估计，这些行没有自助法区间。
+
+Grok 4.7，第 11 轮，n=30：
+
+| Readout | Spearman | AUC |
+| --- | --- | --- |
+| forecast-k1 | 0.656 | 0.857 |
+| vote-k1 | 0.628 | 0.828 |
+| chair-k1 | 0.684 | 0.866 |
+| high-k1 | 0.651 | 0.842 |
+| low-k1 | 0.651 | 0.821 |
+| decision-k1 | 0.639 | 0.830 |
+
+Opus 5.5，第 11 轮，n=29：
+
+| Readout | Spearman | AUC |
+| --- | --- | --- |
+| forecast-k1 | 0.858 | 1.000 |
+| vote-k1 | 0.866 | 0.995 |
+| chair-k1 | 0.862 | 1.000 |
+| high-k1 | 0.875 | 0.995 |
+| low-k1 | 0.846 | 1.000 |
+| decision-k1 | 0.842 | 0.992 |
+
+Grok 4.7，第 2 轮，分数平均对照决策档，n=30：
+
+| Readout | Spearman | AUC |
+| --- | --- | --- |
+| mean-k1 | 0.601 | 0.780 |
+| mean-k3 | 0.572 | 0.758 |
+| decision-k1 | 0.515 | 0.706 |
+| bin | 0.485 | 0.658 |
+
+Grok 调参集上，chair-k1（0.684 / 0.866）略高于预先登记的 forecast-k1 读法（0.656 / 0.857）。Opus 调参集上，几种读法挤在一起，差距在噪声里（Spearman 从 0.842 到 0.875）。`forecast-k1` 在看留出集之前就登记了。它不是在留出集上挑出来的。
+
+用分数的平均来排序，好于读决策档（r2 调参集：mean-k1 0.601/0.780 vs bin 0.485/0.658）。所以基准用 `rank_score`，审稿表用档。
+
+上面留出集的每条区间都很宽。n 是 14 到 15。
+
 <a id="track-b"></a>
 
 ## 评分与基准
@@ -334,6 +432,8 @@ coefficient_set = "apr-fusion-v1"
 
 `forecast-k1` 仍是已发布的排序分。不要因为后来某个候选在这个划分上更好看，就把它换掉。细节见 [公开标定](docs/public-calibration.md)。
 
+<a id="other-models"></a>
+
 ### 对照系统的模型
 
 本仓库不包含 OpenJudge、ProReviewer 或 Sakana 的代码。下面的说法来自它们的公开文档，写这份 README 时核对过。**留出集实际用的模型**以汇总为准，比上游默认值少。
@@ -341,6 +441,8 @@ coefficient_set = "apr-fusion-v1"
 - **OpenJudge** 的论文审稿（[agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)）分几路打分：安全、正确性、1–6 的学术分、可以把某条发现标成假阳性的关键性检查，以及对照 CrossRef 的 BibTeX 检查。汇总里的 OpenJudge 行是 Opus 5.5 和两次 Grok。Grok 的版本不在文件里。
 - **ProReviewer**（[UKPLab/arxiv2026-ProReviewer](https://github.com/UKPLab/arxiv2026-ProReviewer)，arXiv:2606.13349）是带审稿日志的多步代理。公开检查点是 Qwen3-8B。API 也可以换别的模型。这次留出集没记录用的是哪一个。大约每篇 24 次调用，对应多步循环，不是单独打一次分。
 - **Sakana 的 AI Scientist 审稿人**（[SakanaAI/AI-Scientist](https://github.com/SakanaAI/AI-Scientist) 的 `perform_review`）从抽出的 PDF 文本给出 NeurIPS 式分数、优点、不足和录用/拒稿。上游 README 的默认审稿模型是 `gpt-4o-2024-05-13`，并且用了集成。这次留出集没记录模型，也没记录集成设置。
+
+<a id="comparison"></a>
 
 ### 分数之外
 

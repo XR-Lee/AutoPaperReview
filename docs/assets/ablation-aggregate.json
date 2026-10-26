@@ -1,0 +1,197 @@
+{
+  "note": "Aggregate metrics only (public OpenReview ICLR papers; no ids). Spearman vs mean reviewer rating; AUC accept vs reject. 95% paper-level bootstrap CI, 4000 resamples, seed 20261021.",
+  "holdout15_grok47": {
+    "pre-fusion 7-dim weighted": {
+      "n": 15,
+      "spearman": 0.4524,
+      "auc": 0.79,
+      "spearman_ci": [
+        -0.1296,
+        0.8703
+      ],
+      "auc_ci": [
+        0.5179,
+        0.9821
+      ]
+    },
+    "pre-fusion 7-dim bin": {
+      "n": 15,
+      "spearman": 0.1737,
+      "auc": 0.65,
+      "spearman_ci": [
+        -0.4379,
+        0.6624
+      ],
+      "auc_ci": [
+        0.4091,
+        0.9167
+      ]
+    },
+    "pre-fusion 7-dim capped": {
+      "n": 15,
+      "spearman": 0.1473,
+      "auc": 0.65,
+      "spearman_ci": [
+        -0.4779,
+        0.6858
+      ],
+      "auc_ci": [
+        0.2664,
+        0.9722
+      ]
+    },
+    "r2 mean-k1": {
+      "n": 15,
+      "spearman": 0.6667,
+      "auc": 0.7,
+      "spearman_ci": [
+        0.2283,
+        0.8953
+      ],
+      "auc_ci": [
+        0.3977,
+        0.9539
+      ]
+    },
+    "r8 panel-k2": {
+      "n": 15,
+      "spearman": 0.705,
+      "auc": 0.74,
+      "spearman_ci": [
+        0.3132,
+        0.8895
+      ],
+      "auc_ci": [
+        0.4533,
+        0.98
+      ]
+    },
+    "r11 forecast-k1": {
+      "n": 15,
+      "spearman": 0.7614,
+      "auc": 0.8,
+      "spearman_ci": [
+        0.3894,
+        0.9393
+      ],
+      "auc_ci": [
+        0.537,
+        1.0
+      ]
+    }
+  },
+  "holdout_opus55": {
+    "r11-opus55 forecast-k1": {
+      "n": 14,
+      "spearman": 0.8505,
+      "auc": 1.0,
+      "spearman_ci": [
+        0.4247,
+        0.9868
+      ],
+      "auc_ci": [
+        1.0,
+        1.0
+      ]
+    },
+    "r13-opus55 twin-k2": {
+      "n": 15,
+      "spearman": 0.8633,
+      "auc": 0.98,
+      "spearman_ci": [
+        0.5076,
+        0.9745
+      ],
+      "auc_ci": [
+        0.8889,
+        1.0
+      ]
+    }
+  },
+  "tune_grok47_r11_readouts": {
+    "r11 forecast-k1": {
+      "n": 30,
+      "spearman": 0.656,
+      "auc": 0.8565
+    },
+    "r11 vote-k1": {
+      "n": 30,
+      "spearman": 0.6282,
+      "auc": 0.8278
+    },
+    "r11 chair-k1": {
+      "n": 30,
+      "spearman": 0.6841,
+      "auc": 0.866
+    },
+    "r11 high-k1": {
+      "n": 30,
+      "spearman": 0.651,
+      "auc": 0.8421
+    },
+    "r11 low-k1": {
+      "n": 30,
+      "spearman": 0.6507,
+      "auc": 0.8206
+    },
+    "r11 decision-k1": {
+      "n": 30,
+      "spearman": 0.6388,
+      "auc": 0.8301
+    }
+  },
+  "tune_grok47_r2_score_vs_bin": {
+    "r2 mean-k1": {
+      "n": 30,
+      "spearman": 0.6007,
+      "auc": 0.7799
+    },
+    "r2 mean-k3": {
+      "n": 30,
+      "spearman": 0.5717,
+      "auc": 0.7584
+    },
+    "r2 decision-k1": {
+      "n": 30,
+      "spearman": 0.5145,
+      "auc": 0.7057
+    },
+    "r2 bin": {
+      "n": 30,
+      "spearman": 0.4849,
+      "auc": 0.6579
+    }
+  },
+  "tune_opus55_r11_readouts": {
+    "r11-opus55 forecast-k1": {
+      "n": 29,
+      "spearman": 0.8582,
+      "auc": 1.0
+    },
+    "r11-opus55 vote-k1": {
+      "n": 29,
+      "spearman": 0.8661,
+      "auc": 0.9949
+    },
+    "r11-opus55 chair-k1": {
+      "n": 29,
+      "spearman": 0.8621,
+      "auc": 1.0
+    },
+    "r11-opus55 high-k1": {
+      "n": 29,
+      "spearman": 0.8748,
+      "auc": 0.9949
+    },
+    "r11-opus55 low-k1": {
+      "n": 29,
+      "spearman": 0.8457,
+      "auc": 1.0
+    },
+    "r11-opus55 decision-k1": {
+      "n": 29,
+      "spearman": 0.8421,
+      "auc": 0.9924
+    }
+  }
+}
