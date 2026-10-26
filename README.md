@@ -11,6 +11,21 @@ Two uses. They are not the same run.
 
 Version `0.1.10`. Alpha. Python 3.11–3.13. MIT license. Not a substitute for a human reviewer.
 
+### Results at a glance
+
+Holdout Spearman and AUC. Point estimates only.
+
+| System | Model | n | Spearman | AUC |
+| --- | --- | --- | --- | --- |
+| APR | Opus 5.5 | 14 | 0.851 | 1.000 |
+| OpenJudge | Opus 5.5 | 15 | 0.883 | 0.890 |
+| APR | Grok 4.7 | 15 | 0.761 | 0.800 |
+| OpenJudge | Grok, mean of the two runs | 15 | 0.724 | 0.740 |
+| ProReviewer | not recorded | 15 | 0.327 | 0.560 |
+| Sakana AI Scientist reviewer | not recorded | 15 | 0.372 | 0.540 |
+
+These are rank-only `forecast-k1` scores. Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
+
 <a id="track-a"></a>
 
 ## Review report
@@ -266,6 +281,8 @@ bin             = decision 1,2,3,4,5,6  →  ICLR 1,3,5,6,8,10
 Probabilities that do not sum to one are normalised, then counted. An official rating outside {1, 3, 5, 6, 8, 10} is counted as `off_scale` and kept. The figure uses invented weights, passed through `expected_rating` and `forecast_mean` (rank 5.4933), so the arithmetic is visible.
 
 The venue rating in the report is `decision_bin` of that 1–6 decision, not the rank snapped down. Invented example, not a holdout paper and not the figure above: rank 5.53 with decision 4 reports rating 6. Snapping that rank down reports 5 (`snap_down`). The rank and the rating can differ by one bin.
+
+<a id="benchmark-scope"></a>
 
 ### What the benchmark measured
 

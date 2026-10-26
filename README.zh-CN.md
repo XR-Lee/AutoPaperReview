@@ -11,6 +11,21 @@
 
 版本 `0.1.10`。Alpha。Python 3.11–3.13。MIT 许可证。不能代替人来审稿。
 
+### 结果一览
+
+留出集上的 Spearman 和 AUC，只列点估计。
+
+| 系统 | 模型 | n | Spearman | AUC |
+| --- | --- | --- | --- | --- |
+| APR | Opus 5.5 | 14 | 0.851 | 1.000 |
+| OpenJudge | Opus 5.5 | 15 | 0.883 | 0.890 |
+| APR | Grok 4.7 | 15 | 0.761 | 0.800 |
+| OpenJudge | Grok，两次的平均 | 15 | 0.724 | 0.740 |
+| ProReviewer | 未记录 | 15 | 0.327 | 0.560 |
+| Sakana AI Scientist reviewer | 未记录 | 15 | 0.372 | 0.540 |
+
+这些是只算排序分的 `forecast-k1`。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
+
 <a id="track-a"></a>
 
 ## 审稿报告
@@ -265,6 +280,8 @@ coefficient_set = "apr-fusion-v1"
 概率加起来不是一，会先归一化再计入。官方分不在 {1, 3, 5, 6, 8, 10} 里，记为 `off_scale`，仍然保留。图里的权重是编的，再送进 `expected_rating` 和 `forecast_mean`（排序分 5.4933），用来把这步算术摊开。
 
 写进报告的会议分是这个 1–6 decision 的 `decision_bin`，不是把排序分向下取档。下面是编的例子，不是留出集论文，也不是上面那张图：排序分 5.53、decision 4，报告里的评分是 6。把这个排序分向下取档得到 5（`snap_down`）。排序分和评分可以差一档。
+
+<a id="benchmark-scope"></a>
 
 ### 基准测了什么
 
