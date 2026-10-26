@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="220" viewBox="0 0 1280 220">
+<rect width="100%" height="100%" fill="#faf8f4"/>
+<text x="32" y="48" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#1c1917">forecast-k1 合成示意（不是留出集论文）</text>
+<text x="32" y="96" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="20" fill="#1c1917">排序分 5.4933 = 三个期望评分的平均</text>
+<text x="32" y="140" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="16" fill="#57534e">领域专家：众数 5，期望 5.2800，p [1:0.04 3:0.16 5:0.40 6:0.26 8:0.10 10:0.04]</text>
+<text x="32" y="166" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="16" fill="#57534e">通才：众数 6，期望 6.2400，p [1:0.02 3:0.08 5:0.22 6:0.36 8:0.24 10:0.08]</text>
+<text x="32" y="192" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="16" fill="#57534e">资深审稿人：众数 5，期望 4.9600，p [1:0.08 3:0.22 5:0.34 6:0.22 8:0.10 10:0.04]</text>
+</svg>

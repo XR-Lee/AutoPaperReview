@@ -39,6 +39,8 @@ SERIF = "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf"
 SERIF_BOLD = "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf"
 SERIF_ITALIC = "/usr/share/fonts/truetype/noto/NotoSerif-Italic.ttf"
 MONO = "/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf"
+CJK = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
+CJK_FAMILY = "WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif"
 
 INK = (28, 25, 23)
 MUTED = (87, 83, 78)
@@ -695,6 +697,394 @@ def print_tables(payload: dict) -> None:
         print(key, "n", row["n"], "rho", r3(row["spearman"]), "auc", r3(row["auc"]))
 
 
+def _cjk(size: int):
+    from PIL import ImageFont
+
+    return ImageFont.truetype(CJK, size=size)
+
+
+def _wrap_chars(draw, text: str, font, width: int) -> list[str]:
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        if not paragraph:
+            lines.append("")
+            continue
+        current = ""
+        for char in paragraph:
+            trial = current + char
+            if draw.textlength(trial, font=font) <= width:
+                current = trial
+            else:
+                if current:
+                    lines.append(current)
+                current = char
+        if current:
+            lines.append(current)
+    return lines
+
+
+def _zh_rows(rows: list[dict]) -> list[dict]:
+    renamed = {
+        ("OpenJudge", "Grok run 1"): "Grok 第 1 次",
+        ("OpenJudge", "Grok run 2"): "Grok 第 2 次",
+        ("ProReviewer", "model n/a"): "模型未记录",
+        ("Sakana", "model n/a"): "模型未记录",
+    }
+    copied = []
+    for row in rows:
+        item = dict(row)
+        item["name"] = renamed.get((row["group"], row["name"]), row["name"])
+        copied.append(item)
+    return copied
+
+
+def render_chart_png_zh(rows: list[dict], path: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    rows = _zh_rows(rows)
+    width, height = 1480, 980
+    image = Image.new("RGB", (width, height), PAPER)
+    draw = ImageDraw.Draw(image)
+    draw.text((48, 32), "Holdout-15  ·  排序分与人类评分的一致性", font=_cjk(30), fill=INK)
+    subtitle = _wrap_chars(
+        draw,
+        "同一批 15 篇公开 OpenReview 论文。误差线为 95% 自助法区间（4000 次重抽样，种子 20261021）。",
+        _cjk(16),
+        width - 96,
+    )
+    y = 78
+    for line in subtitle:
+        draw.text((48, y), line, font=_cjk(16), fill=MUTED)
+        y += 24
+
+    panels = [
+        ("Spearman · 相对人类平均评分", "spearman", "spearman_ci", -0.25, 1.0),
+        ("AUC · 接收相对拒稿", "auc", "auc_ci", 0.25, 1.0),
+    ]
+    top = 188
+    bottom = 720
+    left0 = 96
+    panel_w = 620
+    gap = 64
+    for index, (heading, key, ci_key, y_min, y_max) in enumerate(panels):
+        left = left0 + index * (panel_w + gap)
+        draw.text((left, top - 36), heading, font=_cjk(18), fill=INK)
+        plot_top = top
+        plot_bottom = bottom
+        plot_left = left + 36
+        plot_right = left + panel_w - 8
+
+        def y_of(value: float) -> float:
+            span = y_max - y_min
+            return plot_bottom - (value - y_min) / span * (plot_bottom - plot_top)
+
+        for tick in _ticks(y_min, y_max):
+            tick_y = y_of(tick)
+            draw.line((plot_left, tick_y, plot_right, tick_y), fill=LINE, width=1)
+            draw.text((left - 42, tick_y - 7), f"{tick:.1f}", font=_cjk(11), fill=FAINT)
+        if y_min < 0 < y_max:
+            draw.line((plot_left, y_of(0.0), plot_right, y_of(0.0)), fill=(180, 174, 166), width=1)
+        if key == "auc":
+            chance = y_of(0.5)
+            draw.line((plot_left, chance, plot_right, chance), fill=(196, 164, 132), width=1)
+            draw.text((plot_left + 6, chance - 18), "随机 0.50", font=_cjk(12), fill=AMBER)
+
+        count = len(rows)
+        slot = (plot_right - plot_left) / count
+        bar_w = min(46, slot * 0.62)
+        for row_index, row in enumerate(rows):
+            cx = plot_left + slot * (row_index + 0.5)
+            value = row[key]
+            ci = row[ci_key]
+            y_val = y_of(value)
+            y_base = y_of(0.0) if y_min < 0 else plot_bottom
+            x0 = cx - bar_w / 2
+            x1 = cx + bar_w / 2
+            top_y = min(y_val, y_base)
+            bot_y = max(y_val, y_base)
+            draw.rounded_rectangle((x0, top_y, x1, bot_y), radius=5, fill=row["color"])
+            if ci is not None:
+                y_lo = y_of(ci[0])
+                y_hi = y_of(ci[1])
+                draw.line((cx, y_lo, cx, y_hi), fill=INK, width=2)
+                draw.line((cx - 7, y_lo, cx + 7, y_lo), fill=INK, width=2)
+                draw.line((cx - 7, y_hi, cx + 7, y_hi), fill=INK, width=2)
+            else:
+                draw.ellipse((cx - 4, y_val - 4, cx + 4, y_val + 4), fill=WHITE, outline=INK, width=2)
+            value_text = r3(value)
+            tw = draw.textlength(value_text, font=_cjk(11))
+            draw.text((cx - tw / 2, top_y - 16), value_text, font=_cjk(11), fill=INK)
+            name_y = plot_bottom + 16
+            for line_index, line in enumerate((row["group"], row["name"])):
+                font = _cjk(13 if line_index == 0 else 12)
+                lw = draw.textlength(line, font=font)
+                draw.text(
+                    (cx - lw / 2, name_y + line_index * 18),
+                    line,
+                    font=font,
+                    fill=INK if line_index == 0 else MUTED,
+                )
+            n_text = f"n={row['n']}"
+            nw = draw.textlength(n_text, font=_cjk(11))
+            draw.text((cx - nw / 2, name_y + 40), n_text, font=_cjk(11), fill=FAINT)
+
+    notes = [
+        "白点：汇总文件没有 APR 的 AUC 区间。OpenJudge 的 “Grok” 没有写版本。文件里没有 ProReviewer 和 Sakana 的模型。",
+        "区间在 n=15 时重叠。OpenJudge Opus 的 Spearman 高于 APR Opus。APR Opus 的 AUC 为 1.00，样本是 14 篇。",
+    ]
+    note_y = 860
+    for note in notes:
+        for line in _wrap_chars(draw, note, _cjk(14), width - 96):
+            draw.text((48, note_y), line, font=_cjk(14), fill=MUTED)
+            note_y += 22
+    image.save(path, "PNG", optimize=True)
+
+
+def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
+    rows = _zh_rows(rows)
+    width, height = 1480, 900
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="#faf8f4"/>',
+        f'<text x="48" y="64" font-family="{CJK_FAMILY}" font-size="30" font-weight="700" fill="#1c1917">Holdout-15 · 排序分与人类评分的一致性</text>',
+        f'<text x="48" y="96" font-family="{CJK_FAMILY}" font-size="16" fill="#57534e">同一批 15 篇公开 OpenReview 论文。误差线为 95% 自助法区间（4000 次重抽样，种子 20261021）。</text>',
+    ]
+    panels = [
+        ("Spearman · 相对人类平均评分", "spearman", "spearman_ci", -0.25, 1.0, 78),
+        ("AUC · 接收相对拒稿", "auc", "auc_ci", 0.25, 1.0, 788),
+    ]
+    for heading, key, ci_key, y_min, y_max, left in panels:
+        parts.append(
+            f'<text x="{left}" y="148" font-family="{CJK_FAMILY}" font-size="18" font-weight="600" fill="#1c1917">{heading}</text>'
+        )
+        plot_top, plot_bottom = 172, 720
+        plot_left, plot_right = left + 36, left + 632
+        span = y_max - y_min
+
+        def y_of(value: float) -> float:
+            return plot_bottom - (value - y_min) / span * (plot_bottom - plot_top)
+
+        for tick in _ticks(y_min, y_max):
+            y = y_of(tick)
+            parts.append(f'<line x1="{plot_left}" y1="{y:.1f}" x2="{plot_right}" y2="{y:.1f}" stroke="#ddd8d0"/>')
+        slot = (plot_right - plot_left) / len(rows)
+        for row_index, row in enumerate(rows):
+            cx = plot_left + slot * (row_index + 0.5)
+            value = float(row[key])
+            y_val = y_of(value)
+            y_base = y_of(0.0) if y_min < 0 else plot_bottom
+            color = "#{:02x}{:02x}{:02x}".format(*row["color"])
+            top_y = min(y_val, y_base)
+            bot_y = max(y_val, y_base)
+            parts.append(
+                f'<rect x="{cx - 18:.1f}" y="{top_y:.1f}" width="36" height="{max(bot_y - top_y, 1):.1f}" rx="4" fill="{color}"/>'
+            )
+            ci = row[ci_key]
+            if ci is not None:
+                parts.append(
+                    f'<line x1="{cx:.1f}" y1="{y_of(ci[0]):.1f}" x2="{cx:.1f}" y2="{y_of(ci[1]):.1f}" stroke="#1c1917" stroke-width="2"/>'
+                )
+            parts.append(
+                f'<text x="{cx:.1f}" y="{top_y - 6:.1f}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="11" fill="#1c1917">{r3(value)}</text>'
+            )
+            parts.append(
+                f'<text x="{cx:.1f}" y="{plot_bottom + 28}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="13" fill="#1c1917">{row["group"]}</text>'
+            )
+            parts.append(
+                f'<text x="{cx:.1f}" y="{plot_bottom + 48}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="12" fill="#57534e">{row["name"]}</text>'
+            )
+    parts.append(
+        f'<text x="48" y="860" font-family="{CJK_FAMILY}" font-size="13" fill="#57534e">汇总文件没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有写版本。文件里没有 ProReviewer 和 Sakana 的模型。此样本量下区间重叠。</text>'
+    )
+    parts.append("</svg>")
+    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
+def _forecast_zh_names() -> list[tuple[str, str]]:
+    return (
+        ("Specialist", "领域专家"),
+        ("Generalist", "通才"),
+        ("Senior", "资深审稿人"),
+    )
+
+
+def render_forecast_png_zh(path: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    rows = forecast_numbers()
+    rank = rows[-1]["rank"]
+    seats = rows[:-1]
+    names = dict(_forecast_zh_names())
+    width, height = 1280, 860
+    image = Image.new("RGB", (width, height), PAPER)
+    draw = ImageDraw.Draw(image)
+    draw.text((48, 36), "forecast-k1  ·  一次调用，三位审稿人", font=_cjk(30), fill=INK)
+    draw.text(
+        (48, 84),
+        "合成示意。这些概率是编造的，不是留出集中的论文。",
+        font=_cjk(16),
+        fill=MUTED,
+    )
+    colors = [TEAL, NAVY, AMBER]
+    for seat_index, seat in enumerate(seats):
+        x = 48 + seat_index * 400
+        y = 132
+        draw.rounded_rectangle((x, y, x + 16, y + 16), radius=4, fill=colors[seat_index])
+        draw.text((x + 26, y - 4), names[seat["name"]], font=_cjk(18), fill=INK)
+        draw.text(
+            (x + 26, y + 26),
+            f"最可能 {seat['mode']}    期望 {seat['expected']:.2f}",
+            font=_cjk(15),
+            fill=MUTED,
+        )
+    ratings = list(OFFICIAL_RATINGS)
+    origin_x = 120
+    bar_w = 28
+    group_w = bar_w * 3 + 10
+    gap = 64
+    max_h = 250
+    base_y = 540
+    for rating_index, rating in enumerate(ratings):
+        gx = origin_x + rating_index * (group_w + gap)
+        label = str(rating)
+        lw = draw.textlength(label, font=_cjk(18))
+        draw.text((gx + group_w / 2 - lw / 2, base_y + 12), label, font=_cjk(18), fill=INK)
+        for seat_index, seat in enumerate(seats):
+            weight = float(seat["weights"][rating_index])
+            h = weight / 0.45 * max_h
+            x = gx + seat_index * (bar_w + 4)
+            draw.rounded_rectangle((x, base_y - h, x + bar_w, base_y), radius=4, fill=colors[seat_index])
+    draw.text((origin_x, base_y + 44), "官方评分  ·  柱高为概率", font=_cjk(14), fill=FAINT)
+    card = (48, 630, 1232, 820)
+    _rounded(draw, card, 16, WHITE, LINE, 1)
+    draw.text((72, 652), "已发布的排序分", font=_cjk(15), fill=TEAL_DARK)
+    draw.text((72, 682), f"{rank:.2f}", font=_cjk(48), fill=INK)
+    expectation_text = "   ".join(f"{seat['expected']:.2f}" for seat in seats)
+    draw.text((280, 700), "三个期望评分的平均", font=_cjk(18), fill=INK)
+    draw.text((280, 732), expectation_text, font=_cjk(18), fill=TEAL_DARK)
+    formula = _wrap_chars(
+        draw,
+        "期望评分 = p(r)×r 之和，r 取 1、3、5、6、8、10。最可能的整数只作诊断。",
+        _cjk(15),
+        1100,
+    )
+    formula_y = 772
+    for line in formula:
+        draw.text((72, formula_y), line, font=_cjk(15), fill=MUTED)
+        formula_y += 22
+    image.save(path, "PNG", optimize=True)
+
+
+def render_forecast_svg_zh(path: Path) -> None:
+    rows = forecast_numbers()
+    rank = rows[-1]["rank"]
+    names = dict(_forecast_zh_names())
+    lines = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="220" viewBox="0 0 1280 220">',
+        '<rect width="100%" height="100%" fill="#faf8f4"/>',
+        f'<text x="32" y="48" font-family="{CJK_FAMILY}" font-size="24" font-weight="700" fill="#1c1917">forecast-k1 合成示意（不是留出集论文）</text>',
+        f'<text x="32" y="96" font-family="{CJK_FAMILY}" font-size="20" fill="#1c1917">排序分 {rank:.4f} = 三个期望评分的平均</text>',
+    ]
+    y = 140
+    for seat in rows[:-1]:
+        weights = " ".join(f"{rating}:{weight:.2f}" for rating, weight in zip(OFFICIAL_RATINGS, seat["weights"], strict=True))
+        lines.append(
+            f'<text x="32" y="{y}" font-family="{CJK_FAMILY}" font-size="16" fill="#57534e">{names[seat["name"]]}：众数 {seat["mode"]}，期望 {seat["expected"]:.4f}，p [{weights}]</text>'
+        )
+        y += 26
+    lines.append("</svg>")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def render_hero_zh(page_image, payload: dict, dest: Path) -> None:
+    from PIL import Image, ImageDraw
+
+    target_h = 800
+    scale = target_h / page_image.height
+    crop = page_image.resize((int(page_image.width * scale), target_h), Image.Resampling.LANCZOS)
+    width, height = 1680, 940
+    image = Image.new("RGB", (width, height), PAPER)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, width, 8), fill=TEAL)
+    left = 28
+    top = 50
+    if crop.width > 820:
+        fitted_w = 820
+        fitted_h = int(crop.height * fitted_w / crop.width)
+        crop = crop.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+        top = 50 + (800 - fitted_h) // 2
+    draw.rectangle((left + 8, top + 10, left + crop.width + 8, top + crop.height + 10), fill=(214, 210, 202))
+    image.paste(crop, (left, top))
+    right = left + crop.width + 36
+    text_w = width - right - 40
+    draw.text((right, 56), "AUTOPAPERREVIEW", font=_cjk(14), fill=TEAL_DARK)
+    draw.text((right, 88), "审稿会引用", font=_cjk(40), fill=INK)
+    draw.text((right, 140), "它所质疑的句子。", font=_cjk(40), fill=INK)
+    blurb = _wrap_chars(
+        draw,
+        "在本地读稿。得到带证据链接的报告、致命缺陷检查、三位审稿人的预测，以及带批注的 PDF。",
+        _cjk(18),
+        text_w,
+    )
+    y = 210
+    for line in blurb:
+        draw.text((right, y), line, font=_cjk(18), fill=MUTED)
+        y += 28
+    apr = payload["APR_main_r11_forecast_k1"]
+    y += 16
+    for label, row, n_label in (
+        ("Opus 5.5", apr["holdout_opus55"], "n=14"),
+        ("Grok 4.7", apr["holdout_grok47"], "n=15"),
+    ):
+        _rounded(draw, (right, y, width - 36, y + 156), 14, WHITE, LINE, 1)
+        draw.text((right + 20, y + 14), label, font=_cjk(16), fill=MUTED)
+        draw.text((right + 20, y + 44), r3(row["spearman"]), font=_cjk(40), fill=INK)
+        draw.text((right + 180, y + 58), "Spearman", font=_cjk(16), fill=MUTED)
+        ci = row["spearman_ci"]
+        draw.text(
+            (right + 180, y + 86),
+            f"95% 区间 {r3(ci[0])} – {r3(ci[1])}",
+            font=_cjk(15),
+            fill=FAINT,
+        )
+        draw.text(
+            (right + 20, y + 116),
+            f"AUC {r3(row['auc'])}    {n_label}    holdout-15",
+            font=_cjk(15),
+            fill=INK,
+        )
+        y += 172
+    footer = _wrap_chars(
+        draw,
+        "公开 OpenReview 留出集。区间很宽。左侧页面是合成稿，正文为英文。",
+        _cjk(14),
+        text_w,
+    )
+    footer_y = height - 28 - 20 * len(footer)
+    for line in footer:
+        draw.text((right, footer_y), line, font=_cjk(14), fill=FAINT)
+        footer_y += 20
+    image.save(dest, "PNG", optimize=True)
+
+
+def render_zh() -> None:
+    """Chinese labels for figures whose English sentences are not language-neutral.
+
+    The annotated manuscript page stays the English fixture render: the synthetic
+    paper and the PDF comment are English. This does not rewrite the English assets.
+    """
+    payload = load_aggregate()
+    ASSETS.mkdir(parents=True, exist_ok=True)
+    rows = chart_rows(payload)
+    render_chart_png_zh(rows, ASSETS / "holdout-ranking.zh-CN.png")
+    render_chart_svg_zh(rows, ASSETS / "holdout-ranking.zh-CN.svg")
+    render_forecast_png_zh(ASSETS / "forecast-panel.zh-CN.png")
+    render_forecast_svg_zh(ASSETS / "forecast-panel.zh-CN.svg")
+    annotated, _report = run_synthetic_preview(PREVIEW_ROOT)
+    page_image = render_annotated_preview(annotated, PREVIEW_ROOT / "annotated-preview.png")
+    render_hero_zh(page_image, payload, ASSETS / "hero.zh-CN.png")
+
+
 def main() -> None:
     payload = load_aggregate()
     ASSETS.mkdir(parents=True, exist_ok=True)
@@ -722,4 +1112,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if "--zh" in sys.argv:
+        render_zh()
+    else:
+        main()

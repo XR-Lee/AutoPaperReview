@@ -1,3 +1,5 @@
+English | [Simplified Chinese](README.zh-CN.md)
+
 # AutoPaperReview
 
 AutoPaperReview reads a paper locally and writes a venue-style review that cites the manuscript: an evidence ledger, seven dimension scores, a fatal-flaw check with a second verify call, a three-reviewer **forecast** rank, a bilingual report, and an annotated PDF whose numbered markers open comments.
@@ -117,13 +119,12 @@ The highlight is evidence `E1`. The PDF comment, written by the annotator from t
 
 The same id is also attached to the other review fields that cite it (the second issue, the question, the seven dimension scores, the fixture’s ICLR reject and TMLR major-revision notes). The margin tag is the index; the comment says which point it supports.
 
-The report ties the same id to a revision, in both languages. Abbreviated from `review_report.md` after `autopaperreview run examples/synthetic/review.toml`:
+The report ties the same id to a revision. The generated file repeats each section in `zh-Hans`; that wording is on [the Chinese page](README.zh-CN.md). Abbreviated English from `review_report.md` after `autopaperreview run examples/synthetic/review.toml`:
 
 ```markdown
-## Weaknesses / 不足
+## Weaknesses
 
 - The evaluation does not establish sequence independence, so the deployment claim is unsupported. [E1]
-- 评估没有建立序列独立性，因此部署结论缺少支持。 [E1]
 
 ## Dimension Scores
 
@@ -142,7 +143,6 @@ and deployment claims do not follow.
 
 Required action: Use specimen- or sequence-level holdout and report results on a
 genuinely independent test set.
-需采取的行动：采用试件级或序列级留出，并在真正独立的测试集上报告结果。
 ```
 
 That ICLR “reject” line in the fixture is a written venue conclusion stored on the package. This example never runs `rate`, and the report says no overall 0–10 was assigned. The holdout rank further up the page is a different output.
