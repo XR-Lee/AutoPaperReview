@@ -13,9 +13,9 @@
 
 ### 结果一览
 
-![各系统在留出集上的 Spearman 和 AUC。误差线是 95% 自助法区间。APR Opus 的 AUC 画成柱，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
+![各系统在留出集上的 Spearman 和 AUC，含 GPT-6 Astra。误差线是 95% 自助法区间。APR Opus 的 AUC 画成柱，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
 
-只算排序分的 `forecast-k1`。误差线是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 仍画成柱；区间退化（已完成的 14 篇把录用和拒稿完全分开），所以区间是 [1.000, 1.000]。APR Opus 的 n=14，其余行的 n=15，区间很宽。流程差在哪、分数从哪一步来：[方法和消融](#method)。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
+只算排序分的 `forecast-k1`。误差线是 95% 的论文层面自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 仍画成柱；区间退化（已完成的 14 篇把录用和拒稿完全分开），所以区间是 [1.000, 1.000]。APR Opus 的 n=14，其余行的 n=15，区间很宽。GPT-6 Astra 是图上的第三组模型，APR 和 OpenJudge 都是 n=15。流程差在哪、分数从哪一步来：[方法和消融](#method)。口径见 [基准测了什么](#benchmark-scope)。完整表在 [评分与基准](#track-b)。
 
 <a id="track-a"></a>
 
@@ -321,22 +321,25 @@ coefficient_set = "apr-fusion-v1"
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | APR | Opus 5.5 | 14 | 0.851 [0.425, 0.987] | — | 1.000 | 0.796 | −0.513 |
 | APR | Grok 4.7 | 15 | 0.761 [0.389, 0.939] | — | 0.800 | 1.330 | −0.848 |
+| APR | GPT-6 Astra | 15 | 0.706 [0.325, 0.902] | — | 0.780 [0.500, 1.000] | — | — |
 | OpenJudge | Opus 5.5 | 15 | 0.883 [0.702, 0.950] | 0.756 [0.579, 0.882] | 0.890 [0.694, 1.000] | — | — |
 | OpenJudge | Grok，第 1 次 | 15 | 0.712 [0.348, 0.892] | 0.593 [0.291, 0.799] | 0.700 [0.481, 0.900] | — | — |
 | OpenJudge | Grok，第 2 次 | 15 | 0.700 [0.359, 0.889] | 0.575 [0.283, 0.794] | 0.740 [0.500, 0.932] | — | — |
 | OpenJudge | Grok，两次的平均 | 15 | 0.724 [0.374, 0.910] | 0.605 [0.312, 0.828] | 0.740 [0.500, 0.932] | — | — |
+| OpenJudge | GPT-6 Astra | 15 | 0.515 [0.171, 0.786] | — | 0.640 [0.409, 0.900] | — | — |
 | ProReviewer | 未记录 | 15 | 0.327 [−0.162, 0.714] | 0.272 [−0.124, 0.607] | 0.560 [0.300, 0.833] | 1.711 | −1.078 |
 | Sakana AI Scientist reviewer | 未记录 | 15 | 0.372 [0.046, 0.670] | 0.302 [0.039, 0.570] | 0.540 [0.364, 0.750] | 2.244 | −2.211 |
 
-![留出集上的 Spearman 和录用/拒稿 AUC，误差线是 95% 自助法区间。坐标文字是中文，数字和英文页相同。](docs/assets/holdout-ranking.zh-CN.png)
+![留出集上的 Spearman 和录用/拒稿 AUC，含 GPT-6 Astra，误差线是 95% 自助法区间。坐标文字是中文，数字和英文页相同。](docs/assets/holdout-ranking.zh-CN.png)
 
 这张表是一个小样本，不是排行榜：
 
 - **Opus 5.5 上，OpenJudge 的排序相关性高于 APR**（Spearman 0.883 对 0.851）。APR 的 Opus AUC 是 1.000，OpenJudge 是 0.890。APR 是 **14** 篇，不是 15 篇。Spearman 的区间是重叠的。到了 tune-30，这个领先反过来了。见 [消融说明了什么](#ablations)。
 - Grok 4.7 上，APR 略高于 OpenJudge 的两次 Grok 运行（0.761 对 0.712 和 0.700；AUC 0.800 对 0.700 和 0.740）。这些区间也重叠。
+- GPT-6 Astra 上，两边都是 n=15。APR 在 Spearman（0.706 对 0.515）和 AUC（0.780 对 0.640）上都高于 OpenJudge。两边的 95% 区间重叠得很厉害，所以这个领先只说明方向，在这个样本量上并不显著。这一行 OpenJudge 和表里其余 OpenJudge 一样，是每篇 1 次调用，不是公开默认的 4 次模型调用，正确性高于 1 时才会再加第 5 次。
 - ProReviewer 和 Sakana 的审稿人在录用/拒稿上接近随机（AUC 0.560 和 0.540）。它们的 Spearman 区间仍能到 0.7。
 - 汇总里没有 APR 的 Kendall，也没有 OpenJudge 的 MAE 和偏差。OpenJudge 公布的审稿分是 1–6 的整数。没有一份这里没有的映射，就不能拿它和 1–10 的人类均分算 MAE。
-- 两个 APR 模型的平均分都 **低于** 人类均分（Opus 偏差 −0.51，Grok 4.7 偏差 −0.85）。
+- Opus 和 Grok 上的 APR 都 **低于** 人类均分（Opus 偏差 −0.51，Grok 4.7 偏差 −0.85）。汇总里没有 Astra 的偏差。
 - Opus 评了 15 篇里的 14 篇。运行笔记说缺的那篇超时了。汇总把模型记成 Opus 5.5，没有记录力度。同一份笔记把这次运行称为最大力度。
 - 破折号表示汇总里没有这一格。这里没有用插值填数。
 
@@ -346,9 +349,11 @@ coefficient_set = "apr-fusion-v1"
 | --- | --- | --- | --- | --- |
 | APR Opus 5.5 | 不在汇总里 | — | 0.66 | ~5.3，来自运行笔记，不是汇总 |
 | APR Grok 4.7 | 不在汇总里 | — | 0.11 | ~2.9，来自运行笔记，不是汇总 |
+| APR GPT-6 Astra | 不在汇总里 | — | — | 未记录 |
 | OpenJudge Opus 5.5 | 15（1 / 篇） | 6.16 | 0.41 | 未记录 |
 | OpenJudge Grok 第 1 次 | 15 | 0.94 | 0.063 | 未记录 |
 | OpenJudge Grok 第 2 次 | 15 | 0.97 | 0.065 | 未记录 |
+| OpenJudge GPT-6 Astra | 15（1 / 篇） | — | — | 未记录 |
 | ProReviewer | 364（~24 / 篇） | 12.77 | 0.85 | 未记录 |
 | Sakana 审稿人 | 137（~9 / 篇） | 12.88 | 0.86 | 未记录 |
 
@@ -371,7 +376,7 @@ coefficient_set = "apr-fusion-v1"
 
 本仓库不包含 OpenJudge、ProReviewer 或 Sakana 的代码。下面的说法来自它们的公开文档，写这份 README 时核对过。**留出集实际用的模型**以汇总为准，比上游默认值少。
 
-- **OpenJudge** 的论文审稿（[agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)）分几路打分：安全、正确性、1–6 的学术分、可以把某条发现标成假阳性的关键性检查，以及对照 CrossRef 的 BibTeX 检查。汇总里的 OpenJudge 行是 Opus 5.5 和两次 Grok。Grok 的版本不在文件里。
+- **OpenJudge** 的论文审稿（[agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)）分几路打分：安全、正确性、1–6 的学术分、可以把某条发现标成假阳性的关键性检查，以及对照 CrossRef 的 BibTeX 检查。汇总里的 OpenJudge 行是 Opus 5.5、两次 Grok，以及 GPT-6 Astra。Grok 的版本不在文件里。
 - **ProReviewer**（[UKPLab/arxiv2026-ProReviewer](https://github.com/UKPLab/arxiv2026-ProReviewer)，arXiv:2606.13349）是带审稿日志的多步代理。公开检查点是 Qwen3-8B。API 也可以换别的模型。这次留出集没记录用的是哪一个。大约每篇 24 次调用，对应多步循环，不是单独打一次分。
 - **Sakana 的 AI Scientist 审稿人**（[SakanaAI/AI-Scientist](https://github.com/SakanaAI/AI-Scientist) 的 `perform_review`）从抽出的 PDF 文本给出 NeurIPS 式分数、优点、不足和录用/拒稿。上游 README 的默认审稿模型是 `gpt-4o-2024-05-13`，并且用了集成。这次留出集没记录模型，也没记录集成设置。
 
@@ -479,6 +484,7 @@ python3 scripts/render_readme_figures.py
 - 按所记录的力度，Opus 大约每篇 0.66 美元、要几分钟，并且可能超时（默认预算 900 秒）。
 - `forecast-k1` 没有摘录检查。致命问题核验和维度分数是真实输出。排序分和人类分数相关，并不是因为有这两项。
 - 在这份留出集上，Spearman 更高的是 Opus 上的 OpenJudge。到了 tune-30，这个领先就不在了。见 [消融说明了什么](#ablations)。
+- GPT-6 Astra 上，APR 的 Spearman 和 AUC 都高于 OpenJudge，但 n=15 的区间是重叠的。这个领先只说明方向。见留出集的表。
 - 这些运行里，ProReviewer 和 Sakana 的模型没有记录，所以那几行是系统对比，不是模型对比。
 - 相关工作检索可能只返回一部分，或者降级。失败的数据源不得收紧上限。报告里应写明检索不完整。
 - 格式配置可以拒绝超页或未匿名的 PDF。它们不决定 forecast。

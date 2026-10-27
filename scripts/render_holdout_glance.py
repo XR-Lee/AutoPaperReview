@@ -84,6 +84,11 @@ def load_rows() -> list[dict]:
 
     opus = apr["holdout_opus55"]
     grok = apr["holdout_grok47"]
+    astra = apr["holdout_astra"]
+    if astra["n"] != 15 or aggregate["openjudge_astra"]["n"] != 15:
+        raise SystemExit("Astra rows are the full holdout, n=15")
+    if "matched14_not_plotted" not in aggregate:
+        raise SystemExit("matched14 archive missing")
     return [
         {
             "framework": "APR",
@@ -105,9 +110,20 @@ def load_rows() -> list[dict]:
             "auc": grok["auc"],
             "auc_ci": tuple(grok["auc_ci"]),
         },
+        {
+            "framework": "APR",
+            "model": "GPT-6 Astra",
+            "n": astra["n"],
+            "highlight": True,
+            "spearman": astra["spearman"],
+            "spearman_ci": tuple(astra["spearman_ci"]),
+            "auc": astra["auc"],
+            "auc_ci": tuple(astra["auc_ci"]),
+        },
         other("openjudge_opus55", "OpenJudge", "Opus 5.5"),
         other("openjudge_grok_run1", "OpenJudge", "Grok run 1"),
         other("openjudge_grok_run2", "OpenJudge", "Grok run 2"),
+        other("openjudge_astra", "OpenJudge", "GPT-6 Astra"),
         other("proreviewer", "ProReviewer", "not recorded"),
         other("sakana_ai_scientist_reviewer", "Sakana", "not recorded"),
     ]
@@ -186,8 +202,9 @@ def render(language: str, png: Path, svg: Path) -> None:
         }
     )
     rows = load_rows()
-    figure, axis = plt.subplots(figsize=(12.4, 5.7), dpi=200)
-    axis.axvspan(-0.55, 1.55, color=BAND, zorder=0)
+    figure, axis = plt.subplots(figsize=(15.8, 6.05), dpi=200)
+    highlight_count = sum(1 for row in rows if row["highlight"])
+    axis.axvspan(-0.55, highlight_count - 0.45, color=BAND, zorder=0)
     axis.axhline(0.0, color="#d6d3d1", linewidth=0.8, zorder=1)
     axis.yaxis.grid(True, color=GRID, linewidth=0.6, zorder=0)
     axis.set_axisbelow(True)
@@ -223,7 +240,7 @@ def render(language: str, png: Path, svg: Path) -> None:
         for row in rows
     ]
     axis.set_xticks(range(len(rows)))
-    axis.set_xticklabels(ticks, fontsize=8.5, color=INK)
+    axis.set_xticklabels(ticks, fontsize=8, color=INK)
     axis.set_xlim(-0.6, len(rows) - 0.4)
     axis.set_ylim(-0.34, 1.14)
     axis.set_yticks([-0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0])

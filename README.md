@@ -13,9 +13,9 @@ Version `0.1.10`. Alpha. Python 3.11–3.13. MIT license. Not a substitute for a
 
 ### Results at a glance
 
-![Holdout Spearman and AUC by system. Error bars are 95% bootstrap intervals. APR Opus AUC is a bar at 1.000.](docs/assets/holdout-glance.png)
+![Holdout Spearman and AUC by system, including GPT-6 Astra. Error bars are 95% bootstrap intervals. APR Opus AUC is a bar at 1.000.](docs/assets/holdout-glance.png)
 
-Rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The APR Opus AUC bar is drawn; the interval is degenerate (perfect separation on the 14 finished papers), so it is [1.000, 1.000]. APR Opus has n=14 and the other rows have n=15, and the intervals are wide. How the pipeline differs, and where the score moved: [Method and ablation](#method). Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
+Rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The APR Opus AUC bar is drawn; the interval is degenerate (perfect separation on the 14 finished papers), so it is [1.000, 1.000]. APR Opus has n=14 and the other rows have n=15, and the intervals are wide. GPT-6 Astra is the third model on the chart, with n=15 for APR and for OpenJudge. How the pipeline differs, and where the score moved: [Method and ablation](#method). Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
 
 <a id="track-a"></a>
 
@@ -322,22 +322,25 @@ APR’s score in this table is the shipped rank: `forecast-k1`, the mean expecte
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | APR | Opus 5.5 | 14 | 0.851 [0.425, 0.987] | — | 1.000 | 0.796 | −0.513 |
 | APR | Grok 4.7 | 15 | 0.761 [0.389, 0.939] | — | 0.800 | 1.330 | −0.848 |
+| APR | GPT-6 Astra | 15 | 0.706 [0.325, 0.902] | — | 0.780 [0.500, 1.000] | — | — |
 | OpenJudge | Opus 5.5 | 15 | 0.883 [0.702, 0.950] | 0.756 [0.579, 0.882] | 0.890 [0.694, 1.000] | — | — |
 | OpenJudge | Grok, run 1 | 15 | 0.712 [0.348, 0.892] | 0.593 [0.291, 0.799] | 0.700 [0.481, 0.900] | — | — |
 | OpenJudge | Grok, run 2 | 15 | 0.700 [0.359, 0.889] | 0.575 [0.283, 0.794] | 0.740 [0.500, 0.932] | — | — |
 | OpenJudge | Grok, mean of the two runs | 15 | 0.724 [0.374, 0.910] | 0.605 [0.312, 0.828] | 0.740 [0.500, 0.932] | — | — |
+| OpenJudge | GPT-6 Astra | 15 | 0.515 [0.171, 0.786] | — | 0.640 [0.409, 0.900] | — | — |
 | ProReviewer | not recorded | 15 | 0.327 [−0.162, 0.714] | 0.272 [−0.124, 0.607] | 0.560 [0.300, 0.833] | 1.711 | −1.078 |
 | Sakana AI Scientist reviewer | not recorded | 15 | 0.372 [0.046, 0.670] | 0.302 [0.039, 0.570] | 0.540 [0.364, 0.750] | 2.244 | −2.211 |
 
-![Bar chart of Spearman and accept/reject AUC on the holdout, with 95% bootstrap intervals.](docs/assets/holdout-ranking.png)
+![Bar chart of Spearman and accept/reject AUC on the holdout, including GPT-6 Astra, with 95% bootstrap intervals.](docs/assets/holdout-ranking.png)
 
 Read the table as a small sample, not a leaderboard:
 
 - **OpenJudge on Opus 5.5 ranks higher than APR on Opus** (Spearman 0.883 vs 0.851). APR’s Opus AUC is 1.000. OpenJudge’s is 0.890. APR has **14** papers, not 15. The Spearman intervals overlap. On tune-30 that lead reverses. See [What the ablations show](#ablations).
 - APR on Grok 4.7 is a bit above either OpenJudge Grok run (0.761 vs 0.712 and 0.700; AUC 0.800 vs 0.700 and 0.740). Those intervals overlap too.
+- On GPT-6 Astra, both sides have n=15. APR leads OpenJudge on Spearman (0.706 vs 0.515) and on AUC (0.780 vs 0.640). The 95% intervals overlap on both, so the lead is directional and not significant at this n. This OpenJudge row is the same 1-call harness as the other OpenJudge rows, not the public default of 4 model calls, or 5 when correctness is above 1.
 - ProReviewer and the Sakana reviewer are near chance on accept/reject (AUC 0.560 and 0.540). Their Spearman intervals still reach the 0.7s.
 - APR Kendall is not in the aggregate. OpenJudge MAE and bias are not in it either. OpenJudge’s published review score is an integer 1–6, so a MAE against a 1–10 human mean is not comparable without a mapping this repository does not have.
-- Both APR models score **below** the human mean (bias −0.51 on Opus, −0.85 on Grok 4.7).
+- APR on Opus and on Grok score **below** the human mean (bias −0.51 on Opus, −0.85 on Grok 4.7). The aggregate has no Astra bias.
 - Opus scored 14 of 15 papers. The run note says the missing paper timed out. The aggregate names the model Opus 5.5 and does not record the effort setting. That same note calls the run max effort.
 - A dash means the aggregate has no such cell. No cell here was filled by interpolation.
 
@@ -347,9 +350,11 @@ Read the table as a small sample, not a leaderboard:
 | --- | --- | --- | --- | --- |
 | APR Opus 5.5 | not in the aggregate | — | 0.66 | ~5.3, from the run note, not the aggregate |
 | APR Grok 4.7 | not in the aggregate | — | 0.11 | ~2.9, from the run note, not the aggregate |
+| APR GPT-6 Astra | not in the aggregate | — | — | not recorded |
 | OpenJudge Opus 5.5 | 15 (1 / paper) | 6.16 | 0.41 | not recorded |
 | OpenJudge Grok run 1 | 15 | 0.94 | 0.063 | not recorded |
 | OpenJudge Grok run 2 | 15 | 0.97 | 0.065 | not recorded |
+| OpenJudge GPT-6 Astra | 15 (1 / paper) | — | — | not recorded |
 | ProReviewer | 364 (~24 / paper) | 12.77 | 0.85 | not recorded |
 | Sakana reviewer | 137 (~9 / paper) | 12.88 | 0.86 | not recorded |
 
@@ -372,7 +377,7 @@ The tuning split is not a confirmation set. The file has point estimates and no 
 
 This repository does not include OpenJudge, ProReviewer, or Sakana. The labels below come from their public docs, checked when this README was written. The **holdout model** is whatever the aggregate records, which is less than the upstream default.
 
-- **OpenJudge** paper review ([agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)) uses several graders: safety, correctness, a 1–6 scholarly score, a criticality pass that can mark a finding as a false positive, and BibTeX checks against CrossRef. The aggregate’s OpenJudge rows are Opus 5.5 and two Grok runs. The Grok version is not in the file.
+- **OpenJudge** paper review ([agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)) uses several graders: safety, correctness, a 1–6 scholarly score, a criticality pass that can mark a finding as a false positive, and BibTeX checks against CrossRef. The aggregate’s OpenJudge rows are Opus 5.5, two Grok runs, and GPT-6 Astra. The Grok version is not in the file.
 - **ProReviewer** ([UKPLab/arxiv2026-ProReviewer](https://github.com/UKPLab/arxiv2026-ProReviewer), arXiv:2606.13349) is a multi-step agent with a review log. The public checkpoint is a Qwen3-8B model. The API path accepts other models. This holdout does not record which one ran. About 24 calls per paper is a multi-step loop, not a single score.
 - **Sakana’s AI Scientist reviewer** ([SakanaAI/AI-Scientist](https://github.com/SakanaAI/AI-Scientist) `perform_review`) returns NeurIPS-style scores, strengths, weaknesses, and accept/reject from extracted PDF text. The upstream README’s default review model is `gpt-4o-2024-05-13`, with an ensemble. This holdout does not record the model or the ensemble settings.
 
@@ -480,6 +485,7 @@ The network policy is a declaration the runner enforces on stage metadata. It is
 - At the reported effort, Opus is about $0.66 and several minutes per paper, and it can time out (default budget 900 seconds).
 - `forecast-k1` is not checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs. They are not why the rank correlates.
 - OpenJudge on Opus has the higher Spearman on this holdout. On tune-30 that lead does not hold. See [What the ablations show](#ablations).
+- On GPT-6 Astra, APR leads OpenJudge on Spearman and on AUC, and the n=15 intervals overlap. That lead is directional. See the holdout table.
 - ProReviewer’s and Sakana’s models for these runs were not recorded, so those rows compare systems, not models.
 - Related-work search can return a partial or degraded result. A failed provider must not tighten a cap. The report should say the search was incomplete.
 - Format profiles can reject an over-length or non-anonymous PDF. They do not set the forecast.

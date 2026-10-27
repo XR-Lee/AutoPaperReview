@@ -87,12 +87,15 @@ def chart_rows(payload: dict) -> list[dict]:
     apr = payload["APR_main_r11_forecast_k1"]
     opus = apr["holdout_opus55"]
     grok = apr["holdout_grok47"]
+    astra = apr["holdout_astra"]
     specs = [
-        ("APR", "Opus 5.5", TEAL, opus["n"], opus["spearman"], tuple(opus["spearman_ci"]), opus["auc"], None),
-        ("APR", "Grok 4.7", TEAL, grok["n"], grok["spearman"], tuple(grok["spearman_ci"]), grok["auc"], None),
+        ("APR", "Opus 5.5", TEAL, opus["n"], opus["spearman"], tuple(opus["spearman_ci"]), opus["auc"], tuple(opus["auc_ci"])),
+        ("APR", "Grok 4.7", TEAL, grok["n"], grok["spearman"], tuple(grok["spearman_ci"]), grok["auc"], tuple(grok["auc_ci"])),
+        ("APR", "GPT-6 Astra", TEAL, astra["n"], astra["spearman"], tuple(astra["spearman_ci"]), astra["auc"], tuple(astra["auc_ci"])),
         ("OpenJudge", "Opus 5.5", NAVY, payload["openjudge_opus55"]["n"], payload["openjudge_opus55"]["point"]["spearman"], tuple(payload["openjudge_opus55"]["ci95"]["spearman"]), payload["openjudge_opus55"]["point"]["auc"], tuple(payload["openjudge_opus55"]["ci95"]["auc"])),
         ("OpenJudge", "Grok run 1", NAVY, payload["openjudge_grok_run1"]["n"], payload["openjudge_grok_run1"]["point"]["spearman"], tuple(payload["openjudge_grok_run1"]["ci95"]["spearman"]), payload["openjudge_grok_run1"]["point"]["auc"], tuple(payload["openjudge_grok_run1"]["ci95"]["auc"])),
         ("OpenJudge", "Grok run 2", NAVY, payload["openjudge_grok_run2"]["n"], payload["openjudge_grok_run2"]["point"]["spearman"], tuple(payload["openjudge_grok_run2"]["ci95"]["spearman"]), payload["openjudge_grok_run2"]["point"]["auc"], tuple(payload["openjudge_grok_run2"]["ci95"]["auc"])),
+        ("OpenJudge", "GPT-6 Astra", NAVY, payload["openjudge_astra"]["n"], payload["openjudge_astra"]["point"]["spearman"], tuple(payload["openjudge_astra"]["ci95"]["spearman"]), payload["openjudge_astra"]["point"]["auc"], tuple(payload["openjudge_astra"]["ci95"]["auc"])),
         ("ProReviewer", "model n/a", AMBER, payload["proreviewer"]["n"], payload["proreviewer"]["point"]["spearman"], tuple(payload["proreviewer"]["ci95"]["spearman"]), payload["proreviewer"]["point"]["auc"], tuple(payload["proreviewer"]["ci95"]["auc"])),
         ("Sakana", "model n/a", STONE, payload["sakana_ai_scientist_reviewer"]["n"], payload["sakana_ai_scientist_reviewer"]["point"]["spearman"], tuple(payload["sakana_ai_scientist_reviewer"]["ci95"]["spearman"]), payload["sakana_ai_scientist_reviewer"]["point"]["auc"], tuple(payload["sakana_ai_scientist_reviewer"]["ci95"]["auc"])),
     ]
@@ -145,7 +148,7 @@ def _rounded(draw, box, radius, fill, outline=None, width=1):
 def render_chart_png(rows: list[dict], path: Path) -> None:
     from PIL import Image, ImageDraw
 
-    width, height = 1480, 920
+    width, height = 1960, 980
     image = Image.new("RGB", (width, height), PAPER)
     draw = ImageDraw.Draw(image)
     title = _font(ImageDraw, INTER_BOLD, 32)
@@ -166,10 +169,10 @@ def render_chart_png(rows: list[dict], path: Path) -> None:
         ("AUC  ·  accept vs reject", "auc", "auc_ci", 0.25, 1.0),
     ]
     top = 168
-    bottom = 700
-    left0 = 96
-    panel_w = 620
-    gap = 64
+    bottom = 740
+    left0 = 108
+    panel_w = 860
+    gap = 48
     for index, (heading, key, ci_key, y_min, y_max) in enumerate(panels):
         left = left0 + index * (panel_w + gap)
         draw.text((left, top - 36), heading, font=_font(ImageDraw, INTER_SEMI, 18), fill=INK)
@@ -209,14 +212,13 @@ def render_chart_png(rows: list[dict], path: Path) -> None:
             top_y = min(y_val, y_base)
             bot_y = max(y_val, y_base)
             draw.rounded_rectangle((x0, top_y, x1, bot_y), radius=5, fill=row["color"])
-            if ci is not None:
-                y_lo = y_of(ci[0])
-                y_hi = y_of(ci[1])
-                draw.line((cx, y_lo, cx, y_hi), fill=INK, width=2)
-                draw.line((cx - 7, y_lo, cx + 7, y_lo), fill=INK, width=2)
-                draw.line((cx - 7, y_hi, cx + 7, y_hi), fill=INK, width=2)
-            else:
-                draw.ellipse((cx - 4, y_val - 4, cx + 4, y_val + 4), fill=WHITE, outline=INK, width=2)
+            if ci is None:
+                raise SystemExit(f"missing interval for {row['group']} {row['name']} {key}")
+            y_lo = y_of(ci[0])
+            y_hi = y_of(ci[1])
+            draw.line((cx, y_lo, cx, y_hi), fill=INK, width=2)
+            draw.line((cx - 7, y_lo, cx + 7, y_lo), fill=INK, width=2)
+            draw.line((cx - 7, y_hi, cx + 7, y_hi), fill=INK, width=2)
             value_text = r3(value)
             tw = draw.textlength(value_text, font=tiny)
             draw.text((cx - tw / 2, top_y - 16), value_text, font=tiny, fill=INK)
@@ -234,14 +236,14 @@ def render_chart_png(rows: list[dict], path: Path) -> None:
             draw.text((cx - nw / 2, name_y + 40), n_text, font=tiny, fill=FAINT)
 
     draw.text(
-        (48, 848),
-        "White dots: APR AUC has no interval in the aggregate. OpenJudge “Grok” does not name a version. ProReviewer and Sakana models are not in the file.",
+        (48, 888),
+        "Every series is a bar with an interval. APR Opus AUC is degenerate at 1.000 (n=14). OpenJudge Grok does not name a version. ProReviewer and Sakana models are not in the file.",
         font=small,
         fill=MUTED,
     )
     draw.text(
-        (48, 874),
-        "Intervals overlap at n=15. OpenJudge Opus Spearman is higher than APR Opus. APR Opus AUC is 1.00 on 14 papers.",
+        (48, 914),
+        "On GPT-6 Astra, n=15, APR leads OpenJudge and the intervals overlap. That OpenJudge row is 1 call per paper.",
         font=small,
         fill=MUTED,
     )
@@ -256,7 +258,7 @@ def _ticks(low: float, high: float) -> list[float]:
 
 def render_chart_svg(rows: list[dict], path: Path) -> None:
     """Text twin of the PNG chart so the plotted numbers stay greppable."""
-    width, height = 1480, 860
+    width, height = 1960, 940
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#faf8f4"/>',
@@ -264,15 +266,15 @@ def render_chart_svg(rows: list[dict], path: Path) -> None:
         '<text x="48" y="96" font-family="Inter, Helvetica, sans-serif" font-size="16" fill="#57534e">Same 15 public OpenReview papers. Whiskers are 95% bootstrap intervals (4000 resamples, seed 20261021).</text>',
     ]
     panels = [
-        ("Spearman vs mean human rating", "spearman", "spearman_ci", -0.25, 1.0, 78),
-        ("AUC · accept vs reject", "auc", "auc_ci", 0.25, 1.0, 788),
+        ("Spearman vs mean human rating", "spearman", "spearman_ci", -0.25, 1.0, 108),
+        ("AUC · accept vs reject", "auc", "auc_ci", 0.25, 1.0, 1016),
     ]
     for heading, key, ci_key, y_min, y_max, left in panels:
         parts.append(
             f'<text x="{left}" y="140" font-family="Inter, Helvetica, sans-serif" font-size="18" font-weight="600" fill="#1c1917">{heading}</text>'
         )
-        plot_top, plot_bottom = 160, 700
-        plot_left, plot_right = left + 36, left + 632
+        plot_top, plot_bottom = 160, 740
+        plot_left, plot_right = left + 36, left + 852
         span = y_max - y_min
 
         def y_of(value: float) -> float:
@@ -294,10 +296,18 @@ def render_chart_svg(rows: list[dict], path: Path) -> None:
                 f'<rect x="{cx - 18:.1f}" y="{top_y:.1f}" width="36" height="{max(bot_y - top_y, 1):.1f}" rx="4" fill="{color}"/>'
             )
             ci = row[ci_key]
-            if ci is not None:
-                parts.append(
-                    f'<line x1="{cx:.1f}" y1="{y_of(ci[0]):.1f}" x2="{cx:.1f}" y2="{y_of(ci[1]):.1f}" stroke="#1c1917" stroke-width="2"/>'
-                )
+            if ci is None:
+                raise SystemExit(f"missing interval for {row['group']} {row['name']} {key}")
+            y_lo, y_hi = y_of(ci[0]), y_of(ci[1])
+            parts.append(
+                f'<line x1="{cx:.1f}" y1="{y_lo:.1f}" x2="{cx:.1f}" y2="{y_hi:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
+            parts.append(
+                f'<line x1="{cx - 7:.1f}" y1="{y_lo:.1f}" x2="{cx + 7:.1f}" y2="{y_lo:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
+            parts.append(
+                f'<line x1="{cx - 7:.1f}" y1="{y_hi:.1f}" x2="{cx + 7:.1f}" y2="{y_hi:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
             parts.append(
                 f'<text x="{cx:.1f}" y="{top_y - 6:.1f}" text-anchor="middle" font-family="Inter, Helvetica, sans-serif" font-size="11" fill="#1c1917">{r3(value)}</text>'
             )
@@ -308,7 +318,7 @@ def render_chart_svg(rows: list[dict], path: Path) -> None:
                 f'<text x="{cx:.1f}" y="{plot_bottom + 46}" text-anchor="middle" font-family="Inter, Helvetica, sans-serif" font-size="12" fill="#57534e">{row["name"]}</text>'
             )
     parts.append(
-        '<text x="48" y="830" font-family="Inter, Helvetica, sans-serif" font-size="13" fill="#57534e">APR AUC has no interval in the aggregate. OpenJudge Grok does not name a version. ProReviewer and Sakana models are not in the file. Intervals overlap at this n.</text>'
+        '<text x="48" y="900" font-family="Inter, Helvetica, sans-serif" font-size="13" fill="#57534e">Every series is a bar with an interval. APR Opus AUC is degenerate at 1.000 (n=14). On GPT-6 Astra, n=15, APR leads OpenJudge and the intervals overlap.</text>'
     )
     parts.append("</svg>")
     path.write_text("\n".join(parts) + "\n", encoding="utf-8")
@@ -742,7 +752,7 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
     from PIL import Image, ImageDraw
 
     rows = _zh_rows(rows)
-    width, height = 1480, 980
+    width, height = 1960, 1040
     image = Image.new("RGB", (width, height), PAPER)
     draw = ImageDraw.Draw(image)
     draw.text((48, 32), "Holdout-15  ·  排序分和人类评分", font=_cjk(30), fill=INK)
@@ -762,10 +772,10 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
         ("AUC · 录用对拒稿", "auc", "auc_ci", 0.25, 1.0),
     ]
     top = 188
-    bottom = 720
-    left0 = 96
-    panel_w = 620
-    gap = 64
+    bottom = 760
+    left0 = 108
+    panel_w = 860
+    gap = 48
     for index, (heading, key, ci_key, y_min, y_max) in enumerate(panels):
         left = left0 + index * (panel_w + gap)
         draw.text((left, top - 36), heading, font=_cjk(18), fill=INK)
@@ -803,14 +813,13 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
             top_y = min(y_val, y_base)
             bot_y = max(y_val, y_base)
             draw.rounded_rectangle((x0, top_y, x1, bot_y), radius=5, fill=row["color"])
-            if ci is not None:
-                y_lo = y_of(ci[0])
-                y_hi = y_of(ci[1])
-                draw.line((cx, y_lo, cx, y_hi), fill=INK, width=2)
-                draw.line((cx - 7, y_lo, cx + 7, y_lo), fill=INK, width=2)
-                draw.line((cx - 7, y_hi, cx + 7, y_hi), fill=INK, width=2)
-            else:
-                draw.ellipse((cx - 4, y_val - 4, cx + 4, y_val + 4), fill=WHITE, outline=INK, width=2)
+            if ci is None:
+                raise SystemExit(f"missing interval for {row['group']} {row['name']} {key}")
+            y_lo = y_of(ci[0])
+            y_hi = y_of(ci[1])
+            draw.line((cx, y_lo, cx, y_hi), fill=INK, width=2)
+            draw.line((cx - 7, y_lo, cx + 7, y_lo), fill=INK, width=2)
+            draw.line((cx - 7, y_hi, cx + 7, y_hi), fill=INK, width=2)
             value_text = r3(value)
             tw = draw.textlength(value_text, font=_cjk(11))
             draw.text((cx - tw / 2, top_y - 16), value_text, font=_cjk(11), fill=INK)
@@ -829,10 +838,10 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
             draw.text((cx - nw / 2, name_y + 40), n_text, font=_cjk(11), fill=FAINT)
 
     notes = [
-        "白点表示汇总里没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。",
-        "n=15 时区间是重叠的。OpenJudge Opus 的 Spearman 高于 APR Opus。APR Opus 的 AUC 是 1.00，只有 14 篇。",
+        "每一组都是柱加误差线。APR Opus 的 AUC 在 1.000 处退化（n=14）。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。",
+        "GPT-6 Astra 上 n=15，APR 高于 OpenJudge，区间重叠。这一行 OpenJudge 是每篇 1 次调用。",
     ]
-    note_y = 860
+    note_y = 920
     for note in notes:
         for line in _wrap_chars(draw, note, _cjk(14), width - 96):
             draw.text((48, note_y), line, font=_cjk(14), fill=MUTED)
@@ -842,7 +851,7 @@ def render_chart_png_zh(rows: list[dict], path: Path) -> None:
 
 def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
     rows = _zh_rows(rows)
-    width, height = 1480, 900
+    width, height = 1960, 980
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#faf8f4"/>',
@@ -850,15 +859,15 @@ def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
         f'<text x="48" y="96" font-family="{CJK_FAMILY}" font-size="16" fill="#57534e">同一批 15 篇公开 OpenReview 论文。误差线是 95% 自助法区间（重抽样 4000 次，种子 20261021）。</text>',
     ]
     panels = [
-        ("Spearman · 和人类均分的相关性", "spearman", "spearman_ci", -0.25, 1.0, 78),
-        ("AUC · 录用对拒稿", "auc", "auc_ci", 0.25, 1.0, 788),
+        ("Spearman · 和人类均分的相关性", "spearman", "spearman_ci", -0.25, 1.0, 108),
+        ("AUC · 录用对拒稿", "auc", "auc_ci", 0.25, 1.0, 1016),
     ]
     for heading, key, ci_key, y_min, y_max, left in panels:
         parts.append(
             f'<text x="{left}" y="148" font-family="{CJK_FAMILY}" font-size="18" font-weight="600" fill="#1c1917">{heading}</text>'
         )
-        plot_top, plot_bottom = 172, 720
-        plot_left, plot_right = left + 36, left + 632
+        plot_top, plot_bottom = 172, 760
+        plot_left, plot_right = left + 36, left + 852
         span = y_max - y_min
 
         def y_of(value: float) -> float:
@@ -880,10 +889,18 @@ def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
                 f'<rect x="{cx - 18:.1f}" y="{top_y:.1f}" width="36" height="{max(bot_y - top_y, 1):.1f}" rx="4" fill="{color}"/>'
             )
             ci = row[ci_key]
-            if ci is not None:
-                parts.append(
-                    f'<line x1="{cx:.1f}" y1="{y_of(ci[0]):.1f}" x2="{cx:.1f}" y2="{y_of(ci[1]):.1f}" stroke="#1c1917" stroke-width="2"/>'
-                )
+            if ci is None:
+                raise SystemExit(f"missing interval for {row['group']} {row['name']} {key}")
+            y_lo, y_hi = y_of(ci[0]), y_of(ci[1])
+            parts.append(
+                f'<line x1="{cx:.1f}" y1="{y_lo:.1f}" x2="{cx:.1f}" y2="{y_hi:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
+            parts.append(
+                f'<line x1="{cx - 7:.1f}" y1="{y_lo:.1f}" x2="{cx + 7:.1f}" y2="{y_lo:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
+            parts.append(
+                f'<line x1="{cx - 7:.1f}" y1="{y_hi:.1f}" x2="{cx + 7:.1f}" y2="{y_hi:.1f}" stroke="#1c1917" stroke-width="2"/>'
+            )
             parts.append(
                 f'<text x="{cx:.1f}" y="{top_y - 6:.1f}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="11" fill="#1c1917">{r3(value)}</text>'
             )
@@ -894,7 +911,7 @@ def render_chart_svg_zh(rows: list[dict], path: Path) -> None:
                 f'<text x="{cx:.1f}" y="{plot_bottom + 48}" text-anchor="middle" font-family="{CJK_FAMILY}" font-size="12" fill="#57534e">{row["name"]}</text>'
             )
     parts.append(
-        f'<text x="48" y="860" font-family="{CJK_FAMILY}" font-size="13" fill="#57534e">汇总里没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。这个样本量下区间重叠。</text>'
+        f'<text x="48" y="940" font-family="{CJK_FAMILY}" font-size="13" fill="#57534e">每一组都是柱加误差线。APR Opus 的 AUC 在 1.000 处退化（n=14）。GPT-6 Astra 上 n=15，APR 高于 OpenJudge，区间重叠。</text>'
     )
     parts.append("</svg>")
     path.write_text("\n".join(parts) + "\n", encoding="utf-8")

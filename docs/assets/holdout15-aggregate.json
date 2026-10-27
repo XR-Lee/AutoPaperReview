@@ -102,6 +102,20 @@
     },
     "model_as_recorded": "Grok, mean of the two runs above"
   },
+  "openjudge_astra": {
+    "n": 15,
+    "point": {
+      "spearman": 0.5145,
+      "auc": 0.64
+    },
+    "ci95": {
+      "spearman": [0.1713, 0.7858],
+      "auc": [0.4091, 0.9]
+    },
+    "calls": 15,
+    "model_as_recorded": "GPT-6 Astra",
+    "note": "Full holdout-15, n=15, same 1-call harness as the other OpenJudge rows. Compared with APR forecast-k1 on the public main revision efd0568. Bootstrap 4000, seed 20261021, 95% interval. No paper identifiers."
+  },
   "APR_main_r11_forecast_k1": {
     "holdout_opus55": {
       "n": 14,
@@ -123,6 +137,15 @@
       "bias": -0.848,
       "cost_per_paper": 0.1135
     },
+    "holdout_astra": {
+      "n": 15,
+      "spearman": 0.706,
+      "spearman_ci": [0.3248, 0.9017],
+      "auc": 0.78,
+      "auc_ci": [0.5, 1.0],
+      "model_as_recorded": "GPT-6 Astra",
+      "note": "Full holdout-15, n=15, both sides complete. Same locked forecast-k1 parameters as the public main revision efd0568. Bootstrap 4000, seed 20261021, 95% interval. No MAE, bias, or cost. No paper identifiers."
+    },
     "tune30_opus55": {
       "n": 29,
       "spearman": 0.8582,
@@ -132,6 +155,51 @@
       "n": 30,
       "spearman": 0.656,
       "auc": 0.8565
+    }
+  },
+  "matched14_not_plotted": {
+    "note": "Shared 14-paper subset across six systems. Not plotted and not quoted in the README. The charts use the recorded full holdout, where APR Opus is n=14 because one paper timed out and the other rows are n=15.",
+    "apr_opus55": {
+      "n": 14,
+      "spearman": 0.8505,
+      "spearman_ci": [0.4497, 0.9911],
+      "auc": 1.0,
+      "auc_ci": [1.0, 1.0]
+    },
+    "openjudge_opus55": {
+      "n": 14,
+      "spearman": 0.8911,
+      "spearman_ci": [0.7086, 0.961],
+      "auc": 0.8875,
+      "auc_ci": [0.6875, 1.0]
+    },
+    "apr_grok47": {
+      "n": 14,
+      "spearman": 0.7363,
+      "spearman_ci": [0.3032, 0.9422],
+      "auc": 0.775,
+      "auc_ci": [0.4665, 1.0]
+    },
+    "openjudge_grok_run1": {
+      "n": 14,
+      "spearman": 0.7452,
+      "spearman_ci": [0.4008, 0.9065],
+      "auc": 0.7125,
+      "auc_ci": [0.5, 0.9231]
+    },
+    "apr_gpt6_astra": {
+      "n": 14,
+      "spearman": 0.6967,
+      "spearman_ci": [0.2489, 0.9134],
+      "auc": 0.775,
+      "auc_ci": [0.4615, 1.0]
+    },
+    "openjudge_gpt6_astra": {
+      "n": 14,
+      "spearman": 0.616,
+      "spearman_ci": [0.2427, 0.8546],
+      "auc": 0.6875,
+      "auc_ci": [0.4091, 1.0]
     }
   }
 }

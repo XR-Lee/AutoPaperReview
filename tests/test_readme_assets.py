@@ -61,6 +61,47 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assertIn("| 14 |", readme)
         self.assertNotIn("openreview.net/forum", readme.lower())
 
+    def test_astra_full_holdout_is_quoted_and_matched14_is_not(self) -> None:
+        payload = json.loads(AGGREGATE.read_text(encoding="utf-8"))
+        apr = payload["APR_main_r11_forecast_k1"]["holdout_astra"]
+        judge = payload["openjudge_astra"]
+        self.assertEqual(apr["n"], 15)
+        self.assertEqual(judge["n"], 15)
+        self.assertEqual(apr["model_as_recorded"], "GPT-6 Astra")
+        text = AGGREGATE.read_text(encoding="utf-8").lower()
+        self.assertNotIn("forum", text)
+        self.assertNotIn("openreview.net", text)
+        for note in (apr["note"], judge["note"], payload["matched14_not_plotted"]["note"]):
+            lowered = note.lower()
+            self.assertNotIn("forum", lowered)
+            self.assertNotIn("openreview.net", lowered)
+        matched = payload["matched14_not_plotted"]
+        self.assertEqual(matched["apr_gpt6_astra"]["n"], 14)
+        english = README.read_text(encoding="utf-8")
+        chinese = README_ZH.read_text(encoding="utf-8")
+        quoted = [
+            r3(apr["spearman"]),
+            r3(apr["spearman_ci"][0]),
+            r3(apr["spearman_ci"][1]),
+            r3(apr["auc"]),
+            r3(apr["auc_ci"][0]),
+            r3(apr["auc_ci"][1]),
+            r3(judge["point"]["spearman"]),
+            r3(judge["ci95"]["spearman"][0]),
+            r3(judge["ci95"]["spearman"][1]),
+            r3(judge["point"]["auc"]),
+            r3(judge["ci95"]["auc"][0]),
+            r3(judge["ci95"]["auc"][1]),
+            "GPT-6 Astra",
+        ]
+        for token in quoted:
+            self.assertIn(token, english)
+            self.assertIn(token, chinese)
+        # The shared 14-paper subset is archived, not substituted for the full holdout.
+        for hidden in (r3(matched["apr_gpt6_astra"]["spearman"]), r3(matched["openjudge_opus55"]["spearman"])):
+            self.assertNotIn(hidden, english)
+            self.assertNotIn(hidden, chinese)
+
     def test_showcase_pngs_are_allowlisted_images(self) -> None:
         allow = (ROOT / "scripts" / "confidentiality_allowlist.txt").read_text(encoding="utf-8")
         for relative in PNGS:
@@ -70,8 +111,12 @@ class ReadmeAssetTests(unittest.TestCase):
             self.assertGreater(len(blob), 10_000, relative)
         svg = (ROOT / "docs" / "assets" / "holdout-ranking.svg").read_text(encoding="utf-8")
         self.assertIn(r3(0.8505), svg)
+        self.assertIn("GPT-6 Astra", svg)
+        self.assertIn(r3(0.706), svg)
         self.assertNotIn("openreview.net", svg.lower())
         self.assertIsNone(HAN.search(svg))
+        renderer = (ROOT / "scripts" / "render_readme_figures.py").read_text(encoding="utf-8")
+        self.assertNotIn("ellipse", renderer)
 
     def test_english_readme_has_no_han_and_links_to_chinese(self) -> None:
         readme = README.read_text(encoding="utf-8")
@@ -110,6 +155,7 @@ class ReadmeAssetTests(unittest.TestCase):
         glance = (ROOT / "docs" / "assets" / "holdout-glance.svg").read_text(encoding="utf-8")
         self.assertIsNone(HAN.search(glance))
         self.assertIn("degenerate", glance)
+        self.assertIn("GPT-6 Astra", glance)
         self.assertNotIn("is a point", glance)
         glance_zh = (ROOT / "docs" / "assets" / "holdout-glance.zh-CN.svg").read_text(encoding="utf-8")
         self.assertIsNotNone(HAN.search(glance_zh))

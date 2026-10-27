@@ -1,91 +1,149 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="900" viewBox="0 0 1480 900">
+<svg xmlns="http://www.w3.org/2000/svg" width="1960" height="980" viewBox="0 0 1960 980">
 <rect width="100%" height="100%" fill="#faf8f4"/>
 <text x="48" y="64" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="30" font-weight="700" fill="#1c1917">Holdout-15 · 排序分和人类评分</text>
 <text x="48" y="96" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="16" fill="#57534e">同一批 15 篇公开 OpenReview 论文。误差线是 95% 自助法区间（重抽样 4000 次，种子 20261021）。</text>
-<text x="78" y="148" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="600" fill="#1c1917">Spearman · 和人类均分的相关性</text>
-<line x1="114" y1="698.1" x2="710" y2="698.1" stroke="#ddd8d0"/>
-<line x1="114" y1="610.4" x2="710" y2="610.4" stroke="#ddd8d0"/>
-<line x1="114" y1="522.7" x2="710" y2="522.7" stroke="#ddd8d0"/>
-<line x1="114" y1="435.0" x2="710" y2="435.0" stroke="#ddd8d0"/>
-<line x1="114" y1="347.4" x2="710" y2="347.4" stroke="#ddd8d0"/>
-<line x1="114" y1="259.7" x2="710" y2="259.7" stroke="#ddd8d0"/>
-<line x1="114" y1="172.0" x2="710" y2="172.0" stroke="#ddd8d0"/>
-<rect x="138.6" y="237.5" width="36" height="372.9" rx="4" fill="#0f6e6b"/>
-<line x1="156.6" y1="424.1" x2="156.6" y2="177.7" stroke="#1c1917" stroke-width="2"/>
-<text x="156.6" y="231.5" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.851</text>
-<text x="156.6" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
-<text x="156.6" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
-<rect x="223.7" y="276.6" width="36" height="333.8" rx="4" fill="#0f6e6b"/>
-<line x1="241.7" y1="439.9" x2="241.7" y2="198.7" stroke="#1c1917" stroke-width="2"/>
-<text x="241.7" y="270.6" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.761</text>
-<text x="241.7" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
-<text x="241.7" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 4.7</text>
-<rect x="308.9" y="223.3" width="36" height="387.1" rx="4" fill="#1d4e89"/>
-<line x1="326.9" y1="302.5" x2="326.9" y2="194.1" stroke="#1c1917" stroke-width="2"/>
-<text x="326.9" y="217.3" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.883</text>
-<text x="326.9" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="326.9" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
-<rect x="394.0" y="298.3" width="36" height="312.1" rx="4" fill="#1d4e89"/>
-<line x1="412.0" y1="457.8" x2="412.0" y2="219.3" stroke="#1c1917" stroke-width="2"/>
-<text x="412.0" y="292.3" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.712</text>
-<text x="412.0" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="412.0" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 1 次</text>
-<rect x="479.1" y="303.4" width="36" height="307.0" rx="4" fill="#1d4e89"/>
-<line x1="497.1" y1="453.0" x2="497.1" y2="220.8" stroke="#1c1917" stroke-width="2"/>
-<text x="497.1" y="297.4" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.700</text>
-<text x="497.1" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="497.1" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 2 次</text>
-<rect x="564.3" y="466.9" width="36" height="143.5" rx="4" fill="#b45309"/>
-<line x1="582.3" y1="681.4" x2="582.3" y2="297.3" stroke="#1c1917" stroke-width="2"/>
-<text x="582.3" y="460.9" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.327</text>
-<text x="582.3" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">ProReviewer</text>
-<text x="582.3" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
-<rect x="649.4" y="447.5" width="36" height="162.9" rx="4" fill="#57534e"/>
-<line x1="667.4" y1="590.4" x2="667.4" y2="316.7" stroke="#1c1917" stroke-width="2"/>
-<text x="667.4" y="441.5" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.372</text>
-<text x="667.4" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">Sakana</text>
-<text x="667.4" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
-<text x="788" y="148" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="600" fill="#1c1917">AUC · 录用对拒稿</text>
-<line x1="824" y1="683.5" x2="1420" y2="683.5" stroke="#ddd8d0"/>
-<line x1="824" y1="610.4" x2="1420" y2="610.4" stroke="#ddd8d0"/>
-<line x1="824" y1="537.3" x2="1420" y2="537.3" stroke="#ddd8d0"/>
-<line x1="824" y1="464.3" x2="1420" y2="464.3" stroke="#ddd8d0"/>
-<line x1="824" y1="391.2" x2="1420" y2="391.2" stroke="#ddd8d0"/>
-<line x1="824" y1="318.1" x2="1420" y2="318.1" stroke="#ddd8d0"/>
-<line x1="824" y1="245.1" x2="1420" y2="245.1" stroke="#ddd8d0"/>
-<line x1="824" y1="172.0" x2="1420" y2="172.0" stroke="#ddd8d0"/>
-<rect x="848.6" y="172.0" width="36" height="548.0" rx="4" fill="#0f6e6b"/>
-<text x="866.6" y="166.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">1.000</text>
-<text x="866.6" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
-<text x="866.6" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
-<rect x="933.7" y="318.1" width="36" height="401.9" rx="4" fill="#0f6e6b"/>
-<text x="951.7" y="312.1" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.800</text>
-<text x="951.7" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
-<text x="951.7" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 4.7</text>
-<rect x="1018.9" y="252.4" width="36" height="467.6" rx="4" fill="#1d4e89"/>
-<line x1="1036.9" y1="395.3" x2="1036.9" y2="172.0" stroke="#1c1917" stroke-width="2"/>
-<text x="1036.9" y="246.4" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.890</text>
-<text x="1036.9" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="1036.9" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
-<rect x="1104.0" y="391.2" width="36" height="328.8" rx="4" fill="#1d4e89"/>
-<line x1="1122.0" y1="550.9" x2="1122.0" y2="245.1" stroke="#1c1917" stroke-width="2"/>
-<text x="1122.0" y="385.2" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.700</text>
-<text x="1122.0" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="1122.0" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 1 次</text>
-<rect x="1189.1" y="362.0" width="36" height="358.0" rx="4" fill="#1d4e89"/>
-<line x1="1207.1" y1="537.3" x2="1207.1" y2="221.8" stroke="#1c1917" stroke-width="2"/>
-<text x="1207.1" y="356.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.740</text>
-<text x="1207.1" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
-<text x="1207.1" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 2 次</text>
-<rect x="1274.3" y="493.5" width="36" height="226.5" rx="4" fill="#b45309"/>
-<line x1="1292.3" y1="683.5" x2="1292.3" y2="293.8" stroke="#1c1917" stroke-width="2"/>
-<text x="1292.3" y="487.5" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.560</text>
-<text x="1292.3" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">ProReviewer</text>
-<text x="1292.3" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
-<rect x="1359.4" y="508.1" width="36" height="211.9" rx="4" fill="#57534e"/>
-<line x1="1377.4" y1="637.0" x2="1377.4" y2="354.7" stroke="#1c1917" stroke-width="2"/>
-<text x="1377.4" y="502.1" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.540</text>
-<text x="1377.4" y="748" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">Sakana</text>
-<text x="1377.4" y="768" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
-<text x="48" y="860" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#57534e">汇总里没有 APR 的 AUC 区间。OpenJudge 的 Grok 没有记录版本。ProReviewer 和 Sakana 的模型也没有记录。这个样本量下区间重叠。</text>
+<text x="108" y="148" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="600" fill="#1c1917">Spearman · 和人类均分的相关性</text>
+<line x1="144" y1="736.5" x2="960" y2="736.5" stroke="#ddd8d0"/>
+<line x1="144" y1="642.4" x2="960" y2="642.4" stroke="#ddd8d0"/>
+<line x1="144" y1="548.3" x2="960" y2="548.3" stroke="#ddd8d0"/>
+<line x1="144" y1="454.2" x2="960" y2="454.2" stroke="#ddd8d0"/>
+<line x1="144" y1="360.2" x2="960" y2="360.2" stroke="#ddd8d0"/>
+<line x1="144" y1="266.1" x2="960" y2="266.1" stroke="#ddd8d0"/>
+<line x1="144" y1="172.0" x2="960" y2="172.0" stroke="#ddd8d0"/>
+<rect x="171.3" y="242.3" width="36" height="400.1" rx="4" fill="#0f6e6b"/>
+<line x1="189.3" y1="442.5" x2="189.3" y2="178.1" stroke="#1c1917" stroke-width="2"/>
+<line x1="182.3" y1="442.5" x2="196.3" y2="442.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="182.3" y1="178.1" x2="196.3" y2="178.1" stroke="#1c1917" stroke-width="2"/>
+<text x="189.3" y="236.3" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.851</text>
+<text x="189.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="189.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
+<rect x="262.0" y="284.2" width="36" height="358.2" rx="4" fill="#0f6e6b"/>
+<line x1="280.0" y1="459.4" x2="280.0" y2="200.7" stroke="#1c1917" stroke-width="2"/>
+<line x1="273.0" y1="459.4" x2="287.0" y2="459.4" stroke="#1c1917" stroke-width="2"/>
+<line x1="273.0" y1="200.7" x2="287.0" y2="200.7" stroke="#1c1917" stroke-width="2"/>
+<text x="280.0" y="278.2" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.761</text>
+<text x="280.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="280.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 4.7</text>
+<rect x="352.7" y="310.3" width="36" height="332.1" rx="4" fill="#0f6e6b"/>
+<line x1="370.7" y1="489.6" x2="370.7" y2="218.2" stroke="#1c1917" stroke-width="2"/>
+<line x1="363.7" y1="489.6" x2="377.7" y2="489.6" stroke="#1c1917" stroke-width="2"/>
+<line x1="363.7" y1="218.2" x2="377.7" y2="218.2" stroke="#1c1917" stroke-width="2"/>
+<text x="370.7" y="304.3" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.706</text>
+<text x="370.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="370.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">GPT-6 Astra</text>
+<rect x="443.3" y="227.0" width="36" height="415.4" rx="4" fill="#1d4e89"/>
+<line x1="461.3" y1="312.0" x2="461.3" y2="195.7" stroke="#1c1917" stroke-width="2"/>
+<line x1="454.3" y1="312.0" x2="468.3" y2="312.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="454.3" y1="195.7" x2="468.3" y2="195.7" stroke="#1c1917" stroke-width="2"/>
+<text x="461.3" y="221.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.883</text>
+<text x="461.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="461.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
+<rect x="534.0" y="307.5" width="36" height="334.9" rx="4" fill="#1d4e89"/>
+<line x1="552.0" y1="478.6" x2="552.0" y2="222.8" stroke="#1c1917" stroke-width="2"/>
+<line x1="545.0" y1="478.6" x2="559.0" y2="478.6" stroke="#1c1917" stroke-width="2"/>
+<line x1="545.0" y1="222.8" x2="559.0" y2="222.8" stroke="#1c1917" stroke-width="2"/>
+<text x="552.0" y="301.5" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.712</text>
+<text x="552.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="552.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 1 次</text>
+<rect x="624.7" y="313.0" width="36" height="329.4" rx="4" fill="#1d4e89"/>
+<line x1="642.7" y1="473.5" x2="642.7" y2="224.3" stroke="#1c1917" stroke-width="2"/>
+<line x1="635.7" y1="473.5" x2="649.7" y2="473.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="635.7" y1="224.3" x2="649.7" y2="224.3" stroke="#1c1917" stroke-width="2"/>
+<text x="642.7" y="307.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.700</text>
+<text x="642.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="642.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 2 次</text>
+<rect x="715.3" y="400.4" width="36" height="242.0" rx="4" fill="#1d4e89"/>
+<line x1="733.3" y1="561.8" x2="733.3" y2="272.8" stroke="#1c1917" stroke-width="2"/>
+<line x1="726.3" y1="561.8" x2="740.3" y2="561.8" stroke="#1c1917" stroke-width="2"/>
+<line x1="726.3" y1="272.8" x2="740.3" y2="272.8" stroke="#1c1917" stroke-width="2"/>
+<text x="733.3" y="394.4" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.515</text>
+<text x="733.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="733.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">GPT-6 Astra</text>
+<rect x="806.0" y="488.4" width="36" height="154.0" rx="4" fill="#b45309"/>
+<line x1="824.0" y1="718.5" x2="824.0" y2="306.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="817.0" y1="718.5" x2="831.0" y2="718.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="817.0" y1="306.5" x2="831.0" y2="306.5" stroke="#1c1917" stroke-width="2"/>
+<text x="824.0" y="482.4" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.327</text>
+<text x="824.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">ProReviewer</text>
+<text x="824.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
+<rect x="896.7" y="467.6" width="36" height="174.8" rx="4" fill="#57534e"/>
+<line x1="914.7" y1="621.0" x2="914.7" y2="327.3" stroke="#1c1917" stroke-width="2"/>
+<line x1="907.7" y1="621.0" x2="921.7" y2="621.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="907.7" y1="327.3" x2="921.7" y2="327.3" stroke="#1c1917" stroke-width="2"/>
+<text x="914.7" y="461.6" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.372</text>
+<text x="914.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">Sakana</text>
+<text x="914.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
+<text x="1016" y="148" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="600" fill="#1c1917">AUC · 录用对拒稿</text>
+<line x1="1052" y1="720.8" x2="1868" y2="720.8" stroke="#ddd8d0"/>
+<line x1="1052" y1="642.4" x2="1868" y2="642.4" stroke="#ddd8d0"/>
+<line x1="1052" y1="564.0" x2="1868" y2="564.0" stroke="#ddd8d0"/>
+<line x1="1052" y1="485.6" x2="1868" y2="485.6" stroke="#ddd8d0"/>
+<line x1="1052" y1="407.2" x2="1868" y2="407.2" stroke="#ddd8d0"/>
+<line x1="1052" y1="328.8" x2="1868" y2="328.8" stroke="#ddd8d0"/>
+<line x1="1052" y1="250.4" x2="1868" y2="250.4" stroke="#ddd8d0"/>
+<line x1="1052" y1="172.0" x2="1868" y2="172.0" stroke="#ddd8d0"/>
+<rect x="1079.3" y="172.0" width="36" height="588.0" rx="4" fill="#0f6e6b"/>
+<line x1="1097.3" y1="172.0" x2="1097.3" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1090.3" y1="172.0" x2="1104.3" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1090.3" y1="172.0" x2="1104.3" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<text x="1097.3" y="166.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">1.000</text>
+<text x="1097.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="1097.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
+<rect x="1170.0" y="328.8" width="36" height="431.2" rx="4" fill="#0f6e6b"/>
+<line x1="1188.0" y1="549.5" x2="1188.0" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1181.0" y1="549.5" x2="1195.0" y2="549.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="1181.0" y1="172.0" x2="1195.0" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<text x="1188.0" y="322.8" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.800</text>
+<text x="1188.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="1188.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 4.7</text>
+<rect x="1260.7" y="344.5" width="36" height="415.5" rx="4" fill="#0f6e6b"/>
+<line x1="1278.7" y1="564.0" x2="1278.7" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1271.7" y1="564.0" x2="1285.7" y2="564.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1271.7" y1="172.0" x2="1285.7" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<text x="1278.7" y="338.5" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.780</text>
+<text x="1278.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">APR</text>
+<text x="1278.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">GPT-6 Astra</text>
+<rect x="1351.3" y="258.2" width="36" height="501.8" rx="4" fill="#1d4e89"/>
+<line x1="1369.3" y1="411.6" x2="1369.3" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1362.3" y1="411.6" x2="1376.3" y2="411.6" stroke="#1c1917" stroke-width="2"/>
+<line x1="1362.3" y1="172.0" x2="1376.3" y2="172.0" stroke="#1c1917" stroke-width="2"/>
+<text x="1369.3" y="252.2" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.890</text>
+<text x="1369.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="1369.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Opus 5.5</text>
+<rect x="1442.0" y="407.2" width="36" height="352.8" rx="4" fill="#1d4e89"/>
+<line x1="1460.0" y1="578.5" x2="1460.0" y2="250.4" stroke="#1c1917" stroke-width="2"/>
+<line x1="1453.0" y1="578.5" x2="1467.0" y2="578.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="1453.0" y1="250.4" x2="1467.0" y2="250.4" stroke="#1c1917" stroke-width="2"/>
+<text x="1460.0" y="401.2" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.700</text>
+<text x="1460.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="1460.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 1 次</text>
+<rect x="1532.7" y="375.8" width="36" height="384.2" rx="4" fill="#1d4e89"/>
+<line x1="1550.7" y1="564.0" x2="1550.7" y2="225.5" stroke="#1c1917" stroke-width="2"/>
+<line x1="1543.7" y1="564.0" x2="1557.7" y2="564.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1543.7" y1="225.5" x2="1557.7" y2="225.5" stroke="#1c1917" stroke-width="2"/>
+<text x="1550.7" y="369.8" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.740</text>
+<text x="1550.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="1550.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">Grok 第 2 次</text>
+<rect x="1623.3" y="454.2" width="36" height="305.8" rx="4" fill="#1d4e89"/>
+<line x1="1641.3" y1="635.3" x2="1641.3" y2="250.4" stroke="#1c1917" stroke-width="2"/>
+<line x1="1634.3" y1="635.3" x2="1648.3" y2="635.3" stroke="#1c1917" stroke-width="2"/>
+<line x1="1634.3" y1="250.4" x2="1648.3" y2="250.4" stroke="#1c1917" stroke-width="2"/>
+<text x="1641.3" y="448.2" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.640</text>
+<text x="1641.3" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">OpenJudge</text>
+<text x="1641.3" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">GPT-6 Astra</text>
+<rect x="1714.0" y="517.0" width="36" height="243.0" rx="4" fill="#b45309"/>
+<line x1="1732.0" y1="720.8" x2="1732.0" y2="302.7" stroke="#1c1917" stroke-width="2"/>
+<line x1="1725.0" y1="720.8" x2="1739.0" y2="720.8" stroke="#1c1917" stroke-width="2"/>
+<line x1="1725.0" y1="302.7" x2="1739.0" y2="302.7" stroke="#1c1917" stroke-width="2"/>
+<text x="1732.0" y="511.0" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.560</text>
+<text x="1732.0" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">ProReviewer</text>
+<text x="1732.0" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
+<rect x="1804.7" y="532.6" width="36" height="227.4" rx="4" fill="#57534e"/>
+<line x1="1822.7" y1="670.9" x2="1822.7" y2="368.0" stroke="#1c1917" stroke-width="2"/>
+<line x1="1815.7" y1="670.9" x2="1829.7" y2="670.9" stroke="#1c1917" stroke-width="2"/>
+<line x1="1815.7" y1="368.0" x2="1829.7" y2="368.0" stroke="#1c1917" stroke-width="2"/>
+<text x="1822.7" y="526.6" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="11" fill="#1c1917">0.540</text>
+<text x="1822.7" y="788" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#1c1917">Sakana</text>
+<text x="1822.7" y="808" text-anchor="middle" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="12" fill="#57534e">模型未记录</text>
+<text x="48" y="940" font-family="WenQuanYi Micro Hei, Noto Sans CJK SC, sans-serif" font-size="13" fill="#57534e">每一组都是柱加误差线。APR Opus 的 AUC 在 1.000 处退化（n=14）。GPT-6 Astra 上 n=15，APR 高于 OpenJudge，区间重叠。</text>
 </svg>
