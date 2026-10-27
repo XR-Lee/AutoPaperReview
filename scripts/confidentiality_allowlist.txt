@@ -15,5 +15,3 @@ docs/assets/holdout-ranking.zh-CN.png
 docs/assets/forecast-panel.zh-CN.png
 docs/assets/holdout-glance.png
 docs/assets/holdout-glance.zh-CN.png
-docs/assets/ablation-holdout.png
-docs/assets/ablation-holdout.zh-CN.png

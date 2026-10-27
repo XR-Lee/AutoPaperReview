@@ -1,0 +1,96 @@
+{
+  "note": "Aggregate tune-30 metrics only (public OpenReview papers; no ids). Spearman vs mean reviewer rating; AUC accept vs reject. 95% paper-level bootstrap CI where a CI is present, 4000 resamples, seed 20261021. APR draws are separate runs of the preregistered forecast-k1. OpenJudge rows are the same-scaffold comparison on this split.",
+  "tune30_same_scaffold_openjudge_vs_main": {
+    "grok-4.7": {
+      "openjudge": {
+        "n": 30,
+        "spearman": 0.6292,
+        "spearman_ci": [
+          0.315,
+          0.836
+        ],
+        "auc": 0.8158,
+        "auc_ci": [
+          0.662,
+          0.938
+        ]
+      },
+      "apr_main_forecast_k1_draws": [
+        {
+          "run": "r11",
+          "spearman": 0.656,
+          "auc": 0.8565
+        },
+        {
+          "run": "r12",
+          "spearman": 0.5816,
+          "auc": 0.7608
+        }
+      ]
+    },
+    "opus-5.5": {
+      "openjudge": {
+        "n": 29,
+        "spearman": 0.6345,
+        "spearman_ci": [
+          0.345,
+          0.83
+        ],
+        "auc": 0.8788,
+        "auc_ci": [
+          0.748,
+          0.972
+        ],
+        "note": "1 paper refused by safety classifier; OJ effort xhigh"
+      },
+      "apr_main_forecast_k1_draws": [
+        {
+          "spearman": 0.8582,
+          "auc": 1.0
+        },
+        {
+          "spearman": 0.8372,
+          "auc": 1.0
+        },
+        {
+          "spearman": 0.8146,
+          "auc": 1.0
+        }
+      ],
+      "note": "On Opus, OpenJudge's holdout edge (0.883 vs main 0.851) does not reproduce on tune-30; main beats it by 0.18-0.22 Spearman and ~0.12 AUC."
+    }
+  },
+  "negative_ablations_did_not_help": {
+    "r14_dated_k1": {
+      "desc": "forecast panel told to review as of the manuscript's writing time, no hindsight evidence",
+      "grok-4.7": {
+        "spearman": 0.554,
+        "auc": 0.766
+      },
+      "opus-5.5": {
+        "n": 29,
+        "spearman": 0.827,
+        "auc": 0.985,
+        "corr_with_main": 0.985
+      }
+    },
+    "r15_duo_k1": {
+      "desc": "equal-weight average of main's forecast panel and a separate full-report expert referee",
+      "grok-4.7": {
+        "duo": {
+          "spearman": 0.4934,
+          "auc": 0.7751
+        },
+        "panel_only": {
+          "spearman": 0.6188,
+          "auc": 0.8014
+        },
+        "referee_only": {
+          "spearman": 0.4209,
+          "auc": 0.7488
+        }
+      },
+      "opus-5.5": "not evaluable: referee calls timed out at effort max"
+    }
+  }
+}

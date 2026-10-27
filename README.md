@@ -234,99 +234,32 @@ autopaperreview doctor          Optional extras and adapters
 
 ## Method and ablation
 
-The chart above is the shipped rank, `forecast-k1`, next to three other systems. This section is the review pipeline itself, how it differs from those systems, and which score change moved the Grok holdout number.
+The chart above is the shipped rank, `forecast-k1`, next to three other systems. Two things are easy to miss there. OpenJudge is not the same kind of review, and the rank did not climb as a row of similar bars.
 
-### How the pipeline differs
+### APR and OpenJudge, per paper
 
-This repository does not include OpenJudge, ProReviewer, or Sakana. Nothing below adds a claim about them that is not already in [Where the other models come from](#other-models) or in the table under [What a score does not give you](#comparison).
+APR has two different runs. The table measures one forecast call. The default `run` writes a review and does not move that number. OpenJudge's public default is a multi-grader pipeline. This repository does not ship that code. The description below is OpenJudge `cookbooks/paper_review` at [this commit](https://github.com/agentscope-ai/OpenJudge/blob/c2fdc38314cd971b03d4d9333cd2c9f24d85c27f/cookbooks/paper_review/pipeline.py), plus the call count already in the cost table here. ProReviewer and Sakana stay in [What a score does not give you](#comparison).
 
-APR's default run writes a review. The model proposes a judgment. The pipeline keeps it only when the quoted excerpt is in the manuscript or a retrieved snapshot.
+- **What the score is.** APR's benchmark reads `forecast-k1`: one call, three seats, each a probability over 1/3/5/6/8/10. The rank is the mean of the three expected ratings. The 1–6 decision on that same call is the bin on the review form, not the rank. OpenJudge's published recommendation is the review grader's integer 1–6 (`result.review.score`). Correctness is a separate 1–3 score. It does not replace the 1–6.
+- **How many model calls.** The APR number in the table is 1 forecast call (`--cheap`). OpenJudge's default `review_paper` makes 4 model calls: jailbreak, format, correctness, and review. It makes a 5th, criticality, only when the correctness score is above 1. A `.bib` file is optional. If you pass one, CrossRef checks it. That check is not another model call. The holdout cost table records OpenJudge as 1 call per paper, so that row is not this default pipeline.
+- **What is checked against the paper.** APR keeps a dimension score only when the quoted excerpt is in the manuscript, and keeps a fatal class only when a second call, `fatal-verify`, agrees. OpenJudge can mark a correctness finding as a false positive. That public pipeline does not require the review sentence to match a span in the PDF. The input it does take is the PDF (a TeX package is a separate entry point). Rendering pages as images is off unless `use_vision_for_pdf` is set.
+- **What you get back.** APR's default run writes the seven-dimension review, the evidence ledger, and, when PyMuPDF is installed, `annotated_manuscript.pdf` with margin numbers (`E1`, `E2`) and pop-up comments. OpenJudge's `generate_report` writes markdown: safety, correctness, the 1–6 review, and criticality. It does not write numbered comments onto the source PDF.
 
-- **Seven dimensions, with an evidence ledger and quoted anchors.** Each dimension score is the clause the model cites (`sar_bands_v1`). The excerpt has to resolve, or `execute_review` retries once and then fails. The ledger stores the claim, the evidence, and what is still missing, and the report cites those quotes by evidence id.
-- **Contributions audit.** At least one listed contribution, with an excerpt under the same rule. An empty list fails the stage.
-- **Fatal-flaw candidates, then a separate verify pass.** The `fatal` judgment names a class for an issue id the pipeline already assigned. A second call, `fatal-verify`, has to agree that the excerpt states that class. If it does not, the class is dropped. `missing_closest_neighbor` is rejected on that path; related-work search owns it.
-- **`forecast-k1`, a three-seat score forecast, with a decision-bin readout.** One `holistic` call simulates specialist, generalist, and senior (`anchors.FORECAST_SEATS`). Each seat writes a probability over 1/3/5/6/8/10. The rank is the mean of the three expected ratings, clamped to 1–10. The same call's 1–6 decision is not the rank. `decision_bin` maps it onto the ICLR bins on the review form. `vote`, `chair`, `high`, and `low` are diagnostic readouts of that same call.
-- **Related-work search, under a network policy.** The stage runs only when the TOML includes it. Queries are keywords and metadata (arXiv, OpenAlex, Semantic Scholar). Manuscript prose is not sent. A live search needs `network_policy` of `metadata_only` or `allow`. Status `degraded` does not lower the score.
-- **Venue profile format checks.** `profile` on `render_pages` and `format_check` accepts `iclr2027` or `aaai2027`: page limits, anonymity, and the other format checks in that profile. `venue` on `related_work_search` loads that venue's deadline file. Neither name selects a score formula.
-- **Annotated source PDF.** When `manuscript.pdf` sits next to the text and PyMuPDF is installed, the report stage writes `annotated_manuscript.pdf`: numbered margin markers (`E1`, `E2`, …), highlights, and pop-up comments authored by `APR reviewer`.
+<a id="ablations"></a>
 
-OpenJudge's public paper-review pipeline, as already described in this README, uses several graders: safety, correctness, a 1–6 scholarly score, a criticality pass that can mark a finding as a false positive, and BibTeX checks against CrossRef. It does not store a quote-to-span contract, and that public pipeline does not write numbered PDF comment popups. The published score is an integer 1–6.
+### What the ablations show
 
-ProReviewer, as already described here, is a multi-step agent with a review log. The public checkpoint is a Qwen3-8B model. This holdout does not record which model ran. The project page links log lines back to the paper. It is not described as a second excerpt check, and not as PDF popups.
+The useful part is the gap, not another grouped chart. Point estimates are in [`docs/assets/ablation-aggregate.json`](docs/assets/ablation-aggregate.json) and [`docs/assets/tune30-r14-r15-aggregate.json`](docs/assets/tune30-r14-r15-aggregate.json). A 95% interval, where one is shown, is a paper-level bootstrap: 4000 resamples, seed `20261021`.
 
-Sakana's `perform_review`, as already described here, returns NeurIPS-style scores, strengths, and weaknesses from extracted PDF text. The upstream default review model is `gpt-4o-2024-05-13`, with an ensemble. This holdout does not record the model or the ensemble settings. The published reviewer is an ensemble of integer overall scores, not a probability vector, and `perform_review` does not write numbered PDF markers.
+The step that moves the rank is leaving the weighted seven-dimension score and the decision bin for the averaged expected rating. On the Grok 4.7 holdout (n=15), Spearman goes from 0.452 (weighted) to 0.667 (r2 mean-k1) to 0.761 (shipped forecast-k1). The intervals are [−0.130, 0.870], [0.228, 0.895], and [0.389, 0.939]. On the tune split (n=30), the score average beats the bin: mean-k1 0.601/0.780 versus bin 0.485/0.658. The benchmark uses `rank_score` for that reason. The review form still prints the bin.
 
-### Where the holdout score moved
+Later calls on that holdout do not clear the noise. panel-k2 is 0.705 [0.313, 0.890], next to forecast-k1 at 0.761 [0.389, 0.939]. Those intervals overlap. Holdout-15 was opened in rounds 2, 8, and 11, so this is not one untouched holdout. n is 14 to 15.
 
-`forecast-k1` does not use the seven dimension bands. `apr-fusion-v1` ranks by that one call. The older formula, `apr-iclr-cap-v2`, is still in the code and is not a fusion candidate (`fusion.py`). It weights the seven bands with `rating.WEIGHTS`, applies a weakest-link gate (the minimum of claims-supported and experimental-soundness, plus 1), then any active venue cap. The first three bars are three readouts of that formula on the Grok 4.7 holdout (n=15):
+On tune-30, OpenJudge's Opus lead on the holdout does not come back. The holdout is OpenJudge 0.883 against APR 0.851. Same-scaffold tune-30, Opus 5.5, n=29 because 1 paper was refused by the safety classifier: OpenJudge Spearman 0.635 [0.345, 0.830], AUC 0.879 [0.748, 0.972]. The file records that OpenJudge effort as xhigh and does not record the APR effort on these draws. Three APR `forecast-k1` draws are 0.858, 0.837, and 0.815, each with AUC 1.000. Each draw is ahead by 0.18 to 0.22 Spearman and by about 0.12 AUC. On Grok 4.7, n=30, the two are close: OpenJudge 0.629 [0.315, 0.836] and AUC 0.816 [0.662, 0.938], against APR draws 0.656/0.857 and 0.582/0.761.
 
-- **weighted** — the weighted sum, before the gate and before the cap.
-- **capped** — after the gate and the venue cap.
-- **bin** — `snap_down` of the capped score onto 1/3/5/6/8/10, the largest bin that does not exceed the capped score.
+Two later ideas did not help. r14 dated-k1 tells the panel to review as of the manuscript's writing time, with no hindsight. Grok lands at 0.554/0.766, below the Grok draws above. Opus, n=29, lands at 0.827/0.985 and correlates 0.985 with the main forecast, inside the Opus draws 0.815 to 0.858. Dating the review did not add a ranking. r15 duo-k1 averages that panel with a separate full-report referee, equal weights. On Grok the average is 0.493/0.775. The referee alone is 0.421/0.749, and the panel alone on that run is 0.619/0.801. Averaging that referee in lowered the score. The Opus duo run has no number: the referee calls timed out.
 
-The next three bars are later rank calls on the same public papers, still Grok 4.7, n=15:
-
-- **r2 mean-k1** — one venue-mean call (`holistic_mode = mean`, K=1).
-- **r8 panel-k2** — two mixed-role panels, averaged (`holistic_mode = panel`, K=2).
-- **r11 forecast-k1** — the shipped three-seat forecast (K=1), preregistered as `LOCKED_CANDIDATE` in `anchors.py`.
-
-Holdout-15 was opened in rounds 2, 8, and 11. This is not six scores of one untouched holdout.
-
-![Grok 4.7 holdout ablation. Grouped bars are Spearman and AUC with 95% bootstrap intervals. The last pair is the shipped forecast-k1.](docs/assets/ablation-holdout.png)
-
-Grok 4.7, n=15. Spearman is against the mean official rating. AUC is accept versus reject. Intervals are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`), stored in [`docs/assets/ablation-aggregate.json`](docs/assets/ablation-aggregate.json). The last pair is the shipped rank. Rounded to three decimals:
-
-| Series | Spearman | AUC |
-| --- | --- | --- |
-| pre-fusion 7-dim weighted | 0.452 [−0.130, 0.870] | 0.790 [0.518, 0.982] |
-| pre-fusion 7-dim bin | 0.174 [−0.438, 0.662] | 0.650 [0.409, 0.917] |
-| pre-fusion 7-dim capped | 0.147 [−0.478, 0.686] | 0.650 [0.266, 0.972] |
-| r2 mean-k1 | 0.667 [0.228, 0.895] | 0.700 [0.398, 0.954] |
-| r8 panel-k2 | 0.705 [0.313, 0.890] | 0.740 [0.453, 0.980] |
-| r11 forecast-k1 | 0.761 [0.389, 0.939] | 0.800 [0.537, 1.000] |
-
-The weighted sum ranks better than the bin or the capped score on this slice (Spearman 0.452 versus 0.174 and 0.147). The later rank calls sit higher. The intervals still overlap, and n=15.
-
-### Same run, different readout
-
-These rows are one candidate run read out in more than one way. They are not a confirmation set. The file has point estimates and no bootstrap interval for them.
-
-Grok 4.7, round 11, n=30:
-
-| Readout | Spearman | AUC |
-| --- | --- | --- |
-| forecast-k1 | 0.656 | 0.857 |
-| vote-k1 | 0.628 | 0.828 |
-| chair-k1 | 0.684 | 0.866 |
-| high-k1 | 0.651 | 0.842 |
-| low-k1 | 0.651 | 0.821 |
-| decision-k1 | 0.639 | 0.830 |
-
-Opus 5.5, round 11, n=29:
-
-| Readout | Spearman | AUC |
-| --- | --- | --- |
-| forecast-k1 | 0.858 | 1.000 |
-| vote-k1 | 0.866 | 0.995 |
-| chair-k1 | 0.862 | 1.000 |
-| high-k1 | 0.875 | 0.995 |
-| low-k1 | 0.846 | 1.000 |
-| decision-k1 | 0.842 | 0.992 |
-
-Grok 4.7, round 2, the score average against the decision bin, n=30:
-
-| Readout | Spearman | AUC |
-| --- | --- | --- |
-| mean-k1 | 0.601 | 0.780 |
-| mean-k3 | 0.572 | 0.758 |
-| decision-k1 | 0.515 | 0.706 |
-| bin | 0.485 | 0.658 |
-
-On the Grok tune split, chair-k1 (0.684 / 0.866) is slightly above the preregistered forecast-k1 readout (0.656 / 0.857). On the Opus tune split, several readouts are within noise (Spearman from 0.842 to 0.875). `forecast-k1` was preregistered before the holdout. It was not picked on the holdout.
-
-Averaging scores beats reading the decision bin for ranking (r2 tune: mean-k1 0.601/0.780 vs bin 0.485/0.658). That is why the benchmark uses `rank_score` and the review form uses the bin.
-
-Every holdout interval above is wide. n is 14 to 15.
+`forecast-k1` was preregistered before the holdout. It was not picked on the holdout. On the Grok tune split, chair-k1 (0.684/0.866) is slightly above that readout (0.656/0.857). On Opus, the other readouts run from 0.842 to 0.875.
 
 <a id="track-b"></a>
 
@@ -400,7 +333,7 @@ APR’s score in this table is the shipped rank: `forecast-k1`, the mean expecte
 
 Read the table as a small sample, not a leaderboard:
 
-- **OpenJudge on Opus 5.5 ranks higher than APR on Opus** (Spearman 0.883 vs 0.851). APR’s Opus AUC is 1.000. OpenJudge’s is 0.890. APR has **14** papers, not 15. The Spearman intervals overlap.
+- **OpenJudge on Opus 5.5 ranks higher than APR on Opus** (Spearman 0.883 vs 0.851). APR’s Opus AUC is 1.000. OpenJudge’s is 0.890. APR has **14** papers, not 15. The Spearman intervals overlap. On tune-30 that lead reverses. See [What the ablations show](#ablations).
 - APR on Grok 4.7 is a bit above either OpenJudge Grok run (0.761 vs 0.712 and 0.700; AUC 0.800 vs 0.700 and 0.740). Those intervals overlap too.
 - ProReviewer and the Sakana reviewer are near chance on accept/reject (AUC 0.560 and 0.540). Their Spearman intervals still reach the 0.7s.
 - APR Kendall is not in the aggregate. OpenJudge MAE and bias are not in it either. OpenJudge’s published review score is an integer 1–6, so a MAE against a 1–10 human mean is not comparable without a mapping this repository does not have.
@@ -546,7 +479,7 @@ The network policy is a declaration the runner enforces on stage metadata. It is
 - Both models score below the human mean.
 - At the reported effort, Opus is about $0.66 and several minutes per paper, and it can time out (default budget 900 seconds).
 - `forecast-k1` is not checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs. They are not why the rank correlates.
-- OpenJudge on Opus has the higher Spearman on this holdout.
+- OpenJudge on Opus has the higher Spearman on this holdout. On tune-30 that lead does not hold. See [What the ablations show](#ablations).
 - ProReviewer’s and Sakana’s models for these runs were not recorded, so those rows compare systems, not models.
 - Related-work search can return a partial or degraded result. A failed provider must not tighten a cap. The report should say the search was incomplete.
 - Format profiles can reject an over-length or non-anonymous PDF. They do not set the forecast.

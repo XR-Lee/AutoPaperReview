@@ -20,14 +20,12 @@ PNGS = (
     "docs/assets/annotated-preview.png",
     "docs/assets/forecast-panel.png",
     "docs/assets/holdout-glance.png",
-    "docs/assets/ablation-holdout.png",
 )
 PNGS_ZH = (
     "docs/assets/hero.zh-CN.png",
     "docs/assets/holdout-ranking.zh-CN.png",
     "docs/assets/forecast-panel.zh-CN.png",
     "docs/assets/holdout-glance.zh-CN.png",
-    "docs/assets/ablation-holdout.zh-CN.png",
 )
 
 
@@ -93,8 +91,10 @@ class ReadmeAssetTests(unittest.TestCase):
             self.assertIn(token, english)
             self.assertIn(token, chinese)
         self.assertNotIn("openreview.net/forum", chinese.lower())
-        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/holdout-glance.zh-CN.png", "docs/assets/ablation-holdout.zh-CN.png", "docs/assets/annotated-preview.png"):
+        for relative in ("docs/assets/hero.zh-CN.png", "docs/assets/holdout-ranking.zh-CN.png", "docs/assets/forecast-panel.zh-CN.png", "docs/assets/holdout-glance.zh-CN.png", "docs/assets/annotated-preview.png"):
             self.assertIn(relative, chinese)
+        self.assertNotIn("ablation-holdout", english)
+        self.assertNotIn("ablation-holdout", chinese)
 
     def test_chinese_figure_labels_are_allowlisted(self) -> None:
         allow = (ROOT / "scripts" / "confidentiality_allowlist.txt").read_text(encoding="utf-8")
@@ -114,10 +114,6 @@ class ReadmeAssetTests(unittest.TestCase):
         glance_zh = (ROOT / "docs" / "assets" / "holdout-glance.zh-CN.svg").read_text(encoding="utf-8")
         self.assertIsNotNone(HAN.search(glance_zh))
         self.assertIn("退化", glance_zh)
-        ablation = (ROOT / "docs" / "assets" / "ablation-holdout.svg").read_text(encoding="utf-8")
-        self.assertIsNone(HAN.search(ablation))
-        ablation_zh = (ROOT / "docs" / "assets" / "ablation-holdout.zh-CN.svg").read_text(encoding="utf-8")
-        self.assertIsNotNone(HAN.search(ablation_zh))
         renderer = (ROOT / "scripts" / "render_holdout_glance.py").read_text(encoding="utf-8")
         self.assertNotIn("scatter", renderer)
 
@@ -165,26 +161,44 @@ class ReadmeAssetTests(unittest.TestCase):
         self.assertEqual(list(payload["holdout15_grok47"]), list(order))
         readme = README.read_text(encoding="utf-8").replace("−", "-")
         chinese = README_ZH.read_text(encoding="utf-8").replace("−", "-")
-        for key in order:
-            row = payload["holdout15_grok47"][key]
-            for token in (
-                r3(row["spearman"]),
-                r3(row["auc"]),
-                r3(row["spearman_ci"][0]),
-                r3(row["spearman_ci"][1]),
-                r3(row["auc_ci"][0]),
-                r3(row["auc_ci"][1]),
-            ):
-                self.assertIn(token, readme)
-                self.assertIn(token, chinese)
-        self.assertIn("0.601/0.780", readme)
-        self.assertIn("0.485/0.658", readme)
-        self.assertIn("0.601/0.780", chinese)
-        self.assertIn("0.485/0.658", chinese)
+        for token in ("0.452", "0.667", "0.761", "0.705", "0.601/0.780", "0.485/0.658"):
+            self.assertIn(token, readme)
+            self.assertIn(token, chinese)
         for banned in ("twin-k2", "r13"):
             self.assertNotIn(banned, readme)
             self.assertNotIn(banned, chinese)
         self.assertIn("r13-opus55 twin-k2", text)
+
+    def test_tune30_ablation_conclusions_match_the_aggregate(self) -> None:
+        path = ROOT / "docs" / "assets" / "tune30-r14-r15-aggregate.json"
+        text = path.read_text(encoding="utf-8")
+        lowered = text.lower()
+        self.assertNotIn("forum", lowered)
+        self.assertNotIn("openreview.net", lowered)
+        self.assertNotIn("title", lowered)
+        self.assertNotIn("results/", lowered)
+        payload = json.loads(text)
+        same = payload["tune30_same_scaffold_openjudge_vs_main"]
+        readme = README.read_text(encoding="utf-8")
+        chinese = README_ZH.read_text(encoding="utf-8")
+        quoted = [
+            r3(same["opus-5.5"]["openjudge"]["spearman"]),
+            r3(same["opus-5.5"]["openjudge"]["auc"]),
+            r3(same["grok-4.7"]["openjudge"]["spearman"]),
+            r3(same["grok-4.7"]["openjudge"]["auc"]),
+            "0.18",
+            "0.22",
+            "0.12",
+            "0.554/0.766",
+            "0.493/0.775",
+            "0.421/0.749",
+            "0.619/0.801",
+        ]
+        for draw in same["opus-5.5"]["apr_main_forecast_k1_draws"]:
+            quoted.append(r3(draw["spearman"]))
+        for token in quoted:
+            self.assertIn(token, readme)
+            self.assertIn(token, chinese)
 
 
 if __name__ == "__main__":
