@@ -103,6 +103,16 @@ class MetricTests(unittest.TestCase):
         allowed = assert_local_only(repo_root() / "workdir" / "calibration-eval")
         self.assertEqual(allowed.parts[-2:], ("workdir", "calibration-eval"))
 
+    def test_cache_check_fails_closed_with_a_clear_error_without_git(self) -> None:
+        from unittest import mock
+
+        with mock.patch("autopaperreview.public_calibration.subprocess.run", side_effect=FileNotFoundError("git")):
+            with self.assertRaisesRegex(ValueError, "git is unavailable"):
+                assert_local_only(repo_root() / "examples" / "not-a-calibration-cache")
+            # Gitignored review directories never need git.
+            allowed = assert_local_only(repo_root() / "workdir" / "calibration-eval")
+        self.assertEqual(allowed.parts[-2:], ("workdir", "calibration-eval"))
+
 
 class AdapterTests(unittest.TestCase):
     def test_agent_drop_must_match_packets_and_cannot_set_the_venue_bin(self) -> None:

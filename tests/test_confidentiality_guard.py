@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,15 @@ def run_check(root: Path, hashes: Path | None = None) -> subprocess.CompletedPro
     return subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
 
 
+def _git_checkout() -> bool:
+    if shutil.which("git") is None:
+        return False
+    probe = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=ROOT, capture_output=True, text=True)
+    return probe.returncode == 0 and probe.stdout.strip() == "true"
+
+
 class ConfidentialityGuardTests(unittest.TestCase):
+    @unittest.skipUnless(_git_checkout(), "needs git and a git checkout (tracked files come from git ls-files)")
     def test_repository_tree_passes(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CHECK)],
