@@ -101,7 +101,7 @@ class MetricTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             assert_local_only(repo_root() / "examples" / "not-a-calibration-cache")
         allowed = assert_local_only(repo_root() / "workdir" / "calibration-eval")
-        self.assertTrue(str(allowed).endswith("workdir/calibration-eval"))
+        self.assertEqual(allowed.parts[-2:], ("workdir", "calibration-eval"))
 
 
 class AdapterTests(unittest.TestCase):
