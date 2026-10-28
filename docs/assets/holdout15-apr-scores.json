@@ -1,0 +1,36 @@
+{
+  "note": "Anonymized holdout rows for the shipped forecast-k1 rank. rank_score is rounded to 4 decimal places. accept is the published accept/reject label, 1 or 0. Rows are shuffled. No forum ids, titles, or split ids.",
+  "apr_opus55": [
+    {"rank_score": 3.76, "accept": 0},
+    {"rank_score": 5.3533, "accept": 0},
+    {"rank_score": 7.3033, "accept": 1},
+    {"rank_score": 4.41, "accept": 0},
+    {"rank_score": 6.7233, "accept": 1},
+    {"rank_score": 4.7267, "accept": 0},
+    {"rank_score": 6.8467, "accept": 1},
+    {"rank_score": 5.8967, "accept": 1},
+    {"rank_score": 2.9967, "accept": 0},
+    {"rank_score": 3.91, "accept": 0},
+    {"rank_score": 4.5267, "accept": 0},
+    {"rank_score": 3.3833, "accept": 0},
+    {"rank_score": 3.5567, "accept": 0},
+    {"rank_score": 3.5867, "accept": 0}
+  ],
+  "apr_grok47": [
+    {"rank_score": 4.5533, "accept": 0},
+    {"rank_score": 5.0867, "accept": 1},
+    {"rank_score": 4.8833, "accept": 1},
+    {"rank_score": 4.8567, "accept": 0},
+    {"rank_score": 6.38, "accept": 0},
+    {"rank_score": 4.65, "accept": 0},
+    {"rank_score": 5.82, "accept": 1},
+    {"rank_score": 4.4333, "accept": 1},
+    {"rank_score": 4.6133, "accept": 1},
+    {"rank_score": 3.92, "accept": 0},
+    {"rank_score": 3.8867, "accept": 0},
+    {"rank_score": 4.2467, "accept": 0},
+    {"rank_score": 4.1, "accept": 0},
+    {"rank_score": 3.9233, "accept": 0},
+    {"rank_score": 4.0867, "accept": 0}
+  ]
+}

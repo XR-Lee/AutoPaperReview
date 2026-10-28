@@ -2,3 +2,16 @@
 # An allowlisted path still fails if it sits under a review work directory
 # or matches the pattern / hash denylist. Leave this file empty unless a
 # specific non-manuscript asset is required.
+#
+# Synthetic showcase figures for README.md. Generated from the invented
+# fixture in examples/synthetic and from docs/assets/holdout15-aggregate.json.
+# They are not page renders of a real manuscript.
+docs/assets/hero.png
+docs/assets/holdout-ranking.png
+docs/assets/annotated-preview.png
+docs/assets/forecast-panel.png
+docs/assets/hero.zh-CN.png
+docs/assets/holdout-ranking.zh-CN.png
+docs/assets/forecast-panel.zh-CN.png
+docs/assets/holdout-glance.png
+docs/assets/holdout-glance.zh-CN.png
