@@ -1,0 +1,33 @@
+{
+  "status": "not_run",
+  "reason": "APR_MODEL_API_KEY is not set, so the pilot did not call a model",
+  "model": "grok-4.7",
+  "base_url_env": "APR_MODEL_BASE_URL",
+  "default_base_url": "https://api.x.ai/v1",
+  "required_secret": "APR_MODEL_API_KEY",
+  "input_secrets": [
+    "S2_API_KEY",
+    "OPENREVIEW_USERNAME",
+    "OPENREVIEW_PASSWORD",
+    "ANT_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY"
+  ],
+  "issue_opened": false,
+  "apr_calls": 0,
+  "model_cost_usd": 0,
+  "n_sample": 200,
+  "claimnov_commit": "413f16c7f94b936fd98c2e554b20db868a436f6a",
+  "published_rates": "results/claimnov_on_sample.json",
+  "input_inventory": {
+    "later_realized_set": 400,
+    "later_realized_described": 400,
+    "pool_records": 11444,
+    "pools_missing_abstract": 11444,
+    "proposal_text_present": {
+      "disguises": false,
+      "hybrids": false,
+      "claim_disputed": false
+    }
+  }
+}

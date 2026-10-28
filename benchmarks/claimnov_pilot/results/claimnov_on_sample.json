@@ -1,0 +1,1194 @@
+{
+  "system": "claimnov_published",
+  "apr_ran": false,
+  "note": "novel=false is a rejection. Rates use sampled items that have a published row. test_half is the stratified half with seed 20261028. No originality cutoff is fit.",
+  "n": 200,
+  "test_half_n": 101,
+  "claimnov": {
+    "full": {
+      "catch": {
+        "n": 25,
+        "rate": 0.96,
+        "low": 0.88,
+        "high": 1.0
+      },
+      "catch_missing": 0,
+      "false_alarm": {
+        "n": 50,
+        "rate": 0.02,
+        "low": 0.0,
+        "high": 0.06
+      },
+      "false_alarm_missing": 0,
+      "src_out_rejection": {
+        "n": 25,
+        "rate": 0.08,
+        "low": 0.0,
+        "high": 0.2
+      },
+      "src_out_missing": 0,
+      "hybrid_keep": {
+        "n": 50,
+        "rate": 0.92,
+        "low": 0.84,
+        "high": 0.98
+      },
+      "hybrid_keep_missing": 0,
+      "claim_disputed_rejection_on_accept": {
+        "n": 20,
+        "rate": 0.0,
+        "low": 0.0,
+        "high": 0.0
+      },
+      "claim_disputed_accept_missing": 0,
+      "claim_disputed_rejection_on_reject": {
+        "n": 30,
+        "rate": 0.0,
+        "low": 0.0,
+        "high": 0.0
+      },
+      "claim_disputed_reject_missing": 0,
+      "claim_disputed_top1": {
+        "n": 50,
+        "rate": 0.2,
+        "low": 0.1,
+        "high": 0.32
+      },
+      "claim_disputed_top1_missing": 0
+    },
+    "test_half": {
+      "catch": {
+        "n": 13,
+        "rate": 1.0,
+        "low": 1.0,
+        "high": 1.0
+      },
+      "catch_missing": 0,
+      "false_alarm": {
+        "n": 25,
+        "rate": 0.0,
+        "low": 0.0,
+        "high": 0.0
+      },
+      "false_alarm_missing": 0,
+      "src_out_rejection": {
+        "n": 13,
+        "rate": 0.15384615384615385,
+        "low": 0.0,
+        "high": 0.38461538461538464
+      },
+      "src_out_missing": 0,
+      "hybrid_keep": {
+        "n": 25,
+        "rate": 0.92,
+        "low": 0.8,
+        "high": 1.0
+      },
+      "hybrid_keep_missing": 0,
+      "claim_disputed_rejection_on_accept": {
+        "n": 8,
+        "rate": 0.0,
+        "low": 0.0,
+        "high": 0.0
+      },
+      "claim_disputed_accept_missing": 0,
+      "claim_disputed_rejection_on_reject": {
+        "n": 17,
+        "rate": 0.0,
+        "low": 0.0,
+        "high": 0.0
+      },
+      "claim_disputed_reject_missing": 0,
+      "claim_disputed_top1": {
+        "n": 25,
+        "rate": 0.24,
+        "low": 0.08,
+        "high": 0.4
+      },
+      "claim_disputed_top1_missing": 0
+    }
+  },
+  "baselines": {
+    "arc": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.2,
+          "low": 0.04,
+          "high": 0.36
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.15384615384615385,
+          "low": 0.0,
+          "high": 0.38461538461538464
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "central_rule": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 50,
+        "src_out_rejection": {
+          "n": 22,
+          "rate": 0.5909090909090909,
+          "low": 0.36363636363636365,
+          "high": 0.7727272727272727
+        },
+        "src_out_missing": 3,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 50,
+        "claim_disputed_rejection_on_accept": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "claim_disputed_accept_missing": 20,
+        "claim_disputed_rejection_on_reject": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "claim_disputed_reject_missing": 30
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 25,
+        "src_out_rejection": {
+          "n": 11,
+          "rate": 0.5454545454545454,
+          "low": 0.2727272727272727,
+          "high": 0.8181818181818182
+        },
+        "src_out_missing": 2,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 25,
+        "claim_disputed_rejection_on_accept": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "claim_disputed_accept_missing": 8,
+        "claim_disputed_rejection_on_reject": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "claim_disputed_reject_missing": 17
+      }
+    },
+    "coi": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.8,
+          "low": 0.64,
+          "high": 0.92
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.24,
+          "low": 0.12,
+          "high": 0.36
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.16,
+          "low": 0.04,
+          "high": 0.32
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 0.8,
+          "low": 0.68,
+          "high": 0.9
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.2,
+          "low": 0.05,
+          "high": 0.4
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.16666666666666666,
+          "low": 0.03333333333333333,
+          "high": 0.3
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.7692307692307693,
+          "low": 0.5384615384615384,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.24,
+          "low": 0.08,
+          "high": 0.4
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.3076923076923077,
+          "low": 0.07692307692307693,
+          "high": 0.5384615384615384
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 0.8,
+          "low": 0.64,
+          "high": 0.96
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.375,
+          "low": 0.125,
+          "high": 0.75
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.23529411764705882,
+          "low": 0.058823529411764705,
+          "high": 0.47058823529411764
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "module": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.88,
+          "low": 0.76,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.02,
+          "low": 0.0,
+          "high": 0.06
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.04,
+          "low": 0.0,
+          "high": 0.12
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 50,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.05,
+          "low": 0.0,
+          "high": 0.15
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.16666666666666666,
+          "low": 0.03333333333333333,
+          "high": 0.3
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.8461538461538461,
+          "low": 0.6153846153846154,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.07692307692307693,
+          "low": 0.0,
+          "high": 0.23076923076923078
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 25,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.23529411764705882,
+          "low": 0.058823529411764705,
+          "high": 0.47058823529411764
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "ra": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.04,
+          "low": 0.0,
+          "high": 0.12
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.06,
+          "low": 0.0,
+          "high": 0.14
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.04,
+          "low": 0.0,
+          "high": 0.12
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.05,
+          "low": 0.0,
+          "high": 0.15
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.13333333333333333,
+          "low": 0.03333333333333333,
+          "high": 0.26666666666666666
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.07692307692307693,
+          "low": 0.0,
+          "high": 0.23076923076923078
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.08,
+          "low": 0.0,
+          "high": 0.2
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.07692307692307693,
+          "low": 0.0,
+          "high": 0.23076923076923078
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.125,
+          "low": 0.0,
+          "high": 0.375
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.11764705882352941,
+          "low": 0.0,
+          "high": 0.29411764705882354
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "scholareval": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.08,
+          "low": 0.0,
+          "high": 0.2
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.07692307692307693,
+          "low": 0.0,
+          "high": 0.23076923076923078
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "si": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.42,
+          "low": 0.3,
+          "high": 0.56
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.28,
+          "low": 0.12,
+          "high": 0.48
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.1,
+          "low": 0.0,
+          "high": 0.25
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.2,
+          "low": 0.06666666666666667,
+          "high": 0.3333333333333333
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.28,
+          "low": 0.12,
+          "high": 0.48
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.23076923076923078,
+          "low": 0.0,
+          "high": 0.46153846153846156
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.125,
+          "low": 0.0,
+          "high": 0.375
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.17647058823529413,
+          "low": 0.0,
+          "high": 0.35294117647058826
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "v1": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.8,
+          "low": 0.7,
+          "high": 0.9
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.76,
+          "low": 0.6,
+          "high": 0.92
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 0.2,
+          "low": 0.1,
+          "high": 0.32
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.7,
+          "low": 0.5,
+          "high": 0.9
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.7,
+          "low": 0.5333333333333333,
+          "high": 0.8666666666666667
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 1.0,
+          "low": 1.0,
+          "high": 1.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.76,
+          "low": 0.6,
+          "high": 0.92
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.8461538461538461,
+          "low": 0.6153846153846154,
+          "high": 1.0
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 0.28,
+          "low": 0.12,
+          "high": 0.48
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.75,
+          "low": 0.375,
+          "high": 1.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.6470588235294118,
+          "low": 0.4117647058823529,
+          "high": 0.8823529411764706
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "v2_reflection": {
+      "full": {
+        "catch": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 50,
+          "rate": 0.3,
+          "low": 0.18,
+          "high": 0.44
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 13,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "catch_missing": 0,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 13,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 0,
+        "hybrid_keep": {
+          "n": 25,
+          "rate": 0.28,
+          "low": 0.12,
+          "high": 0.48
+        },
+        "hybrid_keep_missing": 0,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "veto_haiku": {
+      "full": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 25,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 50,
+        "src_out_rejection": {
+          "n": 3,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 22,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 50,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.25,
+          "low": 0.05,
+          "high": 0.45
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.23333333333333334,
+          "low": 0.1,
+          "high": 0.4
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 13,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 25,
+        "src_out_rejection": {
+          "n": 2,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 11,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 25,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.375,
+          "low": 0.125,
+          "high": 0.75
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.23529411764705882,
+          "low": 0.058823529411764705,
+          "high": 0.47058823529411764
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "veto_opus": {
+      "full": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 25,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 50,
+        "src_out_rejection": {
+          "n": 3,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 22,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 50,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.25,
+          "low": 0.05,
+          "high": 0.45
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.2,
+          "low": 0.06666666666666667,
+          "high": 0.36666666666666664
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 13,
+        "false_alarm": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "false_alarm_missing": 25,
+        "src_out_rejection": {
+          "n": 2,
+          "rate": 0.0,
+          "low": 0.0,
+          "high": 0.0
+        },
+        "src_out_missing": 11,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 25,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.375,
+          "low": 0.125,
+          "high": 0.75
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.29411764705882354,
+          "low": 0.11764705882352941,
+          "high": 0.5294117647058824
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    },
+    "veto_sonnet": {
+      "full": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 25,
+        "false_alarm": {
+          "n": 50,
+          "rate": 0.3,
+          "low": 0.18,
+          "high": 0.44
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 3,
+          "rate": 0.6666666666666666,
+          "low": 0.0,
+          "high": 1.0
+        },
+        "src_out_missing": 22,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 50,
+        "claim_disputed_rejection_on_accept": {
+          "n": 20,
+          "rate": 0.35,
+          "low": 0.15,
+          "high": 0.55
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 30,
+          "rate": 0.3333333333333333,
+          "low": 0.16666666666666666,
+          "high": 0.5
+        },
+        "claim_disputed_reject_missing": 0
+      },
+      "test_half": {
+        "catch": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "catch_missing": 13,
+        "false_alarm": {
+          "n": 25,
+          "rate": 0.24,
+          "low": 0.08,
+          "high": 0.4
+        },
+        "false_alarm_missing": 0,
+        "src_out_rejection": {
+          "n": 2,
+          "rate": 0.5,
+          "low": 0.0,
+          "high": 1.0
+        },
+        "src_out_missing": 11,
+        "hybrid_keep": {
+          "n": 0,
+          "rate": null,
+          "low": null,
+          "high": null
+        },
+        "hybrid_keep_missing": 25,
+        "claim_disputed_rejection_on_accept": {
+          "n": 8,
+          "rate": 0.5,
+          "low": 0.125,
+          "high": 0.875
+        },
+        "claim_disputed_accept_missing": 0,
+        "claim_disputed_rejection_on_reject": {
+          "n": 17,
+          "rate": 0.4117647058823529,
+          "low": 0.17647058823529413,
+          "high": 0.6470588235294118
+        },
+        "claim_disputed_reject_missing": 0
+      }
+    }
+  },
+  "verdicts_dropped_for_disagreement": 2
+}

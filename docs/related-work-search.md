@@ -49,6 +49,8 @@ The stage resolves each kept entry by its title. arXiv ids are sent together as 
 
 `mode = "off"` writes the queries and does not retrieve.
 
+`mode = "pool"` reads a local JSON prior-work pool (`pool_path`) and does not call arXiv, OpenAlex, or Semantic Scholar. It does not emit keyword queries, so a title in the description is not an outbound query. The file is a list, or an object with `papers` or `pool`. Each record needs `id` and `title`. `abstract` (or `summary`) and `date` (or `published`) are optional. This mode still runs when the problem formulation is incomplete, so a title-and-description proposal can be compared with the supplied pool. `cutoff_date` is exclusive: a record dated on or after that day is dropped and logged, and it is not shown to the model. `blocked_ids` are target-paper identifiers. A retrieved target is removed, logged as `target paper retrieved and excluded`, and listed on `target_leakage`. A result that lists a target leak does not count. Pool abstracts are kept up to `pool_summary_chars` (default 2000). Live and agent search use the same cutoff and blocked-id guard when those parameters are set.
+
 ## Candidate record
 
 Each verified paper has a title, venue, year, id, link, one-line summary, whether the bibliography cites it, the date relation to the venue submission deadline (`prior`, `concurrent`, `unknown`), a relevance score, a tier (`must-compare`, `should-discuss`, `optional`), a confirmation flag and one-line reason, and a reason in English and Simplified Chinese.

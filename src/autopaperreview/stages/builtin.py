@@ -11,7 +11,7 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -131,6 +131,28 @@ def _contribution_packet_lines(source_text: str) -> list[str]:
     ]
     if not listed:
         lines.append("- Extracted candidates: none. Still inventory the PDF Contributions list and audit each item.")
+        return lines
+    for item in listed:
+        lines.append(f"- `C{item['index']}`: {item['text']}")
+    return lines
+
+
+def _proposal_contribution_lines(source_text: str) -> list[str]:
+    """Audit a title-and-description proposal. There is no PDF to open."""
+    listed = extract_listed_contributions(source_text) if source_text else []
+    lines = [
+        "",
+        "## Proposal contributions (audit each one)",
+        "",
+        "This input is a research proposal: a title and a short description. "
+        "There is no PDF, no page image, and no experiment section to open. "
+        "Audit each contribution the description states. For each item, name "
+        "the supplied prior-work record that already covers it, or say that none does. "
+        "Do not treat a missing PDF as a flaw.",
+        "",
+    ]
+    if not listed:
+        lines.append("- Extracted candidates: none. Audit the claims in the description one by one.")
         return lines
     for item in listed:
         lines.append(f"- `C{item['index']}`: {item['text']}")
@@ -461,11 +483,12 @@ class PromptPacketParams(ParamsModel):
     include_source_text: bool = False
     include_literature: bool = False
     max_source_chars: int = Field(default=200_000, ge=1)
+    input_mode: Literal["manuscript", "proposal"] = "manuscript"
 
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "5"
+    version = "6"
     params_model = PromptPacketParams
     reads_source = True
 
@@ -491,6 +514,7 @@ class PromptPacketStage(StageHandler):
         material: dict[str, Any] = {
             "prompt_hashes": prompt_hashes,
             "first_read_contract_sha256": digest_excerpt(contract),
+            "input_mode": params.input_mode,
             "routes": [
                 item
                 for item in _route_fingerprint(context)
@@ -543,6 +567,11 @@ class PromptPacketStage(StageHandler):
                 f"- Prompt version: `{route.prompt_version or 'unversioned'}`",
                 f"- Manuscript access: `{str(route.manuscript_access).lower()}`",
                 f"- Route kind: `{route.kind.value}`",
+            ]
+            if params.input_mode == "proposal":
+                body.append("- Input mode: `proposal`")
+            body.extend(
+                [
                 "",
                 "## First-Read Writing Contract",
                 "",
@@ -551,13 +580,17 @@ class PromptPacketStage(StageHandler):
                 "## Route Instructions",
                 "",
                 prompt_text.strip(),
-            ]
+                ]
+            )
             if source_text and route.manuscript_access:
                 body.extend(["", "## Source Text", "", source_text])
-            if route.manuscript_access or route.kind == RouteKind.visual:
+            if params.input_mode != "proposal" and (route.manuscript_access or route.kind == RouteKind.visual):
                 body.extend(_figure_packet_lines(context.source_path, source_text, route.kind))
             if route.manuscript_access and source_text:
-                body.extend(_contribution_packet_lines(source_text))
+                if params.input_mode == "proposal":
+                    body.extend(_proposal_contribution_lines(source_text))
+                else:
+                    body.extend(_contribution_packet_lines(source_text))
             attach_literature = literature is not None and (
                 params.include_literature or route.kind == RouteKind.literature
             )

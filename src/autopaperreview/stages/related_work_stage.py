@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -58,7 +58,7 @@ def _enforce_network(context: StageContext, *, requires_network: bool, network_s
 
 class RelatedWorkSearchParams(ParamsModel):
     venue: str = "iclr2027"
-    mode: Literal["agent", "live", "off"] = "agent"
+    mode: Literal["agent", "live", "off", "pool"] = "agent"
     findings_path: str | None = None
     requires_network: bool = False
     network_scope: str = "metadata"
@@ -74,10 +74,20 @@ class RelatedWorkSearchParams(ParamsModel):
     providers: list[str] = Field(
         default_factory=lambda: ["arxiv", "openalex", "semantic_scholar"]
     )
+    pool_path: str | None = None
+    cutoff_date: str | None = None
+    blocked_ids: list[str] = Field(default_factory=list)
+    pool_summary_chars: int = Field(default=2000, ge=280, le=20000)
 
     def model_post_init(self, __context: Any) -> None:
         if self.mode == "live" and not self.requires_network:
             raise ValueError("live related-work search requires requires_network = true")
+        if self.mode == "pool" and not self.pool_path:
+            raise ValueError("pool related-work search requires pool_path")
+        if self.mode == "pool" and self.requires_network:
+            raise ValueError("pool related-work search does not use the network")
+        if self.cutoff_date:
+            date.fromisoformat(self.cutoff_date)
         if self.network_scope != "metadata":
             raise ValueError("related-work search only supports metadata network scope")
         unknown = [item for item in self.providers if item not in {"arxiv", "openalex", "semantic_scholar"}]
@@ -176,7 +186,7 @@ def _snapshots(
 
 class RelatedWorkSearchStage(StageHandler):
     type_name = "related_work_search"
-    version = "7"
+    version = "8"
     params_model = RelatedWorkSearchParams
     reads_source = True
 
@@ -206,6 +216,16 @@ class RelatedWorkSearchStage(StageHandler):
             material["confirmation_model"] = params.confirmation_model
             material["confirmation_api_key_env"] = params.confirmation_api_key_env
             material["confirmation_allow_remote"] = params.confirmation_allow_remote
+        if params.pool_path:
+            pool = context.loaded_config.resolve(params.pool_path)
+            material["pool_path"] = params.pool_path
+            if pool.is_file():
+                material["pool_sha256"] = sha256_file(pool)
+        if params.cutoff_date:
+            material["cutoff_date"] = params.cutoff_date
+        if params.blocked_ids:
+            material["blocked_ids"] = list(params.blocked_ids)
+        material["pool_summary_chars"] = params.pool_summary_chars
         return material
 
     def run(self, context: StageContext) -> StageOutcome:
@@ -228,6 +248,7 @@ class RelatedWorkSearchStage(StageHandler):
         confirmation_file = (
             context.loaded_config.resolve(params.confirmation_path) if params.confirmation_path else None
         )
+        pool = context.loaded_config.resolve(params.pool_path) if params.pool_path else None
         judgment = run_related_work_search(
             manuscript,
             venue_key=params.venue,
@@ -249,6 +270,10 @@ class RelatedWorkSearchStage(StageHandler):
             confirmation_scratch=context.stage_dir,
             network_policy=context.loaded_config.config.project.network_policy.value,
             cache_dir=context.workspace / ".autopaperreview" / "related_work_cache",
+            pool_path=pool,
+            cutoff_date=date.fromisoformat(params.cutoff_date) if params.cutoff_date else None,
+            blocked_ids=params.blocked_ids,
+            pool_summary_chars=params.pool_summary_chars,
         )
         retrieved_at = datetime.now(timezone.utc)
         snapshots, sources, evidence = _snapshots(judgment, retrieved_at=retrieved_at)
@@ -305,5 +330,7 @@ class RelatedWorkSearchStage(StageHandler):
                 "query_count": len(judgment.queries),
                 "effective_venue_cap": judgment.effective_venue_cap,
                 "requires_network": params.requires_network,
+                "target_leakage_count": len(judgment.target_leakage),
+                "cutoff_date": judgment.cutoff_date,
             },
         )
