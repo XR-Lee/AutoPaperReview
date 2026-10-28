@@ -160,7 +160,7 @@ depends_on = ["pages"]
 profile = "iclr2027"
 ```
 
-要做相关工作检索，就加上 `search` 阶段。这个阶段只有写进 TOML 才会运行；写了的话，`novelty` 和 `rate` 必须依赖它。在线检索要求 `network_policy` 为 `metadata_only` 或 `allow`。所有数据源都失败时，状态记为 `degraded`，分数不会因此下降。`venue` 同样取 `iclr2027` 或 `aaai2027`，并读取对应会议的截止日期文件，但不改变审稿正文里的评分档。
+要做相关工作检索，就加上 `search` 阶段。这个阶段只有写进 TOML 才会运行；写了的话，`novelty` 和 `rate` 必须依赖它。在线检索要求 `network_policy` 为 `metadata_only` 或 `allow`。所有数据源都失败时，状态记为 `degraded`，分数不会因此下降。`venue` 的取值和 `profile` 相同，并读取对应会议的截止日期文件，但不改变审稿正文里的评分档。
 
 ```toml
 [[stages]]
