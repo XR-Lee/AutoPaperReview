@@ -932,8 +932,8 @@ def _message_text(payload: dict[str, Any]) -> str:
 
 
 def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes:
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    from .stream_transport import urlopen_chat
+    return urlopen_chat(request, timeout)
 
 
 # Below this similarity, a fuzzy window is a different sentence and is dropped.
@@ -1414,6 +1414,7 @@ class ModelSession:
     ) -> str:
         secret = _env_secret(self.api_key_env)
         body: dict[str, Any] = {
+            "stream": True,
             "model": self.model_name,
             "temperature": self.temperature if temperature is None else temperature,
             "messages": messages,
