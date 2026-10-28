@@ -1,0 +1,1208 @@
+{
+  "seed": 20261028,
+  "per_dataset": 50,
+  "claimnov_commit": "413f16c7f94b936fd98c2e554b20db868a436f6a",
+  "id_digest": "sha256 of the ClaimNov item id encoded as UTF-8",
+  "items": [
+    {
+      "dataset": "disguised",
+      "item_id": "seed17_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed21_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed12_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed20_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed39_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed11_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed25_r1_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed12_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed84_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed36_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed63_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed57_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed49_r2_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed88_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed10_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed91_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed23_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed38_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed53_r3_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed36_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed15_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed96_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed55_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed24_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed85_r4_B_in",
+      "label": "non_novel",
+      "condition": "B_in",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed15_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed36_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed13_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed88_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed16_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed83_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed1_r1_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 1
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed79_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed55_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed93_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed20_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed54_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed44_r2_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 2
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed7_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed52_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed73_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed63_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed66_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed12_r3_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 3
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed2_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed15_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed75_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed65_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed40_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "disguised",
+      "item_id": "seed21_r4_B_out",
+      "label": "src_out",
+      "condition": "B_out",
+      "rung": 4
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_37",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_4",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_171",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_166",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_41",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_173",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_20",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_107",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_161",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_60",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_24",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_186",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_110",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_135",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_156",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_155",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_33",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_121",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_184",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_157",
+      "label": "claim_disputed",
+      "decision": "accept"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_98",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_163",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_74",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_180",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_70",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_78",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_114",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_95",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_99",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_69",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_3",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_150",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_149",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_132",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_45",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_196",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_43",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_28",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_87",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_143",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_83",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_13",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_7",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_199",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_176",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_146",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_56",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_126",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_55",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "claim_disputed",
+      "item_id": "n2f_125",
+      "label": "claim_disputed",
+      "decision": "reject"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "3be3a0d5290e8c5a1f74e9531a35585e1dfdcde0774512f26b761a93ae5bc1da",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "b38b9fbd2d91f656088c6ea8cbdc2a718a115c6ed83a125c2108cdf09bf602e5",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "8c123d949e0b8ced788bea9b74c67ebcc9067a8a92ac5387af54ceb4867d8523",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "d9baa3826b7abae409cf8a1eb116143ba34d9331bde9d67ee6b768542083da1e",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "59df5980baa86504789e1b6ff898b239fce09bde6777404a14efc7c48a9bfbdf",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "a32f9d80f6d9783278c591511f1413cf06a3ca462c26fd14864c9a2a260e4415",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "5c48675f21a77c05593e59e72a6a048200e9c7d52439656edbe37e4535d352d7",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "4334380d9d45cada3c17ea0deaefc89ae1ba7ac77402b05796a3886429daf6cc",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "b4c156a73457d52526e9ef7e03c632167662b2817ab8f4558f103843f3ae149d",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "d3fb29eb0783dc9e44ec8f5e39536f8db604a09e96315d0f8e942ee10ae31d99",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "12e9554c2341a9be8f0ed47f92909623a55428eeb671f2bb330a05c684bb5caf",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "49ebe7110bbdf11b304746c179d7a91dec625f58ba92f8a78e66b657a2bd5acd",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "36dbb8e54a83fc8f9717a28aed63a42da470b4ff8af07425b263f2417287d146",
+      "label": "novel",
+      "bucket": "a"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "8295a9549b0fd43b37cac22dbe15c26638b0a89ed3856d1648bf5bcb8def89a8",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "67f2f463773a0115eed53aed7fde8494e611661fe4378d0874fe21de39d71e74",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "6b5370a2bd8f43cb0d539566783894b794d308ba001993834ce0eb29c1e21539",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "0df03a72f7761339dcc1c8aa8afeca587f8e293c207a8582b6332373286ed4dc",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "fe10249f5b56ee9fd609136f28c5329c22db5ea99652ff7f12eae3226e0099ad",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "75886879d60f8313926f388307ceac91901daea4426f06a274c9f6d700f555a6",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "8ce4de26d582f7f8198ea0ba6183c44a8996a72e528a9c2842a859eea1eead32",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "9f170b1ef7bdbb7d2f934a187647ea34f6ef76096bd6c3f1749fe5e02c93393f",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "3f272692da9720a9c94e0c1dd88021db3fb403cab5ffcdde4c37d34da86697a8",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "404c161f6bf35193c31f3f3efb1d064f32b764ca67c953af518376fb8bebd09d",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "8c64c0a726d81a2c6760ab6545d51dff49f4f73f30051710b0914cde2e6a08d2",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "897c2e9bb5030955fc9e40cec4f8f1072b59b66f3a4402a6bdb927b3773f457d",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "550c1f7222896074d90cfd114c3bab133c75925ec519920d198946c7f3ccc850",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "6bb47ee7324bd7327b24eae4e1cd07e4c420a296d819a82c5792c45be48137c2",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "033dfeb194824aab80bb2cf42928cf14497240d5e19872d6ba815351c058e01d",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "8d9f379f37d661e9c60c2701bf1c2a578cfb3d398ef3f7722821bcdd237501f5",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "669ed8e4d0b72d55d870cde4e9b3142775ee9aa8ac88b84fbe9e2f472a5a3578",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "94fbc4ee875cb4aeba3c6af8616c463d891603e06b0846b8bbe6c53b5f0c82a6",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "17b9c80070ae1cb7e4b8da0b2abe1f439772e7c201ffa14768abdbe8c6e2bf58",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "29d60967761eb64696998ae44a4bfe23b119958f3224aaea1a2cf4110b5cc928",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "0e2a8c4f84bfdfb52d3310972265c9c7b45df298bcf5f808fe5aad4ca826fa6f",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "e03cfa55045276295b9bf47fa3be358df3558dfbdc11b419e8113334a292a849",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "935e4f1413d488f7e5ba9420809743eeec5092b333f88a6309ea30c54a0153a1",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "a138d20df31b46bd4507a835f96faf86b6a7a5aef7e9fa49fa146f5f18d40cbd",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "ac2f31d11d6c02e90585f6c6337e4557b13da7d05dd0e81169f7a909390a93a4",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "c0115a98c97cd6cb77f08a021d94a55048b828adda3cdb8a915b4ae0e0a2a9bd",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "7c6e4a645e3b91bcaf1c7c9d7316a08e9e1ad717c1d7a3404dacf11961de59d1",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "9ae388138f02ebcabb6dae3421d66f29e13f4d500648274a5549e6e4f51fbac4",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "34be6a6440db0dd5c58edb93a924a00467d61137700f5951e5c102fc3766d9af",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "58b7d37ad3848c6d7969d930aa157cc87f772521892abecdfb45df513cdcf63a",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "73f168c45e6f9ad34467c935f85193e086d584212f2c8453e4500687901c17be",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "23fc82a9a9b86e1352b97b3929714e0e22cae00724d23444e83ebca10f976a0d",
+      "label": "novel",
+      "bucket": "b"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "ed8d47032f891a25f0bce385b09ad3f6b4ee1d56a90720b3e7060050beeba832",
+      "label": "novel",
+      "bucket": "c"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "08d4a6771e4348acc17c0fbbe22281fcd8d2f80924655affecf70f7dcfff5d00",
+      "label": "novel",
+      "bucket": "c"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "e11b48bb72361dd9f6dee604cfce0de51db1f6fa12cccdf170339a06c35e317a",
+      "label": "novel",
+      "bucket": "c"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "f00dfa7affaf3a601829a6c1b6f1bed1b794263ab8f1b26906c5ef1d689a3606",
+      "label": "novel",
+      "bucket": "c"
+    },
+    {
+      "dataset": "later_realized",
+      "item_sha256": "55339f2353ac11d239b55caf874cb4c5909d61938ecff3226d4e3b4ab58681ea",
+      "label": "novel",
+      "bucket": "c"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "0f9f836d9f73552e791a48232b077b202f02fd39c1edbb952975aa843316bef8",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "e0a0f7215c13fc9a8e9cb65b9915593a1bd6e636690a475321d310ef3b73f73a",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "fac400196216b0de86142bbea56bba5b19b723b1a01d395c23640cdbee71d433",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "68bcbc1502097ce55f230ca74c6bf011cd686a20990fbf7e6ca4665a778a0e6d",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "e11b48bb72361dd9f6dee604cfce0de51db1f6fa12cccdf170339a06c35e317a",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "cda57cfc0f69f5b9807ef4fe51aeb68b1c167717df1d4f3dcc0d480ebdbe40ea",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "566d3f260821c81c3b738df5ffcde942c6566738ccd2ce07ad7e22cbb9334679",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "f76b18b433f26edefe9e38faf2c67aab28ee07da909ba16cfc68c8d19d182793",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "bb2237cfb2758ae40ef59bedc259a9ef24252c1c5d72da6bbbb46180dad25faa",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "188afe2b01c6d55bb8a7810111921de9fc3c811ba7a32855b029be5829940149",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "935e4f1413d488f7e5ba9420809743eeec5092b333f88a6309ea30c54a0153a1",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "ebee98ef2b3bee995aad9e4515a4214a9672733cf465d18d3e7d7e9df60fb09f",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "3ae239a583e7d53612966f7aca6d3e1d75119a6fbd3fd6925eb012bf2b9755a8",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "7907c632708092b2595594790aeea4c977da2efd0264ec381e4c4ea5758e5261",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "6ba402a744b03fe1c0e35a0f220abb1adf56863274995c3af62b89341fe2e9da",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "be6a5a5deb204c69e55d1b756cc8fed40965476a93f1cb6e44e2517670d1f891",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "37af042ad27b3bd04179217e5eeedc773a30d037de3fdea047a22a72bdc8a158",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "8d9f379f37d661e9c60c2701bf1c2a578cfb3d398ef3f7722821bcdd237501f5",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "08077db2059965791578391a0ae6b58f47f6b711c712e4bf4caca4ddb7159521",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "aeb1d14e8dffdae386b0bab22bdbe87a05182b88910e32564cb91d4e92ba3a49",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "a25f909dcf3fe55b58f54a5fc05bdfdc9a062144a77aee1be0c2810527889730",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "e0f4d698380ca360939b2dfbdbf663713feb0274d4d71dd789c33d5d63b07ae5",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "959cf64f922b45dfe000c0a6154c841a1a97f26626fbad9825043903cf76007e",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "c0115a98c97cd6cb77f08a021d94a55048b828adda3cdb8a915b4ae0e0a2a9bd",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "293ee5bdac6586a7ac729b6eaf3cc2b3519d4c0a7b7dbe6443822a6fc553d3fd",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "b4c156a73457d52526e9ef7e03c632167662b2817ab8f4558f103843f3ae149d",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "364360ca6f10bf1217e51b8893501d822a1038a39922214478c73440818464d3",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "f2d710c7bf6d7d84b23efc258ff44a8511a5e0186658d975b8c69636bd74b2e2",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "96ec723ddd5f7df97dcdec6f0655d557abb0c0710a02331d6547064f6ba8eabc",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "c671f94ac9f98590dbe26b2e85b97a6df5e53f2afaa7afe4798eb9c782630da5",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "54e40706a74410151faa3870be8eb713484ff2b21f8d3786340b023005f6e013",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "f8d466f5d33d928fb6ca5faa2ec3ebdb50b495ac43f0935a045e03066568231b",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "5dbbc4cb3e0e30d4acc1ce60de12cc0d30a9c18f2c95ce90a4360459343ea49d",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "a803e431e3b39a5539ad401db82cfbbf1183320ec45c357964521a9c6c881b0f",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "8430746926881a355486689f991056f0b0fcf1174c9846a5b3d19f8eec3a54d4",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "ec794768dea3cf3ace85488ff3d32a94df666ab7d2ec471596ca02796f0e108e",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "41239d8ee3703369e866aaf3d72da29f7074cc19a204166dbd7522559ffdf098",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "65aa7e343d6730c1627187319175af2b2f5166da8b876ca02f8d125a218236e6",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "c514132d9bea3d3b1f73001b0cfa183dca3bdfd16743999714d4f76141c7667a",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "4b4da4f72d5377824c52294cc6b0d8718998250e4b469d5b2308c39e1bcbb7b3",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "67f2f463773a0115eed53aed7fde8494e611661fe4378d0874fe21de39d71e74",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "19803f25de02ef6a54f47bfe37445fa5e57d682528d9cf0d8709628dabef38c1",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "c947ce72cbf379869d20aeba3be863ccb3c4c442f492974ebcaf8ef018e83c22",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "faf8ed77af552a1e40ccb336c7425f4a65081b09a558dde2aeba6f35e72ec8b4",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "7675cf7b55274178a4addb7adba8ebe8cede911fe94d7a1d4fdc34d48963e782",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "0e2a8c4f84bfdfb52d3310972265c9c7b45df298bcf5f808fe5aad4ca826fa6f",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "3f272692da9720a9c94e0c1dd88021db3fb403cab5ffcdde4c37d34da86697a8",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "e5c991010e2d5bad51e45c5cf43e99fc081cb241eb2cd2dc0556bb2fd127c196",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "849125d00950cc94c1f8c6af60eebe812faf99ec9dea6c7eb6d7ff84f19fffbf",
+      "label": "spliced"
+    },
+    {
+      "dataset": "hybrids",
+      "item_sha256": "811255e73fd7d82d5394535c96be24fc2b6f1422a9d826cc24aa005b966efc8e",
+      "label": "spliced"
+    }
+  ]
+}
