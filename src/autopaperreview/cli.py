@@ -497,7 +497,10 @@ require_quote_on_major = true
 
 
 def command_calibrate(args: argparse.Namespace) -> int:
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
 
     from .rating import TieNote, calibrate_packages
 

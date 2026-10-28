@@ -9,7 +9,7 @@ Two uses. They are not the same run.
 
 ![Left: a synthetic annotated page from the review report. Right: holdout rank cards from the benchmark. The page is an invented tracking note, not a real submission. Opus 5.5 Spearman 0.851, Grok 4.7 Spearman 0.761.](docs/assets/hero.png)
 
-Version `0.1.10`. Alpha. Python 3.11–3.13. MIT license. Not a substitute for a human reviewer.
+Version `0.1.10`. Alpha. Python 3.10–3.13. MIT license. Not a substitute for a human reviewer.
 
 ### Results at a glance
 
@@ -493,7 +493,7 @@ The network policy is a declaration the runner enforces on stage metadata. It is
 
 ## Status
 
-Alpha, `0.1.10`. Python 3.11–3.13. MIT license.
+Alpha, `0.1.10`. Python 3.10–3.13. MIT license.
 
 The core is a local DAG: TOML config, Pydantic records, a content-hash cache, and adapters. Prompts under `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
 

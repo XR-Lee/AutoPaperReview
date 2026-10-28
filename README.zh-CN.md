@@ -9,7 +9,7 @@
 
 ![左侧是审稿报告里的合成批注页，右侧是基准里的留出集排序分。页面是虚构的跟踪笔记，不是真实投稿。Opus 5.5 Spearman 0.851，Grok 4.7 Spearman 0.761。左侧正文是英文示例。](docs/assets/hero.zh-CN.png)
 
-版本 `0.1.10`。Alpha。Python 3.11–3.13。MIT 许可证。不能代替人来审稿。
+版本 `0.1.10`。Alpha。Python 3.10–3.13。MIT 许可证。不能代替人来审稿。
 
 ### 结果一览
 
@@ -492,7 +492,7 @@ python3 scripts/render_readme_figures.py
 
 ## 状态
 
-Alpha，`0.1.10`。Python 3.11–3.13。MIT 许可证。
+Alpha，`0.1.10`。Python 3.10–3.13。MIT 许可证。
 
 核心是一条本地 DAG：TOML 配置、Pydantic 记录、按内容哈希的缓存，以及适配器。`src/autopaperreview/prompts/` 里的提示词和流水线一起版本管理。解析器和模型厂商都留在适配器后面。
 
