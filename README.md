@@ -2,48 +2,44 @@ English | [Simplified Chinese](README.zh-CN.md)
 
 # AutoPaperReview
 
-Two uses. They are not the same run.
+AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two uses, and each one is a separate run:
 
-- **[Review report](#track-a)** is the default. `init` and a normal `run` write a seven-dimension review: an evidence ledger, a contributions audit, a fatal-flaw check, a Markdown report, `review_report.pdf` when reportlab is installed, and an annotated manuscript PDF.
-- **[Venue score and benchmark](#track-b)** is optional. A `holistic` forecast plus `rate` with `apr-fusion-v1` produces `forecast-k1`. The holdout table measures that rank only.
+- **[Review report](#track-a)** is the default. After `init`, a normal `run` writes a seven-dimension review with an evidence ledger, a contributions audit, and a fatal-flaw check. The outputs are a Markdown report, `review_report.pdf` when reportlab is installed, and an annotated manuscript PDF.
+- **[Venue score and benchmark](#track-b)** is optional and off by default. A `holistic` forecast plus a `rate` stage with `apr-fusion-v1` produces the `forecast-k1` rank. The holdout table measures only that rank.
 
 ![Left: a synthetic annotated page from the review report. Right: holdout rank cards from the benchmark. The page is an invented tracking note, not a real submission. Opus 5.5 Spearman 0.851, Grok 4.7 Spearman 0.761.](docs/assets/hero.png)
 
-Version `0.1.10`. Alpha. Python 3.11–3.13. MIT license. Not a substitute for a human reviewer.
+The right half comes from the optional benchmark track.
 
-### Results at a glance
-
-![Holdout Spearman and AUC by system, including GPT-6 Astra. Error bars are 95% bootstrap intervals. APR Opus AUC is a bar at 1.000.](docs/assets/holdout-glance.png)
-
-Rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The APR Opus AUC bar is drawn; the interval is degenerate (perfect separation on the 14 finished papers), so it is [1.000, 1.000]. APR Opus has n=14 and the other rows have n=15, and the intervals are wide. GPT-6 Astra is the third model on the chart, with n=15 for APR and for OpenJudge. How the pipeline differs, and where the score moved: [Method and ablation](#method). Scope: [What the benchmark measured](#benchmark-scope). Full table: [Venue score and benchmark](#track-b).
+Version `0.1.10`, alpha. Python 3.11–3.13. MIT license. APR doesn't replace a human reviewer.
 
 <a id="track-a"></a>
 
 ## Review report
 
-This is the default. It does not compute a venue score. The forecast and the holdout numbers are in [Venue score and benchmark](#track-b).
+This is the default use, and it doesn't compute a venue score. For the forecast and the holdout numbers, see [Venue score and benchmark](#track-b).
 
 ### What you get
 
 | Piece | What it is |
 | --- | --- |
-| Contributions and ledger | Claims the manuscript makes, the evidence it offers, and what is still missing. |
-| Seven dimension scores | Originality, importance, claims supported, experimental soundness, writing, community value, prior-work context. The bands are 2/4/6/8/10. |
-| Fatal-flaw check | A label such as leakage or an unfair baseline is kept only when the excerpt is in the paper **and** a second `fatal-verify` call agrees that the excerpt states that class. `missing_closest_neighbor` comes from related-work search, not from that call. |
-| Review report | `review_report.md` next to `review.toml`. The same stage writes `review_report.pdf` when reportlab is installed. |
-| Bilingual option | `bilingual = true` on `execute_review` and on `report` writes `en` and `zh-Hans` in one file. Export fails if a pair is missing. |
-| Annotated original PDF | Each cited evidence item is highlighted, tagged in the margin (`E1`, `E2`, …), and given a PDF comment from `APR reviewer`. |
-| Related work, if you add the stage | Keyword and metadata search (arXiv, OpenAlex, Semantic Scholar). Manuscript prose is not sent. |
+| Contributions and ledger | The claims the manuscript makes, the evidence it offers, and what's still missing. |
+| Seven dimension scores | Originality, importance, claims supported, experimental soundness, writing, community value, and prior-work context. The bands are 2/4/6/8/10. |
+| Fatal-flaw check | APR keeps a label such as leakage or an unfair baseline only when the excerpt is in the paper **and** a second call, `fatal-verify`, agrees that the excerpt states that class. The `missing_closest_neighbor` label comes from related-work search, not from that call. |
+| Review report | `review_report.md`, next to `review.toml`. With reportlab installed, the same stage also writes `review_report.pdf`. |
+| Bilingual option | Set `bilingual = true` on `execute_review` and on `report` to write `en` and `zh-Hans` in one file. Export fails if a pair is missing. |
+| Annotated original PDF | The annotator highlights each cited evidence item, tags it in the margin (`E1`, `E2`, …), and adds a PDF comment from `APR reviewer`. |
+| Related work, if you add the stage | Keyword and metadata search (arXiv, OpenAlex, Semantic Scholar). The search doesn't send manuscript prose. |
 
 The default judgments are `contributions`, `ledger`, `dimensions`, and `fatal`. `init` uses `DeterministicManuscriptAdapter`, so the first local run needs no API key and no `holistic` judgment.
 
 ### Synthetic preview
 
-The figure and the excerpt come from the invented tracking note in `examples/synthetic/`. It is not a submission, and it is not one of the holdout papers. The run used `FixtureReviewAdapter`. The sentences are that fixture’s review, rendered by the real report stage. The example does not run `rate` and does not compute `forecast-k1`. The report says no overall 0–10 was assigned. The ICLR “reject” line in the fixture is a written venue conclusion stored on the package.
+The figure and the excerpt come from the invented tracking note in `examples/synthetic/`. The note isn't a submission, and it isn't one of the holdout papers. The run uses `FixtureReviewAdapter`: the sentences are that fixture's review, rendered by the real report stage. The example doesn't run `rate` or compute `forecast-k1`. The report states that it assigns no overall 0–10 score. The ICLR "reject" line in the fixture is a written venue conclusion stored on the package.
 
-![Annotated synthetic page. The methods sentence is highlighted, tagged E1, and a comment popup names Weakness 1 (critical).](docs/assets/annotated-preview.png)
+![Annotated synthetic page. The methods sentence is highlighted and tagged E1, and a comment pop-up names Weakness 1 (critical).](docs/assets/annotated-preview.png)
 
-The highlight is evidence `E1`. The PDF comment, written by the annotator from that package, is:
+The highlight marks evidence `E1`. From the package, the annotator writes this PDF comment:
 
 > **E1** · Weakness 1 (critical)
 >
@@ -51,9 +47,9 @@ The highlight is evidence `E1`. The PDF comment, written by the annotator from t
 >
 > Highlighted on page 1.
 
-The same id is cited by the other fields that use it: the second issue, the question, the seven dimension scores, and the fixture’s ICLR reject and TMLR major-revision notes. The margin tag is the index. The comment says which point it supports.
+The same id also appears in the second issue, the question, the seven dimension scores, and the fixture's ICLR reject and TMLR major-revision notes. The margin tag points into the evidence index, and the comment says which point the evidence supports.
 
-The report uses the same id for the required revision. The generated file repeats each section in `zh-Hans`. That wording is on [the Chinese page](README.zh-CN.md). Abbreviated English from `review_report.md` after `autopaperreview run examples/synthetic/review.toml`:
+The report cites the same id for the required revision. The generated file repeats each section in `zh-Hans`, and [the Chinese page](README.zh-CN.md) shows that wording. The following abbreviated English excerpt comes from `review_report.md` after `autopaperreview run examples/synthetic/review.toml`:
 
 ```markdown
 ## Weaknesses
@@ -79,19 +75,26 @@ Required action: Use specimen- or sequence-level holdout and report results on a
 genuinely independent test set.
 ```
 
-<a id="known-gaps"></a>
+<a id="comparison"></a>
 
-### Known gaps
+### What a score does not give you
 
-These are not config options. This README does not add them.
+A Spearman value doesn't tell an author what to revise. On the benchmark holdout, APR isn't more accurate than OpenJudge on every metric. The following table shows what the APR package adds, and what three other codebases document differently:
 
-- There is no switch for `review_report.pdf`. The report stage writes that PDF next to `review.toml` and under the report stage directory whenever reportlab is installed. Without reportlab, the Markdown and JSON still run and the PDF is skipped.
-- There is no venue-specific official review form. `review_report.pdf` is a rendering of this project’s own Markdown report. It is not an ICLR form and not an AAAI form.
-- `profile` on `render_pages` and `format_check`, and `venue` on `related_work_search`, accept `iclr2027` or `aaai2027`. Those names select format, anonymity, and deadline checks only. They do not change the seven dimension bands, and they do not select a score formula. AAAI here is not a second rating scale. The ICLR bins in [Venue score and benchmark](#track-b) are the rating scale used by `decision_bin`.
+| | APR | OpenJudge paper review | ProReviewer | Sakana reviewer |
+| --- | --- | --- | --- | --- |
+| Evidence-grounded quote | Quote, evidence id, and a required action. If a major issue has no quote, the export gate can fail the export. | Review prose. The public pipeline doesn't store a quote-to-span contract. | Review log of claims, questions, and notes. The project page links log lines back to the paper. | Free-text strengths and weaknesses from extracted PDF text. |
+| Numbered PDF markers and comment pop-ups | Yes. Margin tag `E#`, highlight, and a PDF comment authored by `APR reviewer`. | Not in the public paper-review pipeline. | Not in the public repository. The demo traces log entries, not PDF pop-ups. | Not in `perform_review`. |
+| Second check before a fatal label | Yes. `fatal-verify` must agree that the excerpt states the class. `missing_closest_neighbor` comes from related-work search, not from that call. | The criticality grader reclassifies correctness findings, including false positives. The contract differs. | Not described as a second excerpt check. | Not described. |
+| Rank from a probability over official ratings | Yes. One call, three seats, probabilities on 1/3/5/6/8/10, rank = mean expected rating. | Integer score 1–6. | Not described. | Ensemble of integer overall scores in the published reviewer. Not a probability vector. |
+| Venue scale | ICLR bins from the 1–6 decision. Format profiles `iclr2027` and `aaai2027` (page limit, anonymity). AAAI is format only. | Optional venue **name** on a discipline rubric. The published score is 1–6, not the ICLR bin set. | Not a pinned ICLR/AAAI format profile. | The published prompt follows a NeurIPS-style form (soundness, presentation, contribution, overall, confidence). |
+| Bilingual export | `en` and `zh-Hans` in one file. Export fails if a pair is missing. | One language per run, `en` or `zh`. | Not described. | Not described. |
+| Related work without sending the manuscript | Keyword and id/title/DOI lookups. Prose stays local. A provider that fails doesn't add a cap. | Bibliography check against CrossRef. The skill also names arXiv and DBLP. It sends reference metadata, not a five-family related-work search. | Not described. | Not described. |
+| Confidentiality guard for a public repository | `scripts/check_confidentiality.py` rejects review workdirs, page images, and submission-id patterns. | Not part of that project. | Not part of that project. | Not part of that project. |
 
 ### Quickstart
 
-1. Install. `pdf` installs PyMuPDF and reportlab (the annotated manuscript and `review_report.pdf`). `visual` installs page rendering for the format check. Without them, Markdown and JSON still run.
+1. Install the package. The `pdf` extra installs PyMuPDF and reportlab, which produce the annotated manuscript and `review_report.pdf`. The `visual` extra installs page rendering for the format check. Without these extras, you still get the Markdown and JSON outputs.
 
 ```bash
 python3 -m venv .venv
@@ -99,13 +102,18 @@ source .venv/bin/activate
 pip install -e ".[pdf,visual]"
 ```
 
-2. Create a project. `init` writes a deterministic adapter, prompt files, and `review.toml`. Keep real manuscripts in a gitignored directory (`reviews/`, `workdir/`, `papers/`, `uploads/`).
+2. Create a project. `init` writes a deterministic adapter, prompt files, and `review.toml`. Keep real manuscripts in a gitignored directory such as `reviews/`, `workdir/`, `papers/`, or `uploads/`.
 
 ```bash
 autopaperreview init reviews/my-paper --project-id my-paper --title "My paper review"
 ```
 
-3. Replace `reviews/my-paper/manuscript.txt`. To call a model, edit the `execute_review` stage. `OpenAICompatibleAdapter` calls an OpenAI-compatible chat API. The key stays in the environment (`APR_MODEL_API_KEY` by default). It is not written into the TOML, the request log, or the stage signature. A loopback server is allowed when `network_policy` is `deny`. A remote host also needs `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. The run manifest then records that the manuscript left the machine. `base_url` is the API root (`…/v1`), not a URL with a key in the query string. The model timeout defaults to 900 seconds.
+3. Replace `reviews/my-paper/manuscript.txt` with your manuscript. To call a model, edit the `execute_review` stage as in the following example. `OpenAICompatibleAdapter` calls an OpenAI-compatible chat API. The Pipeline section shows how the stages connect.
+
+   - The key stays in the environment, in `APR_MODEL_API_KEY` by default. APR doesn't write it into the TOML, the request log, or the stage signature.
+   - The `deny` network policy still allows a loopback server. A remote host needs `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. The run manifest then records that the manuscript left the machine.
+   - `base_url` is the API root (`…/v1`), not a URL with the key in its query string.
+   - The model timeout defaults to 900 seconds.
 
 ```toml
 [project]
@@ -133,9 +141,9 @@ depends_on = ["consensus"]
 bilingual = true
 ```
 
-Leave `holistic` and `rate` out of this file unless you want the [venue score](#track-b). `cheap = true` is a rank-only shortcut. It skips the review pieces in the table above.
+Leave `holistic` and `rate` out of this file unless you want the [venue score](#track-b). `cheap = true` is a rank-only shortcut: it skips the contributions, ledger, dimension, and fatal-flaw judgments.
 
-4. Optional format check. `init` does not add these stages. `profile` is `iclr2027` or `aaai2027`.
+4. Optional: add a format check or related-work search. `init` doesn't add these stages. For the format check, set `profile` to `iclr2027` or `aaai2027`.
 
 ```toml
 [[stages]]
@@ -153,7 +161,7 @@ depends_on = ["pages"]
 profile = "iclr2027"
 ```
 
-Related-work search runs only when the TOML includes it. When it is present, `novelty` and `rate` must depend on it. Live search needs `network_policy` of `metadata_only` or `allow`. If every provider fails, the status is `degraded` and the score does not drop. `venue` uses the same two names and loads that venue’s deadline file. It does not change the rating scale in the review text.
+For related-work search, add the `search` stage. Search runs only if the TOML includes it. When it's present, `novelty` and `rate` must depend on it. Live search needs `network_policy` set to `metadata_only` or `allow`. If every provider fails, the status is `degraded` and the score doesn't drop. `venue` takes the same values as `profile` and loads that venue's deadline file. It doesn't change the rating scale in the review text.
 
 ```toml
 [[stages]]
@@ -166,39 +174,39 @@ mode = "live"
 requires_network = true
 ```
 
-5. Run. A second run reuses each stage whose signature still matches.
+5. Run the pipeline. A second run reuses each stage whose signature still matches.
 
 ```bash
 autopaperreview validate reviews/my-paper/review.toml
 autopaperreview run reviews/my-paper/review.toml
 ```
 
-The synthetic note needs no API key:
+The synthetic example runs without an API key:
 
 ```bash
 PYTHONPATH=src python3 -m autopaperreview validate examples/synthetic/review.toml
 PYTHONPATH=src python3 -m autopaperreview run examples/synthetic/review.toml
 ```
 
-6. Annotate. If `manuscript.pdf` sits next to the text when `report` runs, and PyMuPDF is installed, that stage already writes `annotated_manuscript.pdf`. To annotate later, without another model call:
+6. Annotate the PDF. When `report` runs with PyMuPDF installed and `manuscript.pdf` next to the text, that stage already writes `annotated_manuscript.pdf`. To annotate later without another model call, run:
 
 ```bash
 autopaperreview annotate reviews/my-paper/review.toml --pdf path/to/manuscript.pdf
 ```
 
-Pass `--review` when the highlight color should follow Strengths, Weaknesses, and Questions in the Markdown, not only the claims on the package. The default output of `annotate` is `<run>/annotated_manuscript.pdf`.
+To color highlights by the Strengths, Weaknesses, and Questions in the Markdown, and not only by the claims on the package, pass `--review`. By default, `annotate` writes `<run>/annotated_manuscript.pdf`.
 
 ### Where the files land
 
 | Path | Contents |
 | --- | --- |
-| `review_report.md` | Next to `review.toml`, and again under `<run>/stages/report/`. Evidence ids link to the evidence index. |
-| `review_report.pdf` | The same report, in both places, when reportlab is installed. There is no flag to skip it. |
-| `annotated_manuscript.pdf` | Next to `review.toml` when the report stage sees a sibling PDF. `annotate` writes the run-directory copy unless you pass `--output`. A quote that is not in the PDF becomes a page-level note and stays in the index. |
+| `review_report.md` | Next to `review.toml`, with a second copy under `<run>/stages/report/`. Evidence ids link to the evidence index. |
+| `review_report.pdf` | The same report, in both places, whenever reportlab is installed. No flag skips it. |
+| `annotated_manuscript.pdf` | Next to `review.toml` when the report stage finds a sibling PDF. `annotate` writes the run-directory copy unless you pass `--output`. A quote that isn't in the PDF becomes a page-level note and stays in the index. |
 | `<run>/run_manifest.json` | Stage status, signatures, and whether the manuscript left the machine. |
-| `<run>/stages/<id>/` | Package JSON, prompt packets, and, for a model stage, raw request and response bytes with their SHA-256. |
+| `<run>/stages/<id>/` | Package JSON and prompt packets. A model stage also stores the raw request and response bytes with their SHA-256. |
 
-`<run>` is `<run_root>/<run_id>`. `init` sets `run_root` to `.runs`. A later `run` reuses a stage whose signature and output hashes still match. Changing the export gate reruns the report and keeps ingest, search, and judgments. Do not commit `review_report.md`, `review_report.pdf`, or `annotated_manuscript.pdf`.
+`<run>` is `<run_root>/<run_id>`, and `init` sets `run_root` to `.runs`. A later `run` reuses any stage whose signature and output hashes still match. If you change the export gate, APR reruns the report and keeps the ingest, search, and judgment results. Don't commit `review_report.md`, `review_report.pdf`, or `annotated_manuscript.pdf`.
 
 ### Pipeline
 
@@ -217,7 +225,7 @@ flowchart TD
   report --> pdf["Annotated PDF, E# tag and comment"]
 ```
 
-The synthetic example stops at a fixture `execute_review` and a bilingual report. It has no `rate` stage and no model.
+The synthetic example stops at a fixture `execute_review` and a bilingual report. It has no `rate` stage and calls no model.
 
 ### Commands
 
@@ -230,42 +238,21 @@ autopaperreview annotate        Highlights, margin tags, and comments
 autopaperreview doctor          Optional extras and adapters
 ```
 
-<a id="method"></a>
+<a id="known-gaps"></a>
 
-## Method and ablation
+### Known gaps
 
-The chart above is the shipped rank, `forecast-k1`, next to three other systems. Two things are easy to miss there. OpenJudge is not the same kind of review, and the rank did not climb as a row of similar bars.
+None of the following has a configuration option, and this README doesn't add one.
 
-### APR and OpenJudge, per paper
-
-APR has two different runs. The table measures one forecast call. The default `run` writes a review and does not move that number. OpenJudge's public default is a multi-grader pipeline. This repository does not ship that code. The description below is OpenJudge `cookbooks/paper_review` at [this commit](https://github.com/agentscope-ai/OpenJudge/blob/c2fdc38314cd971b03d4d9333cd2c9f24d85c27f/cookbooks/paper_review/pipeline.py), plus the call count already in the cost table here. ProReviewer and Sakana stay in [What a score does not give you](#comparison).
-
-- **What the score is.** APR's benchmark reads `forecast-k1`: one call, three seats, each a probability over 1/3/5/6/8/10. The rank is the mean of the three expected ratings. The 1–6 decision on that same call is the bin on the review form, not the rank. OpenJudge's published recommendation is the review grader's integer 1–6 (`result.review.score`). Correctness is a separate 1–3 score. It does not replace the 1–6.
-- **How many model calls.** The APR number in the table is 1 forecast call (`--cheap`). OpenJudge's default `review_paper` makes 4 model calls: jailbreak, format, correctness, and review. It makes a 5th, criticality, only when the correctness score is above 1. A `.bib` file is optional. If you pass one, CrossRef checks it. That check is not another model call. The holdout cost table records OpenJudge as 1 call per paper, so that row is not this default pipeline.
-- **What is checked against the paper.** APR keeps a dimension score only when the quoted excerpt is in the manuscript, and keeps a fatal class only when a second call, `fatal-verify`, agrees. OpenJudge can mark a correctness finding as a false positive. That public pipeline does not require the review sentence to match a span in the PDF. The input it does take is the PDF (a TeX package is a separate entry point). Rendering pages as images is off unless `use_vision_for_pdf` is set.
-- **What you get back.** APR's default run writes the seven-dimension review, the evidence ledger, and, when PyMuPDF is installed, `annotated_manuscript.pdf` with margin numbers (`E1`, `E2`) and pop-up comments. OpenJudge's `generate_report` writes markdown: safety, correctness, the 1–6 review, and criticality. It does not write numbered comments onto the source PDF.
-
-<a id="ablations"></a>
-
-### What the ablations show
-
-The useful part is the gap, not another grouped chart. Point estimates are in [`docs/assets/ablation-aggregate.json`](docs/assets/ablation-aggregate.json) and [`docs/assets/tune30-r14-r15-aggregate.json`](docs/assets/tune30-r14-r15-aggregate.json). A 95% interval, where one is shown, is a paper-level bootstrap: 4000 resamples, seed `20261021`.
-
-The step that moves the rank is leaving the weighted seven-dimension score and the decision bin for the averaged expected rating. On the Grok 4.7 holdout (n=15), Spearman goes from 0.452 (weighted) to 0.667 (r2 mean-k1) to 0.761 (shipped forecast-k1). The intervals are [−0.130, 0.870], [0.228, 0.895], and [0.389, 0.939]. On the tune split (n=30), the score average beats the bin: mean-k1 0.601/0.780 versus bin 0.485/0.658. The benchmark uses `rank_score` for that reason. The review form still prints the bin.
-
-Later calls on that holdout do not clear the noise. panel-k2 is 0.705 [0.313, 0.890], next to forecast-k1 at 0.761 [0.389, 0.939]. Those intervals overlap. Holdout-15 was opened in rounds 2, 8, and 11, so this is not one untouched holdout. n is 14 to 15.
-
-On tune-30, OpenJudge's Opus lead on the holdout does not come back. The holdout is OpenJudge 0.883 against APR 0.851. Same-scaffold tune-30, Opus 5.5, n=29 because 1 paper was refused by the safety classifier: OpenJudge Spearman 0.635 [0.345, 0.830], AUC 0.879 [0.748, 0.972]. The file records that OpenJudge effort as xhigh and does not record the APR effort on these draws. Three APR `forecast-k1` draws are 0.858, 0.837, and 0.815, each with AUC 1.000. Each draw is ahead by 0.18 to 0.22 Spearman and by about 0.12 AUC. On Grok 4.7, n=30, the two are close: OpenJudge 0.629 [0.315, 0.836] and AUC 0.816 [0.662, 0.938], against APR draws 0.656/0.857 and 0.582/0.761.
-
-Two later ideas did not help. r14 dated-k1 tells the panel to review as of the manuscript's writing time, with no hindsight. Grok lands at 0.554/0.766, below the Grok draws above. Opus, n=29, lands at 0.827/0.985 and correlates 0.985 with the main forecast, inside the Opus draws 0.815 to 0.858. Dating the review did not add a ranking. r15 duo-k1 averages that panel with a separate full-report referee, equal weights. On Grok the average is 0.493/0.775. The referee alone is 0.421/0.749, and the panel alone on that run is 0.619/0.801. Averaging that referee in lowered the score. The Opus duo run has no number: the referee calls timed out.
-
-`forecast-k1` was preregistered before the holdout. It was not picked on the holdout. On the Grok tune split, chair-k1 (0.684/0.866) is slightly above that readout (0.656/0.857). On Opus, the other readouts run from 0.842 to 0.875.
+- You can't switch off `review_report.pdf`. Whenever reportlab is installed, the report stage writes that PDF next to `review.toml` and under the report stage directory. Without reportlab, the stage still writes the Markdown and JSON and skips the PDF.
+- There's no venue-specific official review form. `review_report.pdf` is a PDF rendering of this project's own Markdown report. It isn't an ICLR form or an AAAI form.
+- `profile` on `render_pages` and `format_check`, and `venue` on `related_work_search`, accept `iclr2027` or `aaai2027`. These names select only format, anonymity, and deadline checks. They don't change the seven dimension bands, and they don't select a score formula. AAAI here isn't a second rating scale. `decision_bin` uses the ICLR bins in [Venue score and benchmark](#track-b) as its rating scale.
 
 <a id="track-b"></a>
 
 ## Venue score and benchmark
 
-Add a `holistic` judgment in mode `forecast` and a `rate` stage with `coefficient_set = "apr-fusion-v1"`. This is separate from the review report. The seven dimension bands and the fatal-flaw pass **do not move** `forecast-k1`.
+This track is optional and off by default. It's separate from the review report: the seven dimension bands and the fatal-flaw pass **do not move** `forecast-k1`. To turn it on, add a `holistic` judgment in mode `forecast` and a `rate` stage with `coefficient_set = "apr-fusion-v1"`:
 
 ```toml
 judgments = ["contributions", "ledger", "dimensions", "fatal", "holistic"]
@@ -280,19 +267,27 @@ depends_on = ["consensus"]
 coefficient_set = "apr-fusion-v1"
 ```
 
-`cheap = true` keeps the holistic call and skips contributions, ledger, dimensions, and fatal. That is a rank-only run. It is what the table below measured.
+Put the first three keys in the `execute_review` stage's `[stages.params]`.
+
+With `cheap = true`, the run keeps the holistic call and skips contributions, ledger, dimensions, and fatal. That rank-only run is what the holdout table measures.
+
+### Results at a glance
+
+![Holdout Spearman and AUC by system, including GPT-6 Astra. Error bars are 95% bootstrap intervals. APR Opus AUC is a bar at 1.000.](docs/assets/holdout-glance.png)
+
+APR's bars use the rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The chart still draws the APR Opus AUC bar. Its interval is degenerate, [1.000, 1.000], because the score separates accept from reject perfectly on the 14 finished papers. APR Opus has n=14 and the other rows have n=15. The intervals are wide. GPT-6 Astra is the third model on the chart, with n=15 for APR and for OpenJudge. For the scope and the full table, see [What the benchmark measured](#benchmark-scope). For how the pipelines differ and where the score moved, see [Method and ablation](#method).
 
 ### How the forecast becomes a rank
 
 ![Three invented probability rows and their mean expected rating, 5.49. Not a holdout paper.](docs/assets/forecast-panel.png)
 
-One `holistic` call in mode `forecast` (the default, K = 1, temperature 0.7) reads the full manuscript packet. Source text is capped at 240,000 characters on the longest papers. The call answers as three seats defined in `anchors.FORECAST_SEATS`:
+One `holistic` call reads the full manuscript packet. The defaults are mode `forecast`, K = 1, and temperature 0.7. On the longest papers, APR caps the source text at 240,000 characters. The call answers as the three seats defined in `anchors.FORECAST_SEATS`:
 
-- **Specialist** — closest prior work, baselines, and whether that area would treat the gain as real.
-- **Generalist** — a strong reader from a nearby area: whether the paper is clear, whether the claims follow, and whether the problem matters outside its niche.
-- **Senior** — whether the area will build on the result.
+- **Specialist**: closest prior work, baselines, and whether that area would treat the gain as real.
+- **Generalist**: a strong reader from a nearby area, who checks whether the paper is clear, whether the claims follow, and whether the problem matters outside its niche.
+- **Senior**: whether the area would build on the result.
 
-Each seat writes a one-sentence summary, up to two strengths and two weaknesses, the official rating it would most likely submit, six probabilities, and a confidence from 1 to 5. It also writes `predicted_mean` (the chair mean) and a 1–6 decision. Neither is the rank. The seat confidence is not the confidence printed on the review form. That field is a parameter of the `rate` stage, not a model output.
+Each seat writes a one-sentence summary, up to two strengths and two weaknesses, the official rating it would most likely submit, six probabilities, and a confidence from 1 to 5. The call also writes `predicted_mean` (the chair mean) and a 1–6 decision. Neither of these is the rank. The seat confidence also isn't the confidence printed on the review form. That field is a parameter of the `rate` stage, not a model output.
 
 ```text
 expected rating = p1·1 + p3·3 + p5·5 + p6·6 + p8·8 + p10·10
@@ -300,9 +295,11 @@ rank            = mean of the three expected ratings, clamped to 1–10
 bin             = decision 1,2,3,4,5,6  →  ICLR 1,3,5,6,8,10
 ```
 
-Probabilities that do not sum to one are normalised, then counted. An official rating outside {1, 3, 5, 6, 8, 10} is counted as `off_scale` and kept. The figure uses invented weights, passed through `expected_rating` and `forecast_mean` (rank 5.4933), so the arithmetic is visible.
+APR normalizes probabilities that don't sum to one before it counts them. It counts an official rating outside {1, 3, 5, 6, 8, 10} as `off_scale` and keeps it. To make the arithmetic visible, the figure uses invented weights run through `expected_rating` and `forecast_mean` (rank 5.4933).
 
-The venue rating in the report is `decision_bin` of that 1–6 decision, not the rank snapped down. Invented example, not a holdout paper and not the figure above: rank 5.53 with decision 4 reports rating 6. Snapping that rank down reports 5 (`snap_down`). The rank and the rating can differ by one bin.
+The venue rating in the report is `decision_bin` of that 1–6 decision, not the rank snapped down. Here's an invented example that comes from neither a holdout paper nor the figure: rank 5.53 with decision 4 reports rating 6. Snapping that rank down reports 5 (`snap_down`). The rank and the rating can differ by one bin.
+
+APR records a verified venue cap and doesn't apply it to this rank. The forecast call isn't checked against the manuscript, but the fatal-flaw call is. The older `apr-iclr-cap-v2` dimension formula produces a number that a verified flaw can lower. That number isn't the one in the holdout table.
 
 <a id="benchmark-scope"></a>
 
@@ -310,13 +307,13 @@ The venue rating in the report is `decision_bin` of that 1–6 decision, not the
 
 The holdout and tune-30 numbers measure the rank, not a full review.
 
-They come from a rank-only run: `calibrate-eval` with `--cheap --holistic-mode forecast --holistic-samples 1 --related-work off --coefficient-set apr-fusion-v1`. That is one forecast call per paper. Contributions, the ledger, dimension scores, the fatal-flaw check, `fatal-verify`, and related-work search did not run. Spearman, Kendall, AUC, MAE, and bias below check the continuous `forecast-k1` rank only. They do not check the written review, the weaknesses, the dimension bands or sub-scores, the fatal labels, or the annotated PDF. The USD/paper figures further down are those rank-only costs. A full review, which also writes the other outputs, costs considerably more.
+They come from a rank-only run: `calibrate-eval` with `--cheap --holistic-mode forecast --holistic-samples 1 --related-work off --coefficient-set apr-fusion-v1`. That's one forecast call per paper. Contributions, the ledger, dimension scores, the fatal-flaw check, `fatal-verify`, and related-work search didn't run. The Spearman, Kendall, AUC, MAE, and bias values in the following table check only the continuous `forecast-k1` rank. They don't check the written review, the weaknesses, the dimension bands or sub-scores, the fatal labels, or the annotated PDF. The USD/paper figures in the cost table are also rank-only costs. A full review also writes the other outputs, and it costs considerably more.
 
-Spearman and AUC in the table are computed on the rank. The decision-bin rating was not evaluated on this holdout.
+Spearman and AUC in the table use the rank. The decision-bin rating was not evaluated on this holdout.
 
-Holdout of **15 public OpenReview papers**. Spearman and Kendall compare the system score with the **mean official human rating**. AUC is accept versus reject. Intervals are a 95% paper-level percentile bootstrap: 4000 resamples, seed `20261021`, the procedure in `src/autopaperreview/rank_metrics.py`.
+The holdout has **15 public OpenReview papers**. Spearman and Kendall compare the system score with the **mean official human rating**. AUC measures how well the score separates accepted from rejected papers. Intervals are a 95% paper-level percentile bootstrap: 4000 resamples, seed `20261021`, with the procedure in `src/autopaperreview/rank_metrics.py`.
 
-APR’s score in this table is the shipped rank: `forecast-k1`, the mean expected rating on 1–10. Full precision is in [`docs/assets/holdout15-aggregate.json`](docs/assets/holdout15-aggregate.json). The figures below are rounded to three decimals. No paper id or title is in that file or in this README.
+APR's score in this table is the shipped rank, `forecast-k1`: the mean expected rating on 1–10. The table rounds values to three decimals. For full precision, see [`docs/assets/holdout15-aggregate.json`](docs/assets/holdout15-aggregate.json). Neither that file nor this README contains a paper id or title.
 
 | System | Model, as recorded | n | Spearman | Kendall | AUC | MAE | Bias |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -335,14 +332,24 @@ APR’s score in this table is the shipped rank: `forecast-k1`, the mean expecte
 
 Read the table as a small sample, not a leaderboard:
 
-- **OpenJudge on Opus 5.5 ranks higher than APR on Opus** (Spearman 0.883 vs 0.851). APR’s Opus AUC is 1.000. OpenJudge’s is 0.890. APR has **14** papers, not 15. The Spearman intervals overlap. On tune-30 that lead reverses. See [What the ablations show](#ablations).
-- APR on Grok 4.7 is a bit above either OpenJudge Grok run (0.761 vs 0.712 and 0.700; AUC 0.800 vs 0.700 and 0.740). Those intervals overlap too.
-- On GPT-6 Astra, both sides have n=15. APR leads OpenJudge on Spearman (0.706 vs 0.515) and on AUC (0.780 vs 0.640). The 95% intervals overlap on both, so the lead is directional and not significant at this n. This OpenJudge row is the same 1-call harness as the other OpenJudge rows, not the public default of 4 model calls, or 5 when correctness is above 1.
-- ProReviewer and the Sakana reviewer are near chance on accept/reject (AUC 0.560 and 0.540). Their Spearman intervals still reach the 0.7s.
-- APR Kendall is not in the aggregate. OpenJudge MAE and bias are not in it either. OpenJudge’s published review score is an integer 1–6, so a MAE against a 1–10 human mean is not comparable without a mapping this repository does not have.
-- APR on Opus and on Grok score **below** the human mean (bias −0.51 on Opus, −0.85 on Grok 4.7). The aggregate has no Astra bias.
-- Opus scored 14 of 15 papers. The run note says the missing paper timed out. The aggregate names the model Opus 5.5 and does not record the effort setting. That same note calls the run max effort.
-- A dash means the aggregate has no such cell. No cell here was filled by interpolation.
+- **On Opus 5.5, OpenJudge ranks higher than APR** (Spearman 0.883 versus 0.851). APR's Opus AUC is 1.000 and OpenJudge's is 0.890. APR has **14** papers, not 15. The Spearman intervals overlap. On tune-30 that lead reverses. See [What the ablations show](#ablations).
+- On Grok 4.7, APR is slightly ahead of both OpenJudge Grok runs: Spearman 0.761 versus 0.712 and 0.700, and AUC 0.800 versus 0.700 and 0.740. Those intervals overlap too.
+- On GPT-6 Astra, both systems have n=15. APR leads OpenJudge on Spearman (0.706 versus 0.515) and on AUC (0.780 versus 0.640). The 95% intervals overlap on both metrics, so the lead is directional and not significant at this n. This OpenJudge row uses the same 1-call harness as the other OpenJudge rows, not the public default of 4 model calls, or 5 when correctness is above 1.
+- ProReviewer and the Sakana reviewer are near chance on accept/reject (AUC 0.560 and 0.540), but their Spearman intervals still reach about 0.7.
+- The aggregate has no APR Kendall and no OpenJudge MAE or bias. OpenJudge's published review score is an integer on 1–6. An MAE against a 1–10 human mean needs a mapping between the scales, and this repository doesn't have one.
+- With both Opus and Grok, APR scores **below** the human mean (bias −0.51 on Opus, −0.85 on Grok 4.7). The aggregate has no Astra bias.
+- Opus scored 14 of 15 papers. The run note says the missing paper timed out. The aggregate names the model Opus 5.5 and doesn't record the effort setting. The same note calls the run max effort.
+- A dash means the aggregate has no such cell. No cell here comes from interpolation.
+
+<a id="other-models"></a>
+
+### Where the other models come from
+
+This repository doesn't include OpenJudge, ProReviewer, or Sakana. The following descriptions come from their public docs, as checked when this README was written. The **holdout model** is whatever the aggregate records, and the aggregate records less detail than the upstream defaults specify.
+
+- **OpenJudge** paper review ([agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)) uses several graders: safety, correctness, a 1–6 scholarly score, a criticality pass that can mark a finding as a false positive, and BibTeX checks against CrossRef. The aggregate's OpenJudge rows are Opus 5.5, two Grok runs, and GPT-6 Astra. The file doesn't record the Grok version.
+- **ProReviewer** ([UKPLab/arxiv2026-ProReviewer](https://github.com/UKPLab/arxiv2026-ProReviewer), arXiv:2606.13349) is a multi-step agent with a review log. The public checkpoint is a Qwen3-8B model, and the API path accepts other models. This holdout doesn't record which one ran. About 24 calls per paper means a multi-step loop, not a single score.
+- **Sakana's AI Scientist reviewer** ([SakanaAI/AI-Scientist](https://github.com/SakanaAI/AI-Scientist) `perform_review`) returns NeurIPS-style scores, strengths, weaknesses, and accept/reject from extracted PDF text. The upstream README's default review model is `gpt-4o-2024-05-13`, with an ensemble. This holdout doesn't record the model or the ensemble settings.
 
 ### Cost and time
 
@@ -358,61 +365,72 @@ Read the table as a small sample, not a leaderboard:
 | ProReviewer | 364 (~24 / paper) | 12.77 | 0.85 | not recorded |
 | Sakana reviewer | 137 (~9 / paper) | 12.88 | 0.86 | not recorded |
 
-These dollar amounts are the rank-only forecast calls behind the table. A full review costs considerably more.
+These dollar amounts cover the rank-only forecast calls behind the holdout table. A full review costs considerably more.
 
 ### Tuning split
 
-The tuning split is not a confirmation set. The file has point estimates and no bootstrap interval. Opus is missing one of 30 papers. The file does not say why.
+The tuning split isn't a confirmation set. Its file has point estimates and no bootstrap intervals. Opus is missing one of the 30 papers, and the file doesn't say why.
 
 | Split | Model | n | Spearman | AUC |
 | --- | --- | --- | --- | --- |
 | tune-30 | Opus 5.5 | 29 | 0.858 | 1.000 |
 | tune-30 | Grok 4.7 | 30 | 0.656 | 0.857 |
 
-`forecast-k1` stays the shipped rank. Do not replace it because a later number looks better on this split. Details: [public calibration](docs/public-calibration.md).
+`forecast-k1` stays the shipped rank. Don't replace it because a later number looks better on this split. For details, see [public calibration](docs/public-calibration.md).
 
-<a id="other-models"></a>
+<a id="method"></a>
 
-### Where the other models come from
+### Method and ablation
 
-This repository does not include OpenJudge, ProReviewer, or Sakana. The labels below come from their public docs, checked when this README was written. The **holdout model** is whatever the aggregate records, which is less than the upstream default.
+The holdout charts show the shipped rank, `forecast-k1`, next to three other systems. Two things are easy to miss there: OpenJudge isn't the same kind of review, and the rank didn't rise through a series of similar steps.
 
-- **OpenJudge** paper review ([agentscope-ai/OpenJudge](https://github.com/agentscope-ai/OpenJudge)) uses several graders: safety, correctness, a 1–6 scholarly score, a criticality pass that can mark a finding as a false positive, and BibTeX checks against CrossRef. The aggregate’s OpenJudge rows are Opus 5.5, two Grok runs, and GPT-6 Astra. The Grok version is not in the file.
-- **ProReviewer** ([UKPLab/arxiv2026-ProReviewer](https://github.com/UKPLab/arxiv2026-ProReviewer), arXiv:2606.13349) is a multi-step agent with a review log. The public checkpoint is a Qwen3-8B model. The API path accepts other models. This holdout does not record which one ran. About 24 calls per paper is a multi-step loop, not a single score.
-- **Sakana’s AI Scientist reviewer** ([SakanaAI/AI-Scientist](https://github.com/SakanaAI/AI-Scientist) `perform_review`) returns NeurIPS-style scores, strengths, weaknesses, and accept/reject from extracted PDF text. The upstream README’s default review model is `gpt-4o-2024-05-13`, with an ensemble. This holdout does not record the model or the ensemble settings.
+#### APR and OpenJudge, per paper
 
-<a id="comparison"></a>
+APR has two different runs. The table measures one forecast call. The default `run` writes a review and doesn't move that number. OpenJudge's public default is a multi-grader pipeline, and this repository doesn't ship that code. The following description comes from OpenJudge `cookbooks/paper_review` at [commit c2fdc38](https://github.com/agentscope-ai/OpenJudge/blob/c2fdc38314cd971b03d4d9333cd2c9f24d85c27f/cookbooks/paper_review/pipeline.py), plus the call count in the cost table. For ProReviewer and Sakana, see [What a score does not give you](#comparison).
 
-### What a score does not give you
+- **What the score is.** APR's benchmark reads `forecast-k1`: one call with three seats, each giving a probability over 1/3/5/6/8/10. The rank is the mean of the three expected ratings. The 1–6 decision from that same call is the bin on the review form, not the rank. OpenJudge's published recommendation is the review grader's integer 1–6 (`result.review.score`). Correctness is a separate 1–3 score, and it doesn't replace the 1–6.
+- **How many model calls.** The APR number in the table comes from 1 forecast call (`--cheap`). OpenJudge's default `review_paper` makes 4 model calls: jailbreak, format, correctness, and review. It makes a 5th, criticality, only when the correctness score is above 1. A `.bib` file is optional. If you pass one, CrossRef checks it, and that check isn't another model call. The holdout cost table records OpenJudge as 1 call per paper, so that row isn't this default pipeline.
+- **What gets checked against the paper.** APR keeps a dimension score only when the quoted excerpt is in the manuscript. It keeps a fatal class only when a second call, `fatal-verify`, agrees. OpenJudge can mark a correctness finding as a false positive, but its public pipeline doesn't require the review sentence to match a span in the PDF. That pipeline takes the PDF as input, and a TeX package is a separate entry point. It renders pages as images only if you set `use_vision_for_pdf`.
+- **What you get back.** APR's default run writes the seven-dimension review and the evidence ledger. With PyMuPDF installed, it also writes `annotated_manuscript.pdf` with margin numbers (`E1`, `E2`) and pop-up comments. OpenJudge's `generate_report` writes Markdown that covers safety, correctness, the 1–6 review, and criticality. It doesn't write numbered comments onto the source PDF.
 
-A Spearman value does not tell the author what to revise. On this holdout, APR is not more accurate than OpenJudge on every metric. The table below is what the APR package adds, and what those three codebases document differently:
+<a id="ablations"></a>
 
-| | APR | OpenJudge paper review | ProReviewer | Sakana reviewer |
-| --- | --- | --- | --- | --- |
-| Evidence-grounded quote | Quote, evidence id, and a required action. Major issues can be blocked from export without a quote. | Review prose. The public pipeline does not store a quote-to-span contract. | Review log of claims, questions, and notes. The project page links log lines back to the paper. | Free-text strengths and weaknesses from extracted PDF text. |
-| Numbered PDF markers and comment popups | Yes. Margin tag `E#`, highlight, PDF comment authored by `APR reviewer`. | Not in the public paper-review pipeline. | Not in the public repo. The demo traces log entries, not PDF popups. | Not in `perform_review`. |
-| Second check before a fatal label | Yes. `fatal-verify` must agree that the excerpt states the class. `missing_closest_neighbor` comes from related-work search, not from that call. | Criticality grader reclassifies correctness findings, including false positives. Different contract. | Not described as a second excerpt check. | Not described. |
-| Rank from a probability over official ratings | Yes. One call, three seats, probabilities on 1/3/5/6/8/10, rank = mean expected rating. | Integer score 1–6. | Not described. | Ensemble of integer overall scores in the published reviewer. Not a probability vector. |
-| Venue scale | ICLR bins from the 1–6 decision. Format profiles `iclr2027` and `aaai2027` (page limit, anonymity). AAAI is format only. | Optional venue **name** on a discipline rubric. Published score is 1–6, not the ICLR bin set. | Not a pinned ICLR/AAAI format profile. | Published prompt follows a NeurIPS-style form (soundness, presentation, contribution, overall, confidence). |
-| Bilingual export | `en` and `zh-Hans` in one file. Export fails if a pair is missing. | One language per run, `en` or `zh`. | Not described. | Not described. |
-| Related work without sending the manuscript | Keyword and id/title/DOI lookups. Prose stays local. A provider that fails does not add a cap. | Bibliography check (CrossRef; the skill also names arXiv and DBLP). Sends reference metadata, not a five-family related-work search. | Not described. | Not described. |
-| Confidentiality guard for a public repo | `scripts/check_confidentiality.py` rejects review workdirs, page images, and submission-id patterns. | Not part of that project. | Not part of that project. | Not part of that project. |
+#### What the ablations show
 
-A verified venue cap is recorded and is not applied to this rank. The forecast call is not checked against the manuscript. The fatal-flaw call is. A number that a verified flaw can lower is the older `apr-iclr-cap-v2` dimension formula. That is not the number in the table above.
+The gaps are the useful part, so this section reports them in text instead of another grouped chart. Point estimates are in [`docs/assets/ablation-aggregate.json`](docs/assets/ablation-aggregate.json) and [`docs/assets/tune30-r14-r15-aggregate.json`](docs/assets/tune30-r14-r15-aggregate.json). Where an interval appears, it's a 95% paper-level bootstrap interval: 4000 resamples, seed `20261021`.
+
+The step that moves the rank is replacing the weighted seven-dimension score and the decision bin with the averaged expected rating. Spearman on the Grok 4.7 holdout (n=15):
+
+- Weighted seven-dimension score: 0.452 [−0.130, 0.870]
+- r2 mean-k1: 0.667 [0.228, 0.895]
+- Shipped forecast-k1: 0.761 [0.389, 0.939]
+
+On the tune split (n=30), the score average beats the bin. The mean-k1 readout scores 0.601/0.780 (Spearman/AUC), and the bin scores 0.485/0.658. That's why the benchmark uses `rank_score`. The review form still prints the bin.
+
+Later variants on that holdout stay within the noise. `panel-k2` scores 0.705 [0.313, 0.890], next to 0.761 [0.389, 0.939] for `forecast-k1`, and the intervals overlap. Holdout-15 was opened in rounds 2, 8, and 11, so it isn't one untouched holdout. n is 14 or 15.
+
+OpenJudge's Opus lead on the holdout doesn't hold on tune-30. On the holdout, OpenJudge scores 0.883 against APR's 0.851. The tune-30 comparison uses the same scaffold and Opus 5.5 (n=29, because the safety classifier refused 1 paper). There, OpenJudge scores Spearman 0.635 [0.345, 0.830] and AUC 0.879 [0.748, 0.972]. The file records that OpenJudge effort as xhigh and doesn't record the APR effort for these draws. Three APR `forecast-k1` draws score 0.858, 0.837, and 0.815, each with AUC 1.000. Each draw leads by 0.18 to 0.22 Spearman and by about 0.12 AUC. On Grok 4.7 (n=30), the two are close: OpenJudge scores 0.629 [0.315, 0.836] with AUC 0.816 [0.662, 0.938], against APR draws of 0.656/0.857 and 0.582/0.761.
+
+Two later ideas didn't help:
+
+- **r14 dated-k1** asks the panel to review as of the manuscript's writing time, with no hindsight. Grok lands at 0.554/0.766, below the earlier Grok draws. Opus (n=29) lands at 0.827/0.985 and correlates 0.985 with the main forecast, inside the range of the Opus draws, 0.815 to 0.858. Dating the review didn't add a new ranking signal.
+- **r15 duo-k1** averages that panel with a separate full-report referee, with equal weights. On Grok, the average is 0.493/0.775. The referee alone is 0.421/0.749, and the panel alone on that run is 0.619/0.801, so averaging in the referee lowered the score. The Opus duo run has no number because the referee calls timed out.
+
+`forecast-k1` was preregistered before the holdout, not picked on it. On the Grok tune split, chair-k1 (0.684/0.866) is slightly higher than `forecast-k1` (0.656/0.857). On Opus, the other readouts range from 0.842 to 0.875.
 
 ### Reproduce the benchmark
 
-Use public OpenReview data only. Put the cache in a gitignored directory such as `reviews/`. Do not commit the manifest, the cache, forum ids, titles, or a split-id file. This repository does not contain the id list for the 15-paper table, so a new listing will not reproduce those cells.
+Use public OpenReview data only. Put the cache in a gitignored directory such as `reviews/`. Don't commit the manifest, the cache, forum ids, titles, or a split-id file. This repository doesn't contain the id list for the 15-paper table, so a new listing doesn't reproduce those cells.
 
-`calibrate-eval` has five subcommands: `list`, `fetch`, `prepare`, `run`, `report`.
+`calibrate-eval` has five subcommands: `list`, `fetch`, `prepare`, `run`, and `report`.
 
-1. List one public venue group. The accepted `--listing` labels are `ICLR 2024 oral`, `ICLR 2024 spotlight`, `ICLR 2024 poster`, `ICLR 2024 rejected`, `ICLR 2025 oral`, `ICLR 2025 spotlight`, `ICLR 2025 poster`, and `ICLR 2025 rejected`. `--limit` defaults to 20. Stdout is JSON with public forum ids and titles. Leave that JSON out of git.
+1. List one public venue group. `--listing` accepts `ICLR 2024 oral`, `ICLR 2024 spotlight`, `ICLR 2024 poster`, `ICLR 2024 rejected`, `ICLR 2025 oral`, `ICLR 2025 spotlight`, `ICLR 2025 poster`, and `ICLR 2025 rejected`. `--limit` defaults to 20. The command prints JSON with public forum ids and titles to stdout. Keep that JSON out of Git.
 
 ```bash
 autopaperreview calibrate-eval list --listing "ICLR 2025 poster" --limit 20
 ```
 
-2. Write the manifest yourself from that stdout. `forum_id` and `decision` (`accept` or `reject`) are required. `listing` is optional. `REPLACE_ME` below is a placeholder, not a paper.
+2. Write the manifest yourself from that output. Each entry needs `forum_id` and `decision` (`accept` or `reject`). `listing` is optional. In the following example, `REPLACE_ME` is a placeholder, not a paper.
 
 ```json
 {
@@ -422,14 +440,14 @@ autopaperreview calibrate-eval list --listing "ICLR 2025 poster" --limit 20
 }
 ```
 
-3. Fetch public PDFs and held-out official ratings, then build prompt packets. `--pdf-fallback` defaults to `arxiv`. `--max-pages` defaults to 40.
+3. Fetch the public PDFs and the held-out official ratings, then build prompt packets. `--pdf-fallback` defaults to `arxiv`, and `--max-pages` defaults to 40.
 
 ```bash
 autopaperreview calibrate-eval fetch --manifest reviews/public-eval/manifest.json --cache reviews/public-eval
 autopaperreview calibrate-eval prepare --cache reviews/public-eval
 ```
 
-4. Score with the locked rank-only flags. `--mode adapter` is required for the bundled chat adapter. A remote endpoint also needs `--allow-remote`, `--requires-network`, and `--network-policy allow`. `--cheap` keeps the holistic call and skips contributions, ledger, dimensions, and fatal. `--related-work off` does not run related-work search. The default `--mode` is `agent`. That mode waits for a hand-written judgment file and does not call a model.
+4. Score with the locked rank-only flags. The bundled chat adapter requires `--mode adapter`. A remote endpoint also needs `--allow-remote`, `--requires-network`, and `--network-policy allow`. `--cheap` keeps the holistic call and skips contributions, ledger, dimensions, and fatal. With `--related-work off`, related-work search doesn't run. The default `--mode` is `agent`, which waits for a hand-written judgment file and doesn't call a model.
 
 ```bash
 autopaperreview calibrate-eval run \
@@ -448,7 +466,7 @@ autopaperreview calibrate-eval run \
   --coefficient-set apr-fusion-v1
 ```
 
-5. Two different reports. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean. It will not match the table. The table’s Spearman and AUC are the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score`. `--resamples` defaults to 4000. The bootstrap seed is `20261021` inside `rank_metrics.py`, not a flag. The cache and `--output` must be a gitignored path such as `reviews/` or `workdir/`. A tracked path inside the checkout is refused.
+5. Build the two reports. They measure different things. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean, so its numbers don't match the holdout table. That table's Spearman and AUC use the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score`. `--resamples` defaults to 4000. The bootstrap seed is `20261021`, set inside `rank_metrics.py`, not a flag. The cache and `--output` must be gitignored paths such as `reviews/` or `workdir/`. The commands refuse a tracked path inside the checkout.
 
 ```bash
 autopaperreview calibrate-eval report \
@@ -461,40 +479,45 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
   --resamples 4000
 ```
 
-Do not pass `--only-ids` or `--split` to `calibrate-eval run`, and do not pass `--ids` or `--split` to `scripts/rank_eval.py`. Those flags select a private id list. This README does not publish one.
+Don't pass `--only-ids` or `--split` to `calibrate-eval run`, and don't pass `--ids` or `--split` to `scripts/rank_eval.py`. Those flags select a private id list, and this README doesn't publish one.
 
 ## Confidentiality
 
-This repository is public. Manuscripts, page renders, reviews, submission ids, and forum ids stay in a gitignored directory. The synthetic note and the allowlisted PNGs in `docs/assets/` are the only preview images. Generate them with:
+This repository is public. Keep manuscripts, page renders, reviews, submission ids, and forum ids in a gitignored directory. The only preview images are the synthetic note and the allowlisted PNG files in `docs/assets/`. To generate them, run:
 
 ```bash
 python3 scripts/render_readme_figures.py
 ```
 
-The same command with `--zh` writes Chinese labels for the hero, the ranking chart, and the forecast panel. It does not overwrite the English files. The annotated page stays the English fixture. The script does not take a key and does not read a holdout paper.
+With `--zh`, the same command writes Chinese labels for the hero image, the ranking chart, and the forecast panel. It doesn't overwrite the English files. The annotated page stays the English fixture. The script takes no key and doesn't read any holdout paper.
 
-`python3 scripts/check_confidentiality.py` is the check CI runs. If something confidential was pushed, do not force-push `main`. Report the commit SHAs. Policy: [CONFIDENTIALITY.md](CONFIDENTIALITY.md).
+CI runs `python3 scripts/check_confidentiality.py`. If someone pushes confidential content, don't force-push `main`. Report the commit SHAs instead. For the policy, see [CONFIDENTIALITY.md](CONFIDENTIALITY.md).
 
-The network policy is a declaration the runner enforces on stage metadata. It is not an operating-system firewall.
+The network policy is a declaration that the runner enforces on stage metadata. It isn't an operating-system firewall.
 
 ## Limitations
 
-- The table scores one rank-only forecast call. It does not measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column.
-- Fifteen papers, one Opus timeout, and bootstrap intervals from about 0.4 to about 1.0. A 0.02 Spearman gap is not a result.
-- Both models score below the human mean.
-- At the reported effort, Opus is about $0.66 and several minutes per paper, and it can time out (default budget 900 seconds).
-- `forecast-k1` is not checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs. They are not why the rank correlates.
-- OpenJudge on Opus has the higher Spearman on this holdout. On tune-30 that lead does not hold. See [What the ablations show](#ablations).
-- On GPT-6 Astra, APR leads OpenJudge on Spearman and on AUC, and the n=15 intervals overlap. That lead is directional. See the holdout table.
-- ProReviewer’s and Sakana’s models for these runs were not recorded, so those rows compare systems, not models.
-- Related-work search can return a partial or degraded result. A failed provider must not tighten a cap. The report should say the search was incomplete.
-- Format profiles can reject an over-length or non-anonymous PDF. They do not set the forecast.
-- `review_report.pdf` cannot be switched off, and there is no venue-specific official review form. See [Known gaps](#known-gaps).
+**Review report**
+
+- Related-work search can return a partial or degraded result. A failed provider must not tighten a cap, and the report should say the search was incomplete.
+- Format profiles can reject an over-length or non-anonymous PDF. They don't set the forecast.
+- You can't switch off `review_report.pdf`, and there's no venue-specific official review form. See [Known gaps](#known-gaps).
+
+**Venue score and benchmark**
+
+- The table scores one rank-only forecast call. It doesn't measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column shows.
+- Fifteen papers, one Opus timeout, and bootstrap intervals from about 0.4 to about 1.0 mean that a 0.02 Spearman gap isn't a finding.
+- With both Opus and Grok, APR scores below the human mean.
+- At the reported effort, Opus costs about $0.66 and takes several minutes per paper, and it can time out. The default budget is 900 seconds.
+- `forecast-k1` isn't checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs, but they aren't why the rank correlates.
+- On this holdout, OpenJudge on Opus has the higher Spearman. On tune-30 that lead doesn't hold. See [What the ablations show](#ablations).
+- On GPT-6 Astra, APR leads OpenJudge on Spearman and on AUC, and the n=15 intervals overlap. That lead is directional. See [Venue score and benchmark](#track-b).
+- The models behind the ProReviewer and Sakana runs weren't recorded, so those rows compare systems, not models.
 
 ## Status
 
-Alpha, `0.1.10`. Python 3.11–3.13. MIT license.
+AutoPaperReview `0.1.10` is alpha software for Python 3.11–3.13, released under the MIT license.
 
-The core is a local DAG: TOML config, Pydantic records, a content-hash cache, and adapters. Prompts under `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
+The core is a local DAG (directed acyclic graph) with TOML configuration, Pydantic records, a content-hash cache, and adapters. Prompts in `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
 
-Further reading, in the repo: [architecture](docs/architecture.md), [public calibration](docs/public-calibration.md), [related-work search](docs/related-work-search.md), [first-read writing](docs/first-read-review.md). [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) is a gap list from 2026-08-29. Use the matrix above for the current comparison. That note is older than `forecast-k1`.
+Further reading in this repository: [architecture](docs/architecture.md), [public calibration](docs/public-calibration.md), [related-work search](docs/related-work-search.md), and [first-read writing](docs/first-read-review.md). [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) is a gap list dated 2026-08-29. It predates `forecast-k1`. For the current comparison, use the comparison matrix in this README.
