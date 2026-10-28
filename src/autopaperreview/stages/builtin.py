@@ -1045,9 +1045,9 @@ class ReportStage(StageHandler):
         markdown = render_markdown(package, languages=languages, fill_missing=False)
         if len(languages) > 1:
             require_bilingual_markdown(markdown)
-        markdown_path.write_text(markdown, encoding="utf-8")
+        markdown_path.write_text(markdown, encoding="utf-8", newline="\n")
         project_dir = context.loaded_config.path.parent
-        (project_dir / "review_report.md").write_text(markdown, encoding="utf-8")
+        (project_dir / "review_report.md").write_text(markdown, encoding="utf-8", newline="\n")
         pdf_written = False
         from ..pdf_report import reportlab_available, write_report_pdf
 
