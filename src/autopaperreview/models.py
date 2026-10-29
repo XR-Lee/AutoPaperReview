@@ -180,6 +180,7 @@ class StageStatus(str, Enum):
     success = "success"
     skipped = "skipped"
     failed = "failed"
+    awaiting_input = "awaiting_input"
 
 
 class ReviewDecision(str, Enum):

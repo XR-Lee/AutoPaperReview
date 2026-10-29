@@ -34,6 +34,8 @@ class AgentFindingsInspector:
 
     requires_network = False
     status = "unconfigured"
+    # A declared findings drop that does not exist yet makes visual_inspect wait for it.
+    waits_for_drop = True
 
     def __init__(self) -> None:
         self._path: Path | None = None

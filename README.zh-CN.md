@@ -229,13 +229,63 @@ flowchart TD
 ### 命令
 
 ```text
-autopaperreview init            建一个本地项目（确定性适配器）
+autopaperreview init            建一个本地项目（确定性或 agent 适配器）
 autopaperreview validate        检查 TOML、依赖和本地路径
-autopaperreview run             运行或接着跑
+autopaperreview run             运行或接着跑；有阶段在等 drop 时退出码为 3
+autopaperreview status          以 JSON 输出运行状态、待交的 drop 和产物
+autopaperreview submit          先校验 agent 的 drop，再写入
+autopaperreview mcp             通过 stdio 向 MCP 客户端提供审稿工具
 autopaperreview inspect         打印运行清单
 autopaperreview annotate        高亮、页边编号和评论
 autopaperreview doctor          检查可选依赖和适配器
 ```
+
+<a id="agent-mcp"></a>
+
+### 接入 agent 与 MCP
+
+审稿人也可以由 Claude Code、Codex CLI 这类编码 agent 来当。APR 写出提示词包，agent 读完后写一份判定文件（drop），APR 先校验这份 drop，再接着跑报告。这种用法下 APR 不需要 API 密钥。稿件由 agent 背后的模型来读，所以稿件会去到那个模型运行的地方。APR 看不到这一步，`manuscript_left_machine` 仍为 false。
+
+先建一个 agent 项目。它的 `execute_review` 阶段用 `AgentJudgmentAdapter`，并设置 `fixture_path = "judgment.json"` 和 `verify_excerpts = true`。
+
+```bash
+autopaperreview init reviews/my-paper --project-id my-paper --adapter agent
+```
+
+再注册 MCP 服务。工具收到的每个路径都必须落在某个 `--root` 目录里。默认的 root 是服务启动时的工作目录。
+
+```bash
+claude mcp add autopaperreview -- autopaperreview mcp --root /abs/path/to/reviews
+```
+
+Codex CLI 则在 `~/.codex/config.toml` 里加上：
+
+```toml
+[mcp_servers.autopaperreview]
+command = "autopaperreview"
+args = ["mcp", "--root", "/abs/path/to/reviews"]
+```
+
+然后让 agent 审这篇稿件。工具有 `init_project`、`validate`、`run`、`status`、`read_input`、`drop_template`、`submit_drop` 和 `report`。
+
+| 步骤 | 做什么 |
+| --- | --- |
+| `run` | 各阶段一直跑到 `execute_review` 发现没有 drop 为止。这个阶段记为 `awaiting_input`，它后面的阶段记为 `pending`，不依赖它的阶段照常运行。每个阶段发一条进度通知。 |
+| `status`、`drop_template` | 列出要读的提示词包、drop 的路径，以及要原样回填的 `packet_sha256` 哈希。模板列出七个维度和 `sar_bands_v1` 的分数档，不预填任何一档。 |
+| `read_input` | 读取提示词包或页面渲染图。文本按 `max_chars` 分页返回，长稿件也不会超出客户端的输出上限。 |
+| `submit_drop` | 跑的就是该阶段自己的检查：哈希、schema、七个维度是否齐全，以及引文能否在稿件里找到。没通过的 drop 不会写入。 |
+| `run`、`report` | 审稿阶段读入 drop，随后跑 consensus 和 report。`report` 返回 `review_report.md`。 |
+
+不用 MCP，在 shell 里也是同一个循环。有阶段在等 drop 时，`run` 的退出码是 3；`status` 输出 JSON；`submit` 先校验 drop 文件，再把它写到声明的位置：
+
+```bash
+autopaperreview run reviews/my-paper/review.toml       # awaiting_input
+autopaperreview status reviews/my-paper/review.toml --detail
+autopaperreview submit reviews/my-paper/review.toml my-drop.json
+autopaperreview run reviews/my-paper/review.toml       # success
+```
+
+`visual_inspect` 配 `AgentFindingsInspector`，或 `related_work_search` 配 `mode = "agent"` 时，只要声明了 `findings_path` 而文件还不存在，也会这样等待。每次运行都会锁住自己的运行目录，同一项目的第二个 `run` 会返回 `busy`，不会改动运行清单。工具调用没法取消已经在跑的阶段。每个提示词包都带着整份稿件，所以稿件读一遍就够，其余的包只看各自的路线说明。
 
 <a id="known-gaps"></a>
 

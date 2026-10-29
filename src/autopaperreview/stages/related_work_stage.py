@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..artifacts import artifact_from_path
+from ..awaiting import AwaitingInput
 from ..hashing import sha256_file
 from ..model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from ..models import (
@@ -243,9 +244,30 @@ class RelatedWorkSearchStage(StageHandler):
             raise ValueError("related_work_search currently supports text sources only") from exc
         findings = context.loaded_config.resolve(params.findings_path) if params.findings_path else None
         if params.mode == "agent" and findings is not None and not findings.is_file():
-            raise FileNotFoundError(
+            # Generate the queries locally so the host agent knows what to search for.
+            preview = run_related_work_search(
+                manuscript,
+                venue_key=params.venue,
+                mode="agent",
+                findings_path=None,
+                named_method_limit=params.named_method_limit,
+                bibliography_lookup_limit=params.bibliography_lookup_limit,
+                network_policy=context.loaded_config.config.project.network_policy.value,
+                cutoff_date=date.fromisoformat(params.cutoff_date) if params.cutoff_date else None,
+                blocked_ids=params.blocked_ids,
+            )
+            raise AwaitingInput(
                 "agent related-work inspector requires a findings drop; "
-                f"set findings_path to an existing file ({findings.name} is missing)"
+                f"set findings_path to an existing file ({findings.name} is missing)",
+                request={
+                    "kind": "related_work_findings",
+                    "drop_path": params.findings_path,
+                    "queries": [
+                        {"id": query.id, "perspective": query.perspective.value, "query": query.query}
+                        for query in preview.queries
+                    ],
+                    "notes": [entry.detail for entry in preview.logs],
+                },
             )
         confirmation_file = (
             context.loaded_config.resolve(params.confirmation_path) if params.confirmation_path else None

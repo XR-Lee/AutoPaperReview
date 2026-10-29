@@ -175,7 +175,8 @@
         "running",
         "success",
         "skipped",
-        "failed"
+        "failed",
+        "awaiting_input"
       ],
       "title": "StageStatus",
       "type": "string"

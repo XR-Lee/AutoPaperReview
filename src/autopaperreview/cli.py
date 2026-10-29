@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import sys
@@ -20,12 +22,16 @@ from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
+    RunLockedError,
     default_registry,
     load_manifest,
     run_pipeline,
     validate_config_paths,
 )
 from .reporting import write_package_json
+
+# Exit code of `run` when a stage waits for an agent drop. `calibrate-eval run` uses the same code.
+EXIT_AWAITING_INPUT = 3
 
 
 def _print_json(value) -> None:
@@ -47,21 +53,72 @@ def command_validate(args: argparse.Namespace) -> int:
     return 0 if not errors else 1
 
 
+def run_summary(config: str | Path, *, force: bool = False, on_event=None) -> dict:
+    """Run a project and describe the result. Shared by `run` and the MCP server."""
+    from .handoff import run_status
+
+    try:
+        manifest = run_pipeline(config, force=force, on_event=on_event)
+    except RunLockedError as exc:
+        return {"status": "busy", "error": str(exc)}
+    except PipelineError as exc:
+        summary = {"status": "failed", "failed_stage": exc.stage_id, "error": str(exc)}
+        if exc.stage_id is not None:
+            summary["next"] = run_status(config)["next"]
+        return summary
+    status = run_status(config)
+    return {
+        "status": "awaiting_input" if status["awaiting"] else "success",
+        "run_id": manifest.run_id,
+        "project_id": manifest.project_id,
+        "source_sha256": manifest.source.sha256,
+        "stages": [
+            {"id": stage.id, "status": stage.status.value, "outputs": len(stage.outputs)}
+            for stage in manifest.stages
+        ],
+        "awaiting": status["awaiting"],
+        "notices": status["notices"],
+        "outputs": status["outputs"],
+        "next": status["next"],
+    }
+
+
 def command_run(args: argparse.Namespace) -> int:
-    manifest = run_pipeline(args.config, force=args.force)
-    _print_json(
-        {
-            "status": "success",
-            "run_id": manifest.run_id,
-            "project_id": manifest.project_id,
-            "source_sha256": manifest.source.sha256,
-            "stages": [
-                {"id": stage.id, "status": stage.status.value, "outputs": len(stage.outputs)}
-                for stage in manifest.stages
-            ],
-        }
-    )
+    summary = run_summary(args.config, force=args.force)
+    _print_json(summary)
+    if summary["status"] in {"failed", "busy"}:
+        print(f"error: {summary['error']}", file=sys.stderr)
+        return 2
+    return EXIT_AWAITING_INPUT if summary["status"] == "awaiting_input" else 0
+
+
+def command_status(args: argparse.Namespace) -> int:
+    from .handoff import run_status
+
+    _print_json(run_status(args.config, detail=args.detail))
     return 0
+
+
+def command_submit(args: argparse.Namespace) -> int:
+    from .handoff import submit_drop
+
+    drop_path = Path(args.drop).expanduser()
+    if not drop_path.is_file():
+        raise FileNotFoundError(f"drop file does not exist: {drop_path}")
+    result = submit_drop(
+        args.config,
+        drop_path.read_text(encoding="utf-8"),
+        stage_id=args.stage,
+        kind=args.kind,
+    )
+    _print_json(result)
+    return 0 if result["status"] == "accepted" else 1
+
+
+def command_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import serve_stdio
+
+    return serve_stdio([Path(root) for root in args.root] or [Path.cwd()])
 
 
 def command_inspect(args: argparse.Namespace) -> int:
@@ -480,8 +537,59 @@ def command_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+INIT_ADAPTERS = {
+    "deterministic": "autopaperreview.adapters:DeterministicManuscriptAdapter",
+    "agent": "autopaperreview.adapters:AgentJudgmentAdapter",
+}
+
+
+def _toml_basic_string(value: str) -> str:
+    """Quote ``value`` as a TOML basic string, escaping quotes, backslashes, and control characters."""
+    escaped: list[str] = []
+    for character in value:
+        code = ord(character)
+        if character in '"\\':
+            escaped.append("\\" + character)
+        elif code < 0x20 or code == 0x7F:
+            escaped.append(f"\\u{code:04X}")
+        elif 0xD800 <= code <= 0xDFFF:
+            raise ValueError("a TOML string cannot hold a lone surrogate")
+        else:
+            escaped.append(character)
+    return '"' + "".join(escaped) + '"'
+
+
 def command_init(args: argparse.Namespace) -> int:
-    target = Path(args.path).expanduser().resolve()
+    _print_json(
+        write_project(
+            Path(args.path),
+            project_id=args.project_id,
+            title=args.title,
+            adapter=args.adapter,
+        )
+    )
+    return 0
+
+
+def write_project(target: Path, *, project_id: str, title: str, adapter: str = "deterministic") -> dict:
+    """Create a minimal local-first review project. ``adapter`` is a key of ``INIT_ADAPTERS``."""
+    import re
+
+    if adapter not in INIT_ADAPTERS:
+        raise ValueError(f"adapter must be one of {sorted(INIT_ADAPTERS)}")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", project_id):
+        raise ValueError("project id must start with a letter and use letters, digits, '.', '_', or '-'")
+    if not title.strip():
+        raise ValueError("title must not be empty")
+    if adapter == "agent":
+        review_params = (
+            f'adapter = "{INIT_ADAPTERS[adapter]}"\n'
+            'fixture_path = "judgment.json"\n'
+            "verify_excerpts = true\n"
+        )
+    else:
+        review_params = f'adapter = "{INIT_ADAPTERS[adapter]}"\n'
+    target = target.expanduser().resolve()
     if target.exists() and any(target.iterdir()):
         raise FileExistsError(f"target directory is not empty: {target}")
     target.mkdir(parents=True, exist_ok=True)
@@ -497,13 +605,14 @@ def command_init(args: argparse.Namespace) -> int:
     )
     templates_dir = target / "prompts"
     template_args = argparse.Namespace(output_dir=str(templates_dir), force=True)
-    command_templates(template_args)
+    with contextlib.redirect_stdout(io.StringIO()):
+        command_templates(template_args)
     (target / "review.toml").write_text(
         f'''schema_version = 1
 
 [project]
-id = "{args.project_id}"
-title = "{args.title}"
+id = {_toml_basic_string(project_id)}
+title = {_toml_basic_string(title)}
 source = "manuscript.txt"
 run_root = ".runs"
 default_language = "en"
@@ -605,8 +714,7 @@ id = "review"
 type = "execute_review"
 depends_on = ["prompt_packets", "ledger"]
 [stages.params]
-adapter = "autopaperreview.adapters:DeterministicManuscriptAdapter"
-
+{review_params}
 [[stages]]
 id = "integrity"
 type = "integrity"
@@ -630,15 +738,15 @@ require_quote_on_major = true
 ''',
         encoding="utf-8",
     )
-    _print_json(
-        {
-            "status": "success",
-            "project_dir": str(target),
-            "config": str(target / "review.toml"),
-            "adapter": "autopaperreview.adapters:DeterministicManuscriptAdapter",
-        }
-    )
-    return 0
+    result = {
+        "status": "success",
+        "project_dir": str(target),
+        "config": str(target / "review.toml"),
+        "adapter": INIT_ADAPTERS[adapter],
+    }
+    if adapter == "agent":
+        result["drop_path"] = str(target / "judgment.json")
+    return result
 
 
 def command_calibrate(args: argparse.Namespace) -> int:
@@ -701,10 +809,47 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("config")
     validate.set_defaults(func=command_validate)
 
-    run = subparsers.add_parser("run", help="run or resume a review pipeline")
+    run = subparsers.add_parser(
+        "run",
+        help="run or resume a review pipeline; exit 3 when a stage awaits an agent drop",
+    )
     run.add_argument("config")
     run.add_argument("--force", action="store_true", help="rerun every enabled stage")
     run.set_defaults(func=command_run)
+
+    status = subparsers.add_parser(
+        "status",
+        help="print the run state, awaiting agent drops, and outputs as JSON",
+    )
+    status.add_argument("config")
+    status.add_argument("--detail", action="store_true", help="add a fill-in template to each awaiting drop")
+    status.set_defaults(func=command_status)
+
+    submit = subparsers.add_parser(
+        "submit",
+        help="check an agent drop with the stage's own validation, then write it to its declared path",
+    )
+    submit.add_argument("config")
+    submit.add_argument("drop", help="JSON file holding the drop")
+    submit.add_argument("--stage", help="stage id; needed when review.toml declares several drops")
+    submit.add_argument(
+        "--kind",
+        choices=("review_judgment", "visual_findings", "related_work_findings", "related_work_confirmation"),
+        help="drop kind; needed when one stage declares two drops",
+    )
+    submit.set_defaults(func=command_submit)
+
+    mcp = subparsers.add_parser(
+        "mcp",
+        help="serve the review tools to an MCP client (Claude Code, Codex CLI, ...) over stdio",
+    )
+    mcp.add_argument(
+        "--root",
+        action="append",
+        default=[],
+        help="directory the tools may read and write; repeatable; default is the working directory",
+    )
+    mcp.set_defaults(func=command_mcp)
 
     inspect = subparsers.add_parser("inspect", help="print a run manifest")
     inspect.add_argument("path")
@@ -943,6 +1088,12 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("path")
     init.add_argument("--project-id", default="new-review")
     init.add_argument("--title", default="New manuscript review")
+    init.add_argument(
+        "--adapter",
+        choices=sorted(INIT_ADAPTERS),
+        default="deterministic",
+        help="agent: execute_review waits for a judgment drop written by a host agent",
+    )
     init.set_defaults(func=command_init)
     return parser
 
@@ -952,7 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (PipelineError, ValidationError, ValueError, FileNotFoundError, FileExistsError) as exc:
+    except (PipelineError, RuntimeError, ValidationError, ValueError, OSError, ImportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
