@@ -9,7 +9,7 @@ tier (reject < poster < highlight < oral). The score is that mode's rank
 Per-paper tiers are written only under ``heldout/``. ``prepare`` and ``run``
 refuse to read label files. Model-visible filenames, packet JSON, and argv use
 an opaque handoff id. Grok, Opus, and Astra run as local CLIs through the
-command backend. Grok does not use an xAI API key or a remote adapter.
+command backend. The adapter backend is refused, and no API key is read.
 
 A model id is a free-form label (``grok-4.7-cursor``, ``opus-local``,
 ``astra-local``). Each label has its own run directory.
@@ -28,7 +28,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -64,8 +64,6 @@ from .model_exec import (
     ForecastJudgment,
     HolisticJudgment,
     MatchedJudgment,
-    ModelExecutionError,
-    ModelSession,
     PanelJudgment,
     RebuttalJudgment,
     audit_task_text,
@@ -718,6 +716,19 @@ def _material_root(cache: Path, set_id: str | None) -> Path:
     return cache / "sets" / set_id if set_id else cache
 
 
+def run_directory(material: Path, model_id: str, *, variant: str | None, round_id: str | None) -> Path:
+    """Legacy ``runs/<model>`` when variant and round are both omitted.
+
+    Otherwise ``runs/<model>/<variant or default>/<round or r0>``. The set id
+    selects the material root (``sets/<id>``) and is not a further path segment.
+    """
+    if variant is None and round_id is None:
+        return material / "runs" / model_id
+    if round_id is not None and not _MODEL_ID.fullmatch(round_id):
+        raise CvprTierError("round must be letters, digits, dot, underscore, or hyphen")
+    return material / "runs" / model_id / (variant or "default") / (round_id or "r0")
+
+
 def _handoff_root(cache: Path, handoff_dir: Path | None) -> Path:
     from .public_calibration import repo_root
 
@@ -1191,43 +1202,17 @@ class OpenAIChatCompletion:
         self.transport = transport
 
     def complete(self, prompt: str, scratch: Path) -> str:
-        session = ModelSession(
-            base_url=self.base_url,
-            model=self.model,
-            api_key_env=self.api_key_env,
-            allow_remote=self.allow_remote,
-            network_policy=self.network_policy,
-            timeout_seconds=self.timeout_seconds,
-            temperature=self.temperature,
-            json_object=True,
-            scratch=scratch,
-            stage_signature="cvpr-tier",
-            transport=self.transport,
+        raise CvprTierError(
+            "Models run through the local CLI command backend. "
+            "The adapter backend is not used and no API key is read."
         )
-        try:
-            session.authorize()
-            text = session._exchange(
-                "cvpr-tier",
-                [{"role": "user", "content": prompt}],
-                attempt=1,
-            )
-        except (ModelExecutionError, PermissionError) as exc:
-            raise CvprTierError(str(exc)) from exc
-        if not isinstance(text, str) or "{" not in text:
-            raise CvprTierError(text or "model response was empty")
-        return text
 
 
 def load_completion_backend(spec: str) -> Any:
-    from .adapters import load_review_adapter
-
-    backend = load_review_adapter(spec)
-    if not hasattr(backend, "complete"):
-        raise CvprTierError(
-            "CVPR tier adapter must provide complete(prompt, scratch) -> str. "
-            "A local CLI uses --backend command. A file handoff uses --backend replay."
-        )
-    return backend
+    raise CvprTierError(
+        "Models run through the local CLI command backend. "
+        "The adapter backend is not used and no API key is read."
+    )
 
 
 def _enforce_sealed_run(
@@ -1386,47 +1371,37 @@ def _command_paper(
     raise CvprTierError(f"command failed for {handoff_id}")
 
 
-def _adapter_paper(
-    completer: Any,
-    *,
-    prompt: str,
-    handoff_id: str,
-    mode: str,
-    samples: int,
-    scratch: Path,
-    failure_log: Path,
-) -> dict[str, Any]:
-    text = ""
-    for attempt in (1, 2):
-        text = completer.complete(prompt, scratch / handoff_id)
-        try:
-            verdict = parse_verdict(mode, text, samples=samples)
-        except CvprTierError as exc:
-            _append_jsonl(
-                failure_log,
-                {"attempt": attempt, "error": str(exc), "handoff_id": handoff_id, "kind": "parse"},
-            )
-            if attempt == 2:
-                return {
-                    "error": str(exc),
-                    "latency_seconds": None,
-                    "parsed": False,
-                    "prompt_transport": "adapter",
-                    "retries": 1,
-                    "text": text,
-                    "usage": None,
-                }
-            continue
-        return {
-            "latency_seconds": None,
-            "parsed": True,
-            "prompt_transport": "adapter",
-            "retries": attempt - 1,
-            "text": text,
-            "usage": None,
-            "verdict": verdict,
-        }
-    raise CvprTierError(f"adapter failed for {handoff_id}")
+def _collapse_repeats(series: list[dict[str, Any]]) -> dict[str, Any]:
+    """One outcome per paper. The stored score is the mean of parsed repeats."""
+    if len(series) == 1:
+        outcome = dict(series[0])
+        verdict = outcome.get("verdict")
+        if isinstance(verdict, dict):
+            outcome["repeat_scores"] = [verdict["score"]]
+            outcome["repeat_tiers"] = [verdict["predicted_tier"]]
+        return outcome
+    parsed = [item for item in series if item.get("parsed") and isinstance(item.get("verdict"), dict)]
+    retries = sum(int(item.get("retries") or 0) for item in series)
+    tokens = sum(int(item.get("estimated_tokens") or 0) for item in series)
+    if not parsed:
+        failed = dict(series[-1])
+        failed["estimated_tokens"] = tokens
+        failed["parsed"] = False
+        failed["retries"] = retries
+        return failed
+    scores = [float(item["verdict"]["score"]) for item in parsed]
+    tiers = [str(item["verdict"]["predicted_tier"]) for item in parsed]
+    verdict = dict(parsed[0]["verdict"])
+    verdict["score"] = sum(scores) / len(scores)
+    verdict["predicted_tier"] = Counter(tiers).most_common(1)[0][0]
+    outcome = dict(parsed[-1])
+    outcome["estimated_tokens"] = tokens
+    outcome["parsed"] = True
+    outcome["repeat_scores"] = scores
+    outcome["repeat_tiers"] = tiers
+    outcome["retries"] = retries
+    outcome["verdict"] = verdict
+    return outcome
 
 
 def run_model(
@@ -1452,10 +1427,21 @@ def run_model(
     lock_path: Path | None = None,
     handoff_dir: Path | None = None,
     custody: Path | None = None,
+    repeats: int = 1,
+    round_id: str | None = None,
 ) -> dict[str, Any]:
     """Judge the sample. Does not open label files, meta, or the custody directory."""
-    if backend not in {"adapter", "command", "replay"}:
-        raise CvprTierError("backend must be adapter, command, or replay")
+    if backend == "adapter" or completion is not None and backend != "command":
+        raise CvprTierError(
+            "Models run through the local CLI command backend. "
+            "The adapter backend is not used and no API key is read."
+        )
+    if backend not in {"command", "replay"}:
+        raise CvprTierError("backend must be command or replay")
+    if repeats < 1 or repeats > 10:
+        raise CvprTierError("repeats must be from 1 to 10")
+    if repeats != 1 and backend != "command":
+        raise CvprTierError("repeats require the command backend")
     if holistic_mode not in HOLISTIC_MODES:
         raise CvprTierError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     if variant is not None and variant not in {"A0", "A1", "A2"}:
@@ -1487,7 +1473,7 @@ def run_model(
         member_ids=[paper.paper_id for paper in manifest.papers],
     )
     material = _material_root(root, set_id)
-    directory = material / "runs" / label
+    directory = run_directory(material, label, variant=variant, round_id=round_id)
     answers = directory / "answers"
     parsed = directory / "parsed"
     answers.mkdir(parents=True, exist_ok=True)
@@ -1576,59 +1562,30 @@ def run_model(
                     transport=command_transport,
                 )
             else:
-                outcome = _command_paper(
-                    template=command_template or "",
-                    prompt=prompts[paper.paper_id],
-                    handoff_id=handoff_id,
-                    model_id=label,
-                    mode=holistic_mode,
-                    samples=holistic_samples,
-                    timeout=command_timeout,
-                    failure_log=failure_log,
-                )
+                series: list[dict[str, Any]] = []
+                for _repeat_index in range(repeats):
+                    series.append(
+                        _command_paper(
+                            template=command_template or "",
+                            prompt=prompts[paper.paper_id],
+                            handoff_id=handoff_id,
+                            model_id=label,
+                            mode=holistic_mode,
+                            samples=holistic_samples,
+                            timeout=command_timeout,
+                            failure_log=failure_log,
+                        )
+                    )
+                outcome = _collapse_repeats(series)
             outcomes[paper.paper_id] = outcome
             cli_version = str(outcome.get("cli_version") or cli_version)
             cli_flags = list(outcome.get("cli_flags") or cli_flags)
             prompt_transport = str(outcome.get("prompt_transport") or prompt_transport)
     elif backend == "adapter":
-        completer = completion
-        if completer is None:
-            if adapter:
-                completer = load_completion_backend(adapter)
-            elif base_url and endpoint_model:
-                completer = OpenAIChatCompletion(
-                    base_url=base_url,
-                    model=endpoint_model,
-                    api_key_env=api_key_env,
-                    allow_remote=allow_remote,
-                    network_policy=network_policy,
-                    temperature=LOCKED_HOLISTIC_TEMPERATURE if temperature is None else temperature,
-                )
-            else:
-                raise CvprTierError("adapter backend requires --adapter or both --base-url and --model")
-        scratch = directory / "scratch"
-        scratch.mkdir(parents=True, exist_ok=True)
-        for paper in manifest.papers:
-            handoff_id = handoff_ids[paper.paper_id]
-            stored = _stored_answer_text(answers, handoff_id)
-            if stored is not None:
-                outcomes[paper.paper_id] = _outcome_from_stored_answer(
-                    stored,
-                    holistic_mode,
-                    holistic_samples,
-                    transport="adapter",
-                )
-                continue
-            outcomes[paper.paper_id] = _adapter_paper(
-                completer,
-                prompt=prompts[paper.paper_id],
-                handoff_id=handoff_id,
-                mode=holistic_mode,
-                samples=holistic_samples,
-                scratch=scratch,
-                failure_log=failure_log,
-            )
-        prompt_transport = "adapter"
+        raise CvprTierError(
+            "Models run through the local CLI command backend. "
+            "The adapter backend is not used and no API key is read."
+        )
     else:
         canaries = load_canaries(root)
         state_path = directory / "parse_state.json"
@@ -1740,6 +1697,8 @@ def run_model(
                 "predicted_tier": verdict["predicted_tier"],
                 "rank_samples_used": verdict["rank_samples_used"],
                 "rank_source": verdict["rank_source"],
+                "repeat_scores": outcome.get("repeat_scores") or [verdict["score"]],
+                "repeat_tiers": outcome.get("repeat_tiers") or [verdict["predicted_tier"]],
                 "sample_ranks": verdict["sample_ranks"],
                 "score": verdict["score"],
             },
@@ -1755,7 +1714,9 @@ def run_model(
             "model_version": cli_version or None,
             "papers": usage_rows,
             "prompt_transport": prompt_transport,
+            "repeats": repeats,
             "retry_max": 1,
+            "round": round_id,
             "set_id": set_id,
             "variant": variant,
         },
@@ -1777,11 +1738,30 @@ def run_model(
             "papers": [paper.paper_id for paper in manifest.papers],
             "params": params,
             "prompt_transport": prompt_transport,
+            "repeats": repeats,
+            "round": round_id,
             "sample_seed": manifest.seed,
             "set_id": set_id,
             "variant": variant,
         },
     )
+    if round_id:
+        from .cvpr_rounds import append_round
+
+        append_round(
+            root,
+            {
+                "backend": backend,
+                "calls": len(manifest.papers) * repeats,
+                "model_id": label,
+                "parsed": len(done),
+                "repeats": repeats,
+                "round": round_id,
+                "set_id": set_id,
+                "tokens": sum(int(row.get("estimated_tokens") or 0) for row in usage_rows),
+                "variant": variant,
+            },
+        )
     return {
         "awaiting_judgment": awaiting,
         "backend": backend,
@@ -1800,20 +1780,28 @@ def _interval(values: list[float]) -> tuple[float | None, float | None]:
     return _linear_percentile(ordered, 0.025), _linear_percentile(ordered, 0.975)
 
 
-def _rows_for_model(parsed_rows: list[dict[str, Any]], labels: dict[str, str]) -> list[dict[str, Any]]:
+def _rows_for_model(
+    parsed_rows: list[dict[str, Any]],
+    labels: dict[str, str],
+    *,
+    years: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    years = years or {}
     rows = []
     for row in parsed_rows:
         tier = labels.get(str(row["paper_id"]))
         if tier not in TIER_RANK:
             continue
-        rows.append(
-            {
-                "paper_id": row["paper_id"],
-                "score": float(row["score"]),
-                "predicted_tier": str(row["predicted_tier"]),
-                "true_tier": tier,
-            }
-        )
+        item: dict[str, Any] = {
+            "paper_id": row["paper_id"],
+            "score": float(row["score"]),
+            "predicted_tier": str(row["predicted_tier"]),
+            "true_tier": tier,
+            "year": years.get(str(row["paper_id"])),
+        }
+        if isinstance(row.get("repeat_scores"), list):
+            item["repeat_scores"] = [float(score) for score in row["repeat_scores"]]
+        rows.append(item)
     return rows
 
 
@@ -1965,21 +1953,34 @@ def _format_interval(interval: dict[str, Any]) -> str:
     return f"{float(point):.3f} [{float(low):.3f}, {float(high):.3f}]"
 
 
+def _run_key(manifest: dict[str, Any], directory: Path) -> str:
+    model = str(manifest.get("model_id") or directory.name)
+    parts = [model]
+    if manifest.get("variant"):
+        parts.append(str(manifest["variant"]))
+    if manifest.get("round"):
+        parts.append(str(manifest["round"]))
+    return "/".join(parts)
+
+
 def _load_parsed(cache: Path) -> dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]:
     runs = cache / "runs"
     found: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     if not runs.is_dir():
         return found
-    for directory in sorted(path for path in runs.iterdir() if path.is_dir()):
-        manifest_path = directory / "manifest.json"
+    for manifest_path in sorted(runs.rglob("manifest.json")):
+        directory = manifest_path.parent
         parsed_dir = directory / "parsed"
-        if not manifest_path.is_file() or not parsed_dir.is_dir():
+        if not parsed_dir.is_dir():
             continue
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         rows = []
         for path in sorted(parsed_dir.glob("*.json")):
             rows.append(json.loads(path.read_text(encoding="utf-8")))
-        found[str(manifest.get("model_id") or directory.name)] = (manifest, rows)
+        key = _run_key(manifest, directory)
+        if key in found:
+            raise CvprTierError(f"duplicate run {key}")
+        found[key] = (manifest, rows)
     return found
 
 
@@ -2076,6 +2077,271 @@ def _mark_report_opened(root: Path, set_id: str, seal: dict[str, Any], report_pa
         raise CvprTierError(str(exc)) from exc
 
 
+def _probe_flags(probe_summary: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    model_id = manifest.get("model_id")
+    variant = manifest.get("variant")
+    for summary in probe_summary.get("models", {}).values():
+        if summary.get("model_id") == model_id and summary.get("variant") == variant:
+            papers = summary.get("papers")
+            if isinstance(papers, dict):
+                return papers
+    return {}
+
+
+def _variant_pairs(
+    runs: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]],
+    joined: dict[str, list[dict[str, Any]]],
+    *,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Pair variants of one model and round on the papers both scored."""
+    grouped: dict[tuple[Any, Any], list[str]] = defaultdict(list)
+    for key, (manifest, _rows) in runs.items():
+        grouped[(manifest.get("model_id"), manifest.get("round"))].append(key)
+    pairs: dict[str, Any] = {}
+    for keys in grouped.values():
+        if len(keys) < 2:
+            continue
+        for index, left_name in enumerate(keys):
+            for right_name in keys[index + 1 :]:
+                left_variant = runs[left_name][0].get("variant")
+                right_variant = runs[right_name][0].get("variant")
+                if left_variant == right_variant:
+                    continue
+                key = f"{left_name}__{right_name}"
+                pairs[key] = {
+                    "left": left_name,
+                    "left_variant": left_variant,
+                    "right": right_name,
+                    "right_variant": right_variant,
+                    **compare_models(joined[left_name], joined[right_name], resamples=resamples, seed=seed),
+                }
+    return pairs
+
+
+def _rounds_with_metrics(rows: list[dict[str, Any]], per_model: dict[str, Any]) -> list[dict[str, Any]]:
+    """Show macro-AUC from the matching run. rounds.jsonl itself is not rewritten."""
+    display: list[dict[str, Any]] = []
+    for row in rows:
+        copy = dict(row)
+        if not isinstance(copy.get("macro_auc"), (int, float)):
+            for body in per_model.values():
+                manifest = body["manifest"]
+                if manifest.get("model_id") != copy.get("model_id"):
+                    continue
+                if manifest.get("round") != copy.get("round"):
+                    continue
+                if copy.get("variant") not in (None, "", manifest.get("variant")):
+                    continue
+                point = body["metrics"].get("extended", {}).get("macro_auc", {}).get("point")
+                if isinstance(point, (int, float)):
+                    copy["macro_auc"] = point
+                break
+        display.append(copy)
+    return display
+
+
+def _format_point(value: object) -> str:
+    if not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{float(value):.3f}"
+
+
+def _format_extended(
+    per_model: dict[str, Any],
+    comparisons: dict[str, Any],
+    variant_pairs: dict[str, Any],
+    probe_summary: dict[str, Any],
+) -> list[str]:
+    lines = [
+        "## Primary metric",
+        "",
+        "macro-AUC is the mean of oral-versus-poster, highlight-versus-poster, and oral-versus-highlight.",
+        "Cpop uses the 2024 weights 0.211, 0.760, and 0.030 on those three AUCs.",
+        "AUC oral-versus-rest treats oral as the positive class. The 2024 weighted form is (324 * AUC oral-versus-highlight + 2302 * AUC oral-versus-poster) / 2626.",
+        "The 2025 oral-versus-rest contrast is reported when that year is in the sample. It is undefined without a non-oral row.",
+        "Intervals on macro-AUC and quadratic kappa resample inside each year and true tier.",
+        "",
+        "| model | macro-AUC | Cpop | oral vs rest | 2024 weighted oral vs rest | 2025 oral vs rest | kappa | ICC(2,1) | ICC(3,1) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for model_id, body in per_model.items():
+        extended = body["metrics"]["extended"]
+        icc = extended["icc"]
+        lines.append(
+            "| {model} | {macro} | {cpop} | {rest} | {weighted} | {year_2025} | {kappa} | {icc21} | {icc31} |".format(
+                model=model_id,
+                macro=_format_interval(extended["macro_auc"]),
+                cpop=_format_point(extended["cpop"]),
+                rest=_format_point(extended["auc_o_rest"]),
+                weighted=_format_point(extended["auc_o_rest_weighted_2024"]),
+                year_2025=_format_point(extended["auc_oral_vs_rest_2025"]),
+                kappa=_format_interval(extended["quadratic_kappa"]),
+                icc21=_format_point(icc.get("icc_2_1")),
+                icc31=_format_point(icc.get("icc_3_1")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Horvitz–Thompson weights",
+            "",
+            "Each paper is weighted by the public population of its year and tier, divided by the number of sampled papers in that cell. 2024 populations are oral 90, highlight 324, poster 2302. 2025 oral is 95 and non-oral is 2776.",
+            "",
+            "| model | spearman | kendall | labelled share | HT labelled share |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for model_id, body in per_model.items():
+        extended = body["metrics"]["extended"]
+        share = extended["labelled_share"]
+        lines.append(
+            "| {model} | {spearman} | {kendall} | {share} | {ht} |".format(
+                model=model_id,
+                spearman=_format_point(extended["spearman_ht"]),
+                kendall=_format_point(extended["kendall_ht"]),
+                share=_format_point(share.get("predictions")),
+                ht=_format_point(share.get("ht_weighted_predictions")),
+            )
+        )
+        precision = extended["precision_recall_ht"]
+        lines.extend(
+            [
+                "",
+                f"### Per-tier precision and recall {model_id}",
+                "",
+                "HT-weighted. Support is the weighted count of that true tier.",
+                "",
+                "| tier | precision | recall | support |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for tier in PREDICTED_TIERS:
+            cell = precision[tier]
+            lines.append(
+                f"| {tier} | {_format_point(cell['precision'])} | {_format_point(cell['recall'])} | {_format_point(cell['support'])} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## DeLong",
+            "",
+            "Single-model p-values test AUC against 0.5. Holm and Benjamini–Hochberg use the three pairwise contrasts as one family. Oral-versus-rest is reported and is not in that family.",
+            "",
+            "| model | contrast | auc | se | p | holm | bh |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for model_id, body in per_model.items():
+        delong = body["metrics"]["extended"]["delong"]
+        for name in ("oral_vs_poster", "highlight_vs_poster", "oral_vs_highlight", "oral_vs_rest"):
+            estimate = delong[name]
+            lines.append(
+                "| {model} | {name} | {auc} | {se} | {p} | {holm} | {bh} |".format(
+                    model=model_id,
+                    name=name,
+                    auc=_format_point(estimate.get("auc")),
+                    se=_format_point(estimate.get("se")),
+                    p=_format_point(estimate.get("p")),
+                    holm=_format_point(delong.get("holm", {}).get(name)),
+                    bh=_format_point(delong.get("bh", {}).get(name)),
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "## Paired tests",
+            "",
+            "Paired DeLong uses the papers both runs scored. The macro-AUC difference interval resamples those papers inside each year and true tier.",
+            "",
+            "| left | right | contrast | diff | p | macro-AUC diff |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    if not comparisons:
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a |")
+    for body in comparisons.values():
+        paired = body.get("paired") or {}
+        delong = paired.get("delong") or {}
+        for name in ("oral_vs_poster", "highlight_vs_poster", "oral_vs_highlight"):
+            estimate = delong.get(name) or {}
+            lines.append(
+                "| {left} | {right} | {name} | {diff} | {p} | {macro} |".format(
+                    left=body["left"],
+                    right=body["right"],
+                    name=name,
+                    diff=_format_point(estimate.get("diff")),
+                    p=_format_point(estimate.get("p")),
+                    macro=_format_interval(paired.get("macro_auc_diff") or {}),
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "## Variant pairs",
+            "",
+            "Variants of the same model and round, on the papers both variants scored.",
+            "",
+            "| left | right | n | score spearman | tier agreement |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    if not variant_pairs:
+        lines.append("| n/a | n/a | 0 | n/a | n/a |")
+    for body in variant_pairs.values():
+        lines.append(
+            "| {left} | {right} | {n} | {spearman} | {agree} |".format(
+                left=body["left"],
+                right=body["right"],
+                n=body["n"],
+                spearman=_format_interval(body["score_spearman"]),
+                agree=_format_interval(body["tier_agreement"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Recognised and unrecognised",
+            "",
+            "A paper is recognised when the abstract probe hits the title, either the abstract or the title probe hits an author, or the verbatim probe is right on at least 3 of 4 questions. Tiers are joined only in this report.",
+            "",
+            "| model | recognised n | recognised macro-AUC | unrecognised n | unrecognised macro-AUC |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for model_id, body in per_model.items():
+        recognition = body["metrics"]["recognition"]
+        lines.append(
+            "| {model} | {rn} | {rm} | {un} | {um} |".format(
+                model=model_id,
+                rn=recognition["recognised"]["n"],
+                rm=_format_point(recognition["recognised"]["macro_auc"]),
+                un=recognition["unrecognised"]["n"],
+                um=_format_point(recognition["unrecognised"]["macro_auc"]),
+            )
+        )
+    kind_rows = []
+    for run_key, summary in probe_summary.get("models", {}).items():
+        for kind, counts in (summary.get("kinds") or {}).items():
+            kind_rows.append((run_key, kind, counts))
+    lines.extend(
+        [
+            "",
+            "| probe run | kind | n | recognised | mean familiarity |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    if not kind_rows:
+        lines.append("| n/a | n/a | 0 | 0 | n/a |")
+    for run_key, kind, counts in kind_rows:
+        lines.append(
+            f"| {run_key} | {kind} | {counts['n']} | {counts['recognised']} | {_format_point(counts['mean_familiarity'])} |"
+        )
+    lines.append("")
+    return lines
+
+
 def write_report(
     cache: Path,
     output: Path,
@@ -2100,6 +2366,18 @@ def write_report(
     )
     sample_path = material / "sample_manifest.json"
     sample = SampleManifest.model_validate(_read_json(sample_path)) if sample_path.is_file() else None
+    years = {} if sample is None else {paper.paper_id: paper.year for paper in sample.papers}
+    from .cvpr_metrics import (
+        analysis_rows,
+        extended_metrics,
+        paired_contrast,
+        split_by_recognition,
+        write_analysis_csv,
+    )
+    from .cvpr_probe import load_probe_summary
+    from .cvpr_rounds import format_rounds_table, load_rounds
+
+    probe_summary = load_probe_summary(material)
     runs = _load_parsed(material)
     if not runs:
         raise CvprTierError("no parsed model runs are in the cache")
@@ -2113,8 +2391,17 @@ def write_report(
     per_model: dict[str, Any] = {}
     joined: dict[str, list[dict[str, Any]]] = {}
     for model_id, (manifest, rows) in runs.items():
-        usable = _rows_for_model(rows, labels)
+        usable = _rows_for_model(rows, labels, years=years)
+        flags = _probe_flags(probe_summary, manifest)
+        for row in usable:
+            flag = flags.get(str(row["paper_id"]))
+            if flag is not None:
+                row["recognised"] = bool(flag.get("recognised"))
+                row["familiarity"] = flag.get("familiarity")
         joined[model_id] = usable
+        metrics = model_metrics(usable, resamples=resamples, seed=seed)
+        metrics["extended"] = extended_metrics(usable, resamples=resamples, seed=seed)
+        metrics["recognition"] = split_by_recognition(usable, resamples=resamples, seed=seed)
         per_model[model_id] = {
             "manifest": {
                 "model_id": manifest.get("model_id"),
@@ -2122,8 +2409,11 @@ def write_report(
                 "holistic_mode": manifest.get("holistic_mode"),
                 "holistic_samples": manifest.get("holistic_samples"),
                 "params": manifest.get("params"),
+                "variant": manifest.get("variant"),
+                "round": manifest.get("round"),
+                "repeats": manifest.get("repeats"),
             },
-            "metrics": model_metrics(usable, resamples=resamples, seed=seed),
+            "metrics": metrics,
         }
     comparisons: dict[str, Any] = {}
     names = list(joined)
@@ -2134,7 +2424,14 @@ def write_report(
                 "left": left_name,
                 "right": right_name,
                 **compare_models(joined[left_name], joined[right_name], resamples=resamples, seed=seed),
+                "paired": paired_contrast(
+                    joined[left_name],
+                    joined[right_name],
+                    resamples=resamples,
+                    seed=seed,
+                ),
             }
+    variant_pairs = _variant_pairs(runs, joined, resamples=resamples, seed=seed)
     payload = {
         "report_only": True,
         "set_id": set_id,
@@ -2143,8 +2440,11 @@ def write_report(
         "draws": None if sample is None else sample.draws,
         "bootstrap_resamples": resamples,
         "bootstrap_seed": seed,
+        "primary_metric": "macro_auc",
         "models": per_model,
         "comparisons": comparisons,
+        "variant_pairs": variant_pairs,
+        "probes": probe_summary,
     }
     lines = [
         "# CVPR accepted-tier calibration",
@@ -2234,6 +2534,24 @@ def write_report(
             "",
         ]
     )
+    lines.extend(_format_extended(per_model, comparisons, variant_pairs, probe_summary))
+    display_rounds = _rounds_with_metrics(load_rounds(root), per_model)
+    lines.extend(format_rounds_table(display_rounds))
+    lines.append("")
+    csv_path = destination.with_suffix(".analysis.csv")
+    exported: list[dict[str, Any]] = []
+    for model_id, body in per_model.items():
+        manifest = body["manifest"]
+        exported.extend(
+            analysis_rows(
+                str(manifest.get("model_id") or model_id),
+                joined[model_id],
+                variant=manifest.get("variant"),
+                round_id=manifest.get("round"),
+            )
+        )
+    write_analysis_csv(csv_path, exported)
+    lines.extend(["", f"Analysis rows: `{csv_path.name}`.", ""])
     text = "\n".join(lines)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(text, encoding="utf-8")

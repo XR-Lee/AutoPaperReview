@@ -375,6 +375,8 @@ def command_cvpr_tier_run(args: argparse.Namespace) -> int:
         lock_path=Path(args.lock) if args.lock else None,
         handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
         custody=Path(args.custody) if args.custody else None,
+        repeats=args.repeats,
+        round_id=args.round_id,
     )
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
@@ -409,6 +411,79 @@ def command_cvpr_tier_report(args: argparse.Namespace) -> int:
             "models": list(metrics["models"]),
         }
     )
+    return 0
+
+
+def _cvpr_templates(value: str) -> tuple[str, ...]:
+    found = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not found:
+        raise argparse.ArgumentTypeError("templates must name at least one of P-A, P-T, P-D")
+    return found
+
+
+def command_cvpr_tier_probe(args: argparse.Namespace) -> int:
+    from .cvpr_probe import run_probe
+
+    result = run_probe(
+        Path(args.cache),
+        model_id=args.model_id,
+        backend=args.backend,
+        command_template=args.command_template,
+        command_timeout=args.command_timeout,
+        templates=tuple(args.templates),
+        batch_size=args.batch_size,
+        seed=args.seed,
+        decoy_count=args.decoys,
+        controls_path=Path(args.controls) if args.controls else None,
+        passages_path=Path(args.passages) if args.passages else None,
+        set_id=args.set_id,
+        variant=args.variant,
+        handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
+        custody=Path(args.custody) if args.custody else None,
+    )
+    status = "error" if result["errors"] else "success"
+    _print_json({"status": status, **result})
+    return 2 if result["errors"] else 0
+
+
+def command_cvpr_tier_controls(args: argparse.Namespace) -> int:
+    from .cvpr_probe import fetch_negative_controls
+
+    payload = fetch_negative_controls(since=args.since, category=args.category, limit=args.limit)
+    destination = Path(args.output).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _print_json({"status": "success", "output": str(destination), "papers": len(payload["papers"])})
+    return 0
+
+
+def command_cvpr_tier_decoys(args: argparse.Namespace) -> int:
+    from .cvpr_probe import synthetic_decoys
+
+    payload = {"papers": synthetic_decoys(args.count, seed=args.seed), "seed": args.seed, "source": "synthetic"}
+    destination = Path(args.output).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _print_json({"status": "success", "output": str(destination), "papers": len(payload["papers"])})
+    return 0
+
+
+def command_cvpr_tier_round(args: argparse.Namespace) -> int:
+    from .cvpr_rounds import append_round
+
+    row = append_round(
+        Path(args.cache),
+        {
+            "backend": args.backend,
+            "model_id": args.model_id,
+            "notes": args.notes,
+            "repeats": args.repeats,
+            "round": args.round_id,
+            "set_id": args.set_id,
+            "variant": args.variant,
+        },
+    )
+    _print_json({"status": "success", "round": row["round"], "model_id": row["model_id"]})
     return 0
 
 
@@ -1038,7 +1113,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="free-form label such as grok-4.7-cursor, opus-local, or astra-local",
     )
-    cvpr_run.add_argument("--backend", choices=("adapter", "command", "replay"), required=True)
+    cvpr_run.add_argument(
+        "--backend",
+        choices=("command", "replay", "adapter"),
+        required=True,
+        help="command runs the local CLI. replay is a file handoff. adapter is refused and no API key is read",
+    )
     cvpr_run.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
     cvpr_run.add_argument("--holistic-mode", choices=HOLISTIC_MODES, default=DEFAULT_HOLISTIC_MODE)
     cvpr_run.add_argument("--adapter", help="module:attribute with complete(prompt, scratch) -> str")
@@ -1064,6 +1144,8 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_run.add_argument("--lock", help="lock.json from cvpr-tier lock")
     cvpr_run.add_argument("--handoff-dir", help="replay directory outside the cache and the checkout")
     cvpr_run.add_argument("--custody", help="directory that holds sealed labels, outside the cache")
+    cvpr_run.add_argument("--repeats", type=int, default=1, help="command-backend repeats of each paper, for ICC")
+    cvpr_run.add_argument("--round", dest="round_id", help="record this candidate in rounds.jsonl and key the run directory")
     cvpr_run.set_defaults(func=command_cvpr_tier_run)
 
     cvpr_report = cvpr_sub.add_parser("report", help="compare stored model runs on the shared sample")
@@ -1083,6 +1165,54 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_lock.add_argument("--holistic-mode", choices=HOLISTIC_MODES, default=DEFAULT_HOLISTIC_MODE)
     cvpr_lock.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
     cvpr_lock.set_defaults(func=command_cvpr_tier_lock)
+
+    cvpr_probe = cvpr_sub.add_parser(
+        "probe",
+        help="run P-A, P-T, and P-D contamination probes without reading tier labels",
+    )
+    cvpr_probe.add_argument("--cache", required=True)
+    cvpr_probe.add_argument("--model-id", required=True)
+    cvpr_probe.add_argument("--backend", choices=("command", "replay"), required=True)
+    cvpr_probe.add_argument("--command-template")
+    cvpr_probe.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_probe.add_argument("--templates", type=_cvpr_templates, default=("P-A", "P-T", "P-D"))
+    cvpr_probe.add_argument("--batch-size", type=int, default=10)
+    cvpr_probe.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_probe.add_argument("--decoys", type=int, default=3, help="synthetic decoys mixed into each batch")
+    cvpr_probe.add_argument("--controls", help="JSON from cvpr-tier controls; omit to skip negative controls")
+    cvpr_probe.add_argument("--passages", help="JSON of verbatim passages and three paraphrases per paper id")
+    cvpr_probe.add_argument("--set", dest="set_id")
+    cvpr_probe.add_argument("--variant", choices=("A0", "A1", "A2"))
+    cvpr_probe.add_argument("--handoff-dir")
+    cvpr_probe.add_argument("--custody")
+    cvpr_probe.set_defaults(func=command_cvpr_tier_probe)
+
+    cvpr_controls = cvpr_sub.add_parser(
+        "controls",
+        help="fetch arXiv cs.CV metadata in a date window; not used by the unit tests",
+    )
+    cvpr_controls.add_argument("--output", required=True)
+    cvpr_controls.add_argument("--since", default="2026-07-15")
+    cvpr_controls.add_argument("--category", default="cs.CV")
+    cvpr_controls.add_argument("--limit", type=int, default=20)
+    cvpr_controls.set_defaults(func=command_cvpr_tier_controls)
+
+    cvpr_decoys = cvpr_sub.add_parser("decoys", help="write synthetic decoy metadata; no network")
+    cvpr_decoys.add_argument("--output", required=True)
+    cvpr_decoys.add_argument("--count", type=int, default=4)
+    cvpr_decoys.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_decoys.set_defaults(func=command_cvpr_tier_decoys)
+
+    cvpr_round = cvpr_sub.add_parser("round", help="append one candidate to rounds.jsonl")
+    cvpr_round.add_argument("--cache", required=True)
+    cvpr_round.add_argument("--round", dest="round_id", required=True)
+    cvpr_round.add_argument("--model-id", required=True)
+    cvpr_round.add_argument("--variant", choices=("A0", "A1", "A2"))
+    cvpr_round.add_argument("--set", dest="set_id")
+    cvpr_round.add_argument("--backend", choices=("command", "replay"))
+    cvpr_round.add_argument("--repeats", type=int, default=None)
+    cvpr_round.add_argument("--notes", default="")
+    cvpr_round.set_defaults(func=command_cvpr_tier_round)
 
     init = subparsers.add_parser("init", help="create a minimal local-first review project")
     init.add_argument("path")
