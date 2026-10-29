@@ -1,0 +1,176 @@
+{
+  "backend": "replay",
+  "bootstrap_resamples": 4000,
+  "bootstrap_seed": 20261029,
+  "confusion": {
+    "highlight": {
+      "highlight": 8,
+      "oral": 1,
+      "poster": 8,
+      "reject": 0
+    },
+    "oral": {
+      "highlight": 6,
+      "oral": 2,
+      "poster": 5,
+      "reject": 0
+    },
+    "poster": {
+      "highlight": 7,
+      "oral": 0,
+      "poster": 13,
+      "reject": 0
+    }
+  },
+  "holistic_mode": "forecast",
+  "holistic_samples": 1,
+  "model_id": "grok-4.7-cursor",
+  "n": 50,
+  "notes": [
+    "Baseline measurement. Prompts and scoring were not changed.",
+    "The score is forecast_mean, the mean of three reviewers' expected official ratings. It is not predicted_mean and not a cutoff of tier.",
+    "Judgement did not read heldout/tiers.json, confirmation/tiers.json, or catalog.json. The report step joined pilot scores to heldout/tiers.json only.",
+    "Per-tier rows are aggregates. Paper ids are listed in manifest.json without a tier."
+  ],
+  "pairwise_auc": {
+    "highlight_vs_poster": {
+      "defined_resamples": 4000,
+      "high": 0.7545,
+      "low": 0.3656,
+      "point": 0.5661764705882353,
+      "resamples": 4000,
+      "seed": 20261029
+    },
+    "oral_vs_highlight": {
+      "defined_resamples": 4000,
+      "high": 0.8266,
+      "low": 0.4148,
+      "point": 0.6266968325791855,
+      "resamples": 4000,
+      "seed": 20261029
+    },
+    "oral_vs_poster": {
+      "defined_resamples": 4000,
+      "high": 0.8833,
+      "low": 0.5113,
+      "point": 0.7134615384615385,
+      "resamples": 4000,
+      "seed": 20261029
+    }
+  },
+  "rank_source": "forecast_mean",
+  "score_by_tier": {
+    "highlight": {
+      "max": 7.6867,
+      "mean": 6.6355,
+      "median": 6.7733,
+      "min": 5.8333,
+      "n": 17,
+      "rounded_to_0_1": {
+        "5.8": 1,
+        "5.9": 3,
+        "6.0": 3,
+        "6.3": 1,
+        "6.8": 3,
+        "6.9": 1,
+        "7.2": 1,
+        "7.5": 1,
+        "7.6": 2,
+        "7.7": 1
+      },
+      "stdev": 0.6943
+    },
+    "oral": {
+      "max": 7.9033,
+      "mean": 6.881,
+      "median": 6.8967,
+      "min": 5.9733,
+      "n": 13,
+      "rounded_to_0_1": {
+        "6.0": 3,
+        "6.3": 1,
+        "6.5": 1,
+        "6.8": 1,
+        "6.9": 1,
+        "7.2": 1,
+        "7.4": 3,
+        "7.7": 1,
+        "7.9": 1
+      },
+      "stdev": 0.668
+    },
+    "poster": {
+      "max": 7.5967,
+      "mean": 6.3927,
+      "median": 6.0633,
+      "min": 5.6433,
+      "n": 20,
+      "rounded_to_0_1": {
+        "5.6": 1,
+        "5.8": 1,
+        "5.9": 2,
+        "6.0": 6,
+        "6.1": 1,
+        "6.2": 1,
+        "6.3": 1,
+        "6.8": 1,
+        "6.9": 2,
+        "7.2": 2,
+        "7.3": 1,
+        "7.6": 1
+      },
+      "stdev": 0.594
+    }
+  },
+  "score_overall": {
+    "max": 7.9033,
+    "mean": 6.6022,
+    "median": 6.3967,
+    "min": 5.6433,
+    "n": 50,
+    "rounded_to_0_1": {
+      "5.6": 1,
+      "5.8": 2,
+      "5.9": 5,
+      "6.0": 12,
+      "6.1": 1,
+      "6.2": 1,
+      "6.3": 3,
+      "6.5": 1,
+      "6.8": 5,
+      "6.9": 4,
+      "7.2": 4,
+      "7.3": 1,
+      "7.4": 3,
+      "7.5": 1,
+      "7.6": 3,
+      "7.7": 2,
+      "7.9": 1
+    },
+    "stdev": 0.6652
+  },
+  "seed": 20261029,
+  "spearman": {
+    "defined_resamples": 4000,
+    "high": 0.5049,
+    "low": 0.0141,
+    "point": 0.27606737022522837,
+    "resamples": 4000,
+    "seed": 20261029
+  },
+  "spread": {
+    "clustered": true,
+    "maximum": 7.9033,
+    "minimum": 5.6433,
+    "stdev": 0.6652,
+    "unique_rounded": 17
+  },
+  "usage": {
+    "calls": 50,
+    "parse_failures": 0,
+    "retries": 0,
+    "tokens": null,
+    "tokens_note": "The replay file-handoff backend does not meter tokens."
+  },
+  "year": 2024
+}

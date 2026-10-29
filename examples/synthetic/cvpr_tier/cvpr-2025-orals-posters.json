@@ -1,0 +1,42 @@
+{
+  "count": 5,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "uid": "syn-oral-a",
+      "name": "Synthetic Oral Bridge One",
+      "decision": null,
+      "eventtype": "Oral",
+      "paper_pdf_url": "fixture://cvpr2025-syn-oral-a"
+    },
+    {
+      "uid": "syn-oral-a",
+      "name": "Synthetic Oral Bridge One",
+      "decision": null,
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2025-syn-oral-a"
+    },
+    {
+      "uid": "syn-oral-b",
+      "name": "Synthetic Oral Bridge Two",
+      "decision": null,
+      "eventtype": "Oral",
+      "paper_pdf_url": "fixture://cvpr2025-syn-oral-b"
+    },
+    {
+      "uid": "syn-post-a",
+      "name": "Synthetic Poster Bridge One",
+      "decision": null,
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2025-syn-post-a"
+    },
+    {
+      "uid": "syn-post-b",
+      "name": "Synthetic Poster Bridge Two",
+      "decision": null,
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2025-syn-post-b"
+    }
+  ]
+}
