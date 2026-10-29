@@ -134,3 +134,79 @@ The report metrics include Kendall tau-b and a confusion table of the nearest hu
 ## Tests
 
 `examples/synthetic/calibration/` is an invented manuscript and invented venue notes. It is not a public submission. The unit test drives fetch, prepare, the agent drop, `rate`, and the report through a fake client.
+
+## CVPR accepted-tier calibration
+
+`calibrate-eval cvpr-tier` asks whether a review mode's existing rank separates CVPR oral, highlight, and poster papers. The sample is accepted papers only. The loop parses the mode's own rank (`forecast_mean`, `panel_mean`, the rebuttal final-rating mean, or `predicted_mean`) and a `tier` label the model adds to that JSON (`reject`, `poster`, `highlight`, `oral`, ordered reject < poster < highlight < oral). It does not fit a cutoff, and it does not write a weight back into `rate`.
+
+The ordinal Spearman uses poster = 1, highlight = 2, oral = 3. Pairwise AUCs treat the higher tier as the positive class: oral versus poster, highlight versus poster, and oral versus highlight. The report also writes a tier confusion matrix, a score-spread diagnostic (clustered when the coarse unique values are under 3 or the sample standard deviation is under 1), and paper-level bootstrap 95% intervals (4000 resamples, seed `20261029`).
+
+### What the public sources label
+
+Counts below were read from the public virtual JSON on 2026-10-29. They are program totals. The committed fixtures are synthetic and are not these papers.
+
+| Year | Source | What is labeled | Papers |
+| --- | --- | --- | --- |
+| 2024 | `cvpr-2024-orals-posters.json` field `decision`, collapsed on `uid`. Missing Open Access URLs are filled by an exact title join to `openaccess.thecvf.com/CVPR2024?day=all` | oral, highlight, poster | oral 90, highlight 324, poster 2302 (2716 papers). 2715 have a CVF Open Access PDF. One paper has no exact title match and is left out of the sample |
+| 2025 | `cvpr-2025-orals-posters.json` field `eventtype`. `decision` is empty. An oral paper also has a poster slot | oral only | 95 oral papers. The other 2776 papers stay unlabeled, so they are not drawn as posters. Highlight is not a field in this file |
+| 2023 | `cvpr-2023-orals-posters.json` | no oral or highlight split | every row is Accept and Poster. The year is parsed and not sampled |
+| 2026 | the static export is one page (`count` 5163, 200 rows, `next` set) | not a sampling frame | the following API page returned 403. A partial page contributes no papers |
+
+The CVPR 2025 program guide states 2,878 accepted papers, 96 orals, and 387 highlights. A two-column extract does not attach those marks to papers reliably, so the guide is not a label source. OpenReview notes for the main conference are not used. Default years are 2024 and 2025. Highlight and poster draws come from 2024. The 2025 orals can enter the oral stratum.
+
+Tier labels also reflect area-chair and program-chair presentation decisions. This loop cannot measure accept versus reject.
+
+### Sample, labels, and cache
+
+The draw keeps papers whose tier is oral, highlight, or poster and whose PDF is on CVF Open Access (or `fixture://` in the synthetic fixture). Each tier is shuffled with `Random(f"{seed}:{tier}")`. The default is 20 papers per tier and seed `20261029`. A short stratum keeps every available paper. The manifest records available, requested, and drawn counts.
+
+Per-paper tiers are written only to `heldout/tiers.json`. `prepare` and `run` refuse to open that file or `catalog.json`. The sample manifest has no per-paper tier. PDFs, text, prompts, and answers stay under the cache. The cache and the report must be a gitignored directory (the usual place is `workdir/cvpr-tier/`) or a path outside the checkout.
+
+`cvpr2025` and `cvpr2026` are venue profiles for format and deadlines. CVPR main text is 8 pages excluding references, with no total-page cap. The profiles do not map a score onto a tier.
+
+### Models
+
+The model id is a free-form label of letters, digits, `.`, `_`, and `-`, up to 64 characters. `grok-4.7-cursor`, `opus-local`, and `astra-local` are ordinary labels. Each label has its own directory under `runs/<model-id>/`, and the run manifest stores the id, the backend, the review mode, and the parameters. The report scores every model on the papers that model parsed, and it compares models on the papers they both scored (score Spearman and tier agreement, with bootstrap intervals).
+
+Grok runs through Cursor. Use `--backend replay`: the command writes `pending/<paper-id>.prompt.txt` and a small JSON packet, then waits. A Cursor agent reads those packets and writes `answers/<paper-id>.json` (or `.txt`). Exit code 3 means at least one answer is still missing. No API key is read.
+
+Opus and Astra run as local CLIs on this machine. Use `--backend command` with that model's own argv template. Placeholders are `{prompt_file}`, `{answer_file}`, `{model}`, `{paper_id}`, and `{mode}`. Each value is shell-quoted, then the template is split into an argument vector. One template is stored on that model run, so Opus and Astra can use different binaries. If the process writes `{answer_file}`, that file is the answer. Otherwise the standard output is saved. A template that contains `api_key`, `secret`, `bearer`, or `sk-` is refused. The harness does not insert an API key.
+
+`--backend adapter` calls `complete(prompt, scratch) -> str`, or `OpenAIChatCompletion` when `--base-url` and `--model` are set. The key is read from `--api-key-env` (default `APR_MODEL_API_KEY`) and is not stored. Loopback is allowed under `--network-policy deny`. A remote host also needs `--allow-remote` and `--network-policy allow`.
+
+```bash
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier list \
+  --cache workdir/cvpr-tier --years 2024,2025
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier fetch \
+  --cache workdir/cvpr-tier --n-per-tier 20 --seed 20261029
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier prepare \
+  --cache workdir/cvpr-tier
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
+  --cache workdir/cvpr-tier \
+  --model-id grok-4.7-cursor \
+  --backend replay \
+  --holistic-mode forecast --holistic-samples 1
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
+  --cache workdir/cvpr-tier \
+  --model-id opus-local \
+  --backend command \
+  --command-template 'opus --prompt {prompt_file} --output {answer_file} --model {model}'
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
+  --cache workdir/cvpr-tier \
+  --model-id astra-local \
+  --backend command \
+  --command-template 'astra --read {prompt_file} --write {answer_file} --model {model} --mode {mode}'
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier report \
+  --cache workdir/cvpr-tier \
+  --output workdir/cvpr-tier/cvpr_tier_report.md
+```
+
+The command names `opus` and `astra` above are the local binaries. Substitute the argv those CLIs actually accept. A template that starts with `bash -lc` is still an argument vector; the harness does not pick a shell for you.
+
+`examples/synthetic/cvpr_tier/` is an invented catalog. The unit test runs list, fetch, prepare, command, replay, and report from that directory and does not call the network. A real model sweep is not part of this change.

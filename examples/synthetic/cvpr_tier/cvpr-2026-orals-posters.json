@@ -1,0 +1,14 @@
+{
+  "count": 5163,
+  "next": "http://cvpr.thecvf.com/api/miniconf/events?offset=200",
+  "previous": null,
+  "results": [
+    {
+      "uid": "syn-partial",
+      "name": "Synthetic Partial Page",
+      "decision": "Accept: Oral",
+      "eventtype": "Oral",
+      "paper_pdf_url": "fixture://cvpr2026-syn-partial"
+    }
+  ]
+}
