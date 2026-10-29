@@ -436,6 +436,7 @@ def command_cvpr_tier_probe(args: argparse.Namespace) -> int:
         decoy_count=args.decoys,
         controls_path=Path(args.controls) if args.controls else None,
         passages_path=Path(args.passages) if args.passages else None,
+        catalog_path=Path(args.catalog) if args.catalog else None,
         set_id=args.set_id,
         variant=args.variant,
         handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
@@ -458,9 +459,18 @@ def command_cvpr_tier_controls(args: argparse.Namespace) -> int:
 
 
 def command_cvpr_tier_decoys(args: argparse.Namespace) -> int:
-    from .cvpr_probe import synthetic_decoys
+    from .cvpr_probe import synthetic_decoys, titles_from_catalog_payload
 
-    payload = {"papers": synthetic_decoys(args.count, seed=args.seed), "seed": args.seed, "source": "synthetic"}
+    titles: list[str] = []
+    digests: set[str] = set()
+    if args.catalog:
+        catalog_payload = json.loads(Path(args.catalog).expanduser().read_text(encoding="utf-8"))
+        titles, digests = titles_from_catalog_payload(catalog_payload)
+    payload = {
+        "papers": synthetic_decoys(args.count, seed=args.seed, catalog_titles=titles, catalog_digests=digests),
+        "seed": args.seed,
+        "source": "synthetic",
+    }
     destination = Path(args.output).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1181,6 +1191,7 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_probe.add_argument("--decoys", type=int, default=3, help="synthetic decoys mixed into each batch")
     cvpr_probe.add_argument("--controls", help="JSON from cvpr-tier controls; omit to skip negative controls")
     cvpr_probe.add_argument("--passages", help="JSON of verbatim passages and three paraphrases per paper id")
+    cvpr_probe.add_argument("--catalog", help="catalog JSON or title-digest file; decoys must not match it")
     cvpr_probe.add_argument("--set", dest="set_id")
     cvpr_probe.add_argument("--variant", choices=("A0", "A1", "A2"))
     cvpr_probe.add_argument("--handoff-dir")
@@ -1201,6 +1212,7 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_decoys.add_argument("--output", required=True)
     cvpr_decoys.add_argument("--count", type=int, default=4)
     cvpr_decoys.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_decoys.add_argument("--catalog", help="catalog JSON or title-digest file; decoys must not match it")
     cvpr_decoys.set_defaults(func=command_cvpr_tier_decoys)
 
     cvpr_round = cvpr_sub.add_parser("round", help="append one candidate to rounds.jsonl")

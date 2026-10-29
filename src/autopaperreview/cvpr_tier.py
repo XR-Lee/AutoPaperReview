@@ -192,6 +192,18 @@ class SamplePaper(BaseModel):
     source: str = "virtual-json"
 
 
+class ProbeExtraction(BaseModel):
+    """Papers the probe could not turn into an abstract. Counts and ids only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempted: int = 0
+    failed: int = 0
+    failure_rate: float = 0.0
+    paper_ids: list[str] = Field(default_factory=list)
+    reasons: dict[str, str] = Field(default_factory=dict)
+
+
 class SampleManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -201,6 +213,7 @@ class SampleManifest(BaseModel):
     draws: dict[str, dict[str, int]]
     sources: list[YearSummary]
     papers: list[SamplePaper]
+    probe_extraction: ProbeExtraction | None = None
 
 
 class HeldoutTiers(BaseModel):
@@ -401,6 +414,21 @@ def build_year_catalog(year: int, payload: Any, openaccess_html: str = "") -> tu
             summary.with_pdf += 1
     papers.sort(key=lambda item: item.paper_id)
     return papers, summary
+
+
+def title_digests_for(payload: Any, openaccess_html: str = "") -> list[str]:
+    """SHA-256 of normalized catalog titles. The titles themselves are not returned."""
+    rows, _complete = _as_results(payload)
+    digests: list[str] = []
+    for row in rows:
+        name = row.get("name")
+        if name and str(name).strip():
+            digests.append(sha256_bytes(normalize_title(str(name)).encode("utf-8")))
+    if openaccess_html:
+        for key in parse_openaccess_index(openaccess_html):
+            if key:
+                digests.append(sha256_bytes(key.encode("utf-8")))
+    return digests
 
 
 def strip_cvpr_banner(text: str) -> str:
@@ -819,6 +847,7 @@ def list_catalog(
     root = _cache(cache)
     papers: list[CatalogPaper] = []
     summaries: list[YearSummary] = []
+    digests: list[str] = []
     for year in years:
         virtual = _year_bytes(year, "virtual", getter=getter, fixture_dir=fixture_dir)
         try:
@@ -830,8 +859,13 @@ def list_catalog(
         year_papers, summary = build_year_catalog(year, payload, html_text)
         papers.extend(year_papers)
         summaries.append(summary)
+        digests.extend(title_digests_for(payload, html_text))
     catalog = Catalog(papers=papers, years=summaries)
     _write_json(root / "catalog.json", catalog.model_dump())
+    _write_json(
+        root / "title_digests.json",
+        {"algorithm": "sha256(normalize_title)", "digests": sorted(set(digests))},
+    )
     return catalog
 
 
@@ -1109,10 +1143,11 @@ def prepare_manuscripts(
     extractor = extract or extract_pdf_text
     rows: list[dict[str, Any]] = []
     totals = {
-        "title_4gram": 0,
+        "acknowledgement": 0,
         "author_surname": 0,
         "residual_url": 0,
         "tier_phrase": 0,
+        "title_4gram": 0,
         "venue_marker": 0,
     }
     failed = 0
