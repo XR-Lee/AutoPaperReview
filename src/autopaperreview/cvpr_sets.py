@@ -297,6 +297,7 @@ def build_lock(
         },
         "harness_git_commit": git_commit(),
         "leak_scan": {
+            "acknowledgement_max": 0,
             "author_surname_max": 0,
             "preamble_chars": PREAMBLE_CHARS,
             "residual_url_max": 0,

@@ -10,41 +10,76 @@ scoring. That file is not a prompt.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from .hashing import sha256_bytes
 
-ANONYMIZER_VERSION = "a1-a2-v1"
+ANONYMIZER_VERSION = "a1-a2-v2"
 ANONYMIZER_RULES = """
-a1-a2-v1
+a1-a2-v2
 A0: strip_cvpr_banner only (single-line open-access stamp).
 A1: A0, then the whole CVF watermark cluster (open access version,
     accepted version, proceedings, Computer Vision Foundation, IEEE Xplore
     when it sits with those lines); replace the title with [TITLE]; delete the
     block before Abstract (authors, affiliations, emails, footnotes); delete
-    acknowledgement and funding sections; replace URLs and project links with
-    [URL]; delete short conference header and footer lines; replace title
-    4-grams in the first 3000 characters; mask author surnames outside
-    References.
+    acknowledgement and funding sections (acknowledgement/acknowledgment,
+    singular or plural, numbered or inline, through the references heading);
+    replace URLs and project links with [URL]; delete short conference header
+    and footer lines; replace title 4-grams in the first 3000 characters after
+    normalizing line breaks, hyphenation, ligatures, and case; mask author
+    surnames outside References.
 A2: A1, then mask a title NAME: phrase and invented Capitalized tokens that
     occur at least 5 times. Dataset context becomes [DATASET], otherwise
     [METHOD].
-Leak scan reports counts only. A1 and A2 fail closed when any count is positive.
+Leak scan reports counts only, including residual acknowledgement headings
+and residual normalized title 4-grams. A1 and A2 fail closed when any count
+is positive.
 Thresholds: preamble 3000 characters, title 4-gram, residual URLs, tier phrase
 (oral|highlight|spotlight|award plus presentation|paper|session), venue markers
-outside References (CVPR 20xx, IEEE Xplore, Computer Vision Foundation, Open Access).
+outside References (CVPR 20xx, IEEE Xplore, Computer Vision Foundation, Open Access),
+acknowledgement heading.
 """
 
 PREAMBLE_CHARS = 3000
 TITLE_NGRAM = 4
 METHOD_MIN_COUNT = 5
 
-_ABSTRACT = re.compile(r"(?i)^abstract[:.]?$")
+_HEADING_PUNCT = r"[:.\u2010\u2011\u2012\u2013\u2014\u2015\u2212\-]"
+_ABSTRACT_HEAD = re.compile(rf"(?i)^abstract(?!\w)\s*(?:{_HEADING_PUNCT}\s*)?(.*)$")
+_ABSTRACT_STOP = re.compile(
+    r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:introduction|references|bibliography|related\s+work|"
+    r"acknowledgements|acknowledgments|acknowledgement|acknowledgment)\b"
+)
 _REFERENCES = re.compile(r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:references|bibliography)\s*$")
-_ACK = re.compile(r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:acknowledgements|acknowledgments|funding)\s*$")
+_ACK_LABEL = (
+    r"(?:acknowledgements|acknowledgments|acknowledgement|acknowledgment|"
+    r"funding(?:\s+information)?|"
+    r"acknowledgements\s+and\s+funding|acknowledgments\s+and\s+funding|"
+    r"acknowledgement\s+and\s+funding|acknowledgment\s+and\s+funding|"
+    r"funding\s+and\s+acknowledgements|funding\s+and\s+acknowledgments|"
+    r"funding\s+and\s+acknowledgement|funding\s+and\s+acknowledgment)"
+)
+_ACK_HEAD = re.compile(
+    rf"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?{_ACK_LABEL}(?:\s*{_HEADING_PUNCT}\s*|\s*$)(.*)$"
+)
+_ACK_INLINE = re.compile(
+    rf"(?i)(?:^|(?<=[.!?])\s*)(?:\d+(?:\.\d+)*\.?\s*)?{_ACK_LABEL}\s*{_HEADING_PUNCT}"
+)
 _SECTION = re.compile(
     r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:references|bibliography|appendix|supplementary(?:\s+material)?)\b"
 )
+_PROSE_START = re.compile(r"(?i)^(this|we|in|our|the|a|an|it|these|those)\b")
+_LIGATURES = {
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+}
+_DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2015\u2212")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _URL = re.compile(
     r"(?i)(?:https?://|www\.)\S+|\bgithub\.com/\S+|\b(?:code|project)(?:\s+\w+){0,4}\s+is\s+available\s+at\s+\S+"
@@ -150,6 +185,50 @@ def strip_cvf_watermark(text: str) -> str:
     return "\n".join(kept).strip() + ("\n" if kept else "")
 
 
+def _left_column(line: str) -> str:
+    parts = re.split(r"\s{3,}", line.strip(), maxsplit=1)
+    return parts[0].strip() if parts else ""
+
+
+def _other_column_heading(rest: str) -> bool:
+    """True when text after the heading is the other column's section heading.
+
+    A short title such as ``Abstract Models for Vision`` is not a heading.
+    """
+    if not rest or len(rest) >= 48:
+        return False
+    return bool(_ABSTRACT_STOP.match(rest))
+
+
+def abstract_heading_rest(line: str) -> str | None:
+    """Text after an abstract heading, or None when the line is not one.
+
+    An empty string means the heading stands alone or the rest of the line is
+    the other column. Prose after the heading is returned so a shared line
+    still yields an abstract.
+    """
+    left = _left_column(line)
+    match = _ABSTRACT_HEAD.match(left)
+    if not match:
+        return None
+    rest = match.group(1).strip()
+    if not rest or _other_column_heading(rest):
+        return ""
+    if rest[:1].islower() or _PROSE_START.match(rest):
+        return rest
+    if re.match(r"^[A-Z]", rest) and len(rest.split()) <= 12:
+        return None
+    return rest
+
+
+def stops_abstract(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    left = _left_column(line)
+    return bool(_ABSTRACT_STOP.match(left) or _ABSTRACT_STOP.match(stripped))
+
+
 def _split_references(text: str) -> tuple[str, str]:
     lines = text.splitlines()
     for index, line in enumerate(lines):
@@ -164,11 +243,26 @@ def _split_references(text: str) -> tuple[str, str]:
 
 def _split_abstract(text: str) -> tuple[str, str]:
     lines = text.splitlines()
+    inline_heading = re.compile(rf"(?:Abstract|ABSTRACT)\s*{_HEADING_PUNCT}\s+\S")
     for index, line in enumerate(lines):
-        if _ABSTRACT.fullmatch(line.strip()):
-            preamble = "\n".join(lines[:index]).strip()
-            body = "\n".join(lines[index:]).strip()
+        rest = abstract_heading_rest(line)
+        if rest is None:
+            inline = inline_heading.search(line)
+            if inline is None:
+                continue
+            before = line[: inline.start()]
+            preamble_lines = lines[:index]
+            if before.strip():
+                preamble_lines = [*preamble_lines, before.rstrip()]
+            preamble = "\n".join(preamble_lines).strip()
+            body = "\n".join([line[inline.start() :], *lines[index + 1 :]]).strip()
             return preamble, body
+        preamble = "\n".join(lines[:index]).strip()
+        if rest:
+            body = "\n".join([rest, *lines[index + 1 :]]).strip()
+        else:
+            body = "\n".join(lines[index:]).strip()
+        return preamble, body
     return text.strip(), ""
 
 
@@ -234,21 +328,57 @@ def _replace_urls(text: str) -> str:
     return _URL.sub(_swap, text)
 
 
+def _starts_ack(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    left = _left_column(line)
+    return bool(_ACK_HEAD.match(left) or _ACK_HEAD.match(stripped))
+
+
+def _ends_ack(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    parts = [part for part in re.split(r"\s{3,}", stripped) if part.strip()] or [stripped]
+    return any(_SECTION.match(part.strip()) for part in parts)
+
+
 def _drop_acknowledgements(text: str) -> str:
-    lines = text.splitlines()
+    """Drop acknowledgement and funding sections through the next references heading."""
     kept: list[str] = []
     skipping = False
-    for line in lines:
-        stripped = line.strip()
-        if not skipping and _ACK.fullmatch(stripped):
+    for line in text.splitlines():
+        if not skipping and _starts_ack(line):
             skipping = True
             continue
-        if skipping and (_SECTION.fullmatch(stripped) or _SECTION.match(stripped)):
-            skipping = False
-        if skipping:
+        if not skipping:
+            inline = _ACK_INLINE.search(line)
+            if inline:
+                prefix = line[: inline.start()].rstrip()
+                if prefix:
+                    kept.append(prefix)
+                skipping = True
+                continue
+            kept.append(line)
             continue
-        kept.append(line)
+        if _ends_ack(line):
+            skipping = False
+            kept.append(line)
     return "\n".join(kept)
+
+
+def _ack_leak_count(text: str) -> int:
+    count = 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if _starts_ack(line):
+            count += 1
+            continue
+        if _ACK_INLINE.search(line):
+            count += 1
+    return count
 
 
 def _drop_short_venue_lines(text: str) -> str:
@@ -270,15 +400,123 @@ def _replace_phrase(text: str, words: list[str], replacement: str) -> str:
     return re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
 
+def _normalize_with_origins(text: str) -> tuple[str, list[int]]:
+    """Casefold, expand ligatures, join line-break hyphens, and collapse space.
+
+    Each output character keeps the source index it came from. A soft hyphen
+    or a hyphen at a line break is dropped. Any other dash becomes a space so
+    ``state-of-the-art`` matches ``state of the art``.
+    """
+    expanded: list[str] = []
+    origins: list[int] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\u00ad":
+            index += 1
+            continue
+        if char in _DASHES:
+            cursor = index + 1
+            saw_break = False
+            while cursor < len(text) and text[cursor].isspace():
+                if text[cursor] in "\n\r":
+                    saw_break = True
+                cursor += 1
+            if saw_break and cursor < len(text) and text[cursor].isalpha():
+                index = cursor
+                continue
+            expanded.append(" ")
+            origins.append(index)
+            index += 1
+            continue
+        piece = _LIGATURES.get(char) or unicodedata.normalize("NFKC", char)
+        for out_char in piece.casefold():
+            expanded.append(" " if out_char.isspace() else out_char)
+            origins.append(index)
+        index += 1
+    chars: list[str] = []
+    kept_origins: list[int] = []
+    for char, origin in zip(expanded, origins):
+        if char == " ":
+            if not chars or chars[-1] == " ":
+                continue
+        chars.append(char)
+        kept_origins.append(origin)
+    if chars and chars[0] == " ":
+        chars.pop(0)
+        kept_origins.pop(0)
+    if chars and chars[-1] == " ":
+        chars.pop()
+        kept_origins.pop()
+    return "".join(chars), kept_origins
+
+
+def _normalized_tokens(text: str) -> list[str]:
+    normalized, _origins = _normalize_with_origins(text)
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _token_spans(text: str) -> list[tuple[str, int, int]]:
+    normalized, origins = _normalize_with_origins(text)
+    spans: list[tuple[str, int, int]] = []
+    if not origins:
+        return spans
+    for match in re.finditer(r"[a-z0-9]+", normalized):
+        start = origins[match.start()]
+        end = origins[match.end() - 1] + 1
+        spans.append((match.group(0), start, end))
+    return spans
+
+
+def _title_grams(title: str) -> list[tuple[str, ...]]:
+    words = _normalized_tokens(title)
+    if not words:
+        return []
+    if len(words) < TITLE_NGRAM:
+        return [tuple(words)]
+    return [tuple(words[start : start + TITLE_NGRAM]) for start in range(len(words) - TITLE_NGRAM + 1)]
+
+
+def _replace_spans(text: str, spans: list[tuple[int, int]], replacement: str) -> str:
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    for start, end in reversed(merged):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
 def _mask_title_ngrams(text: str, title: str) -> str:
-    words = _TOKEN.findall(title)
+    grams = _title_grams(title)
+    if not grams:
+        return text
     head, tail = text[:PREAMBLE_CHARS], text[PREAMBLE_CHARS:]
-    if len(words) >= TITLE_NGRAM:
-        for start in range(0, len(words) - TITLE_NGRAM + 1):
-            head = _replace_phrase(head, words[start : start + TITLE_NGRAM], "[TITLE]")
-    elif words:
-        head = _replace_phrase(head, words, "[TITLE]")
-    return head + tail
+    tokens = _token_spans(head)
+    spans: list[tuple[int, int]] = []
+    for gram in grams:
+        width = len(gram)
+        for index in range(len(tokens) - width + 1):
+            if tuple(token for token, _start, _end in tokens[index : index + width]) == gram:
+                spans.append((tokens[index][1], tokens[index + width - 1][2]))
+    return _replace_spans(head, spans, "[TITLE]") + tail
+
+
+def _title_ngram_hits(text: str, title: str) -> int:
+    grams = _title_grams(title)
+    if not grams:
+        return 0
+    tokens = [token for token, _start, _end in _token_spans(text[:PREAMBLE_CHARS])]
+    hits = 0
+    for gram in grams:
+        width = len(gram)
+        if any(tuple(tokens[index : index + width]) == gram for index in range(len(tokens) - width + 1)):
+            hits += 1
+    return hits
 
 
 def _mask_surnames(text: str, surnames: list[str]) -> str:
@@ -295,24 +533,17 @@ def _collapse(text: str) -> str:
 
 def leak_counts(text: str, meta: dict[str, Any]) -> dict[str, int]:
     """Counts only. The matched strings are not returned."""
-    head = " ".join(_TOKEN.findall(text[:PREAMBLE_CHARS].lower()))
-    title_words = [word.lower() for word in _TOKEN.findall(str(meta.get("title") or ""))]
-    title_hits = 0
-    if len(title_words) >= TITLE_NGRAM:
-        for start in range(0, len(title_words) - TITLE_NGRAM + 1):
-            gram = " ".join(title_words[start : start + TITLE_NGRAM])
-            if gram and gram in head:
-                title_hits += 1
     outside, _refs = _split_references(text)
     surname_hits = 0
     for surname in meta.get("surnames") or []:
         if re.search(rf"\b{re.escape(str(surname))}\b", outside):
             surname_hits += 1
     return {
-        "title_4gram": title_hits,
+        "acknowledgement": _ack_leak_count(outside),
         "author_surname": surname_hits,
         "residual_url": len(_URL.findall(text)),
         "tier_phrase": len(_TIER_PHRASE.findall(outside)),
+        "title_4gram": _title_ngram_hits(text, str(meta.get("title") or "")),
         "venue_marker": len(_VENUE.findall(outside)),
     }
 
