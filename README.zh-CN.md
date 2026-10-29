@@ -11,7 +11,7 @@ AutoPaperReview（简称 APR）是一条在本地运行的审稿流水线。它�
 
 图的右半边来自可选的评分与基准部分。
 
-版本 `0.1.10`，Alpha。Python 3.11–3.13。MIT 许可证。APR 不能代替人工审稿。
+版本 `0.1.10`，Alpha。Python 3.10–3.13。MIT 许可证。APR 不能代替人工审稿。
 
 <a id="track-a"></a>
 
@@ -112,7 +112,7 @@ autopaperreview init reviews/my-paper --project-id my-paper --title "My paper re
    - 密钥放在环境变量里，默认是 `APR_MODEL_API_KEY`。APR 不会把它写进 TOML、请求日志或阶段签名。
    - `network_policy` 为 `deny` 时，仍然可以连本机回环地址上的服务。连远程主机则要设 `allow_remote = true`、`requires_network = true` 和 `network_policy = "allow"`，运行清单随后会记下稿件离开了这台机器。
    - `base_url` 填 API 根路径（`…/v1`）；密钥不要放进 URL 的查询字符串。
-   - 模型超时默认 900 秒。
+   - 模型超时默认 7200 秒。
 
 ```toml
 [project]
@@ -229,13 +229,63 @@ flowchart TD
 ### 命令
 
 ```text
-autopaperreview init            建一个本地项目（确定性适配器）
+autopaperreview init            建一个本地项目（确定性或 agent 适配器）
 autopaperreview validate        检查 TOML、依赖和本地路径
-autopaperreview run             运行或接着跑
+autopaperreview run             运行或接着跑；有阶段在等 drop 时退出码为 3
+autopaperreview status          以 JSON 输出运行状态、待交的 drop 和产物
+autopaperreview submit          先校验 agent 的 drop，再写入
+autopaperreview mcp             通过 stdio 向 MCP 客户端提供审稿工具
 autopaperreview inspect         打印运行清单
 autopaperreview annotate        高亮、页边编号和评论
 autopaperreview doctor          检查可选依赖和适配器
 ```
+
+<a id="agent-mcp"></a>
+
+### 接入 agent 与 MCP
+
+审稿人也可以由 Claude Code、Codex CLI 这类编码 agent 来当。APR 写出提示词包，agent 读完后写一份判定文件（drop），APR 先校验这份 drop，再接着跑报告。这种用法下 APR 不需要 API 密钥。稿件由 agent 背后的模型来读，所以稿件会去到那个模型运行的地方。APR 看不到这一步，`manuscript_left_machine` 仍为 false。
+
+先建一个 agent 项目。它的 `execute_review` 阶段用 `AgentJudgmentAdapter`，并设置 `fixture_path = "judgment.json"` 和 `verify_excerpts = true`。
+
+```bash
+autopaperreview init reviews/my-paper --project-id my-paper --adapter agent
+```
+
+再注册 MCP 服务。工具收到的每个路径都必须落在某个 `--root` 目录里。默认的 root 是服务启动时的工作目录。
+
+```bash
+claude mcp add autopaperreview -- autopaperreview mcp --root /abs/path/to/reviews
+```
+
+Codex CLI 则在 `~/.codex/config.toml` 里加上：
+
+```toml
+[mcp_servers.autopaperreview]
+command = "autopaperreview"
+args = ["mcp", "--root", "/abs/path/to/reviews"]
+```
+
+然后让 agent 审这篇稿件。工具有 `init_project`、`validate`、`run`、`status`、`read_input`、`drop_template`、`submit_drop` 和 `report`。
+
+| 步骤 | 做什么 |
+| --- | --- |
+| `run` | 各阶段一直跑到 `execute_review` 发现没有 drop 为止。这个阶段记为 `awaiting_input`，它后面的阶段记为 `pending`，不依赖它的阶段照常运行。每个阶段发一条进度通知。 |
+| `status`、`drop_template` | 列出要读的提示词包、drop 的路径，以及要原样回填的 `packet_sha256` 哈希。模板列出七个维度和 `sar_bands_v1` 的分数档，不预填任何一档。 |
+| `read_input` | 读取提示词包或页面渲染图。文本按 `max_chars` 分页返回，长稿件也不会超出客户端的输出上限。 |
+| `submit_drop` | 跑的就是该阶段自己的检查：哈希、schema、七个维度是否齐全，以及引文能否在稿件里找到。没通过的 drop 不会写入。 |
+| `run`、`report` | 审稿阶段读入 drop，随后跑 consensus 和 report。`report` 返回 `review_report.md`。 |
+
+不用 MCP，在 shell 里也是同一个循环。有阶段在等 drop 时，`run` 的退出码是 3；`status` 输出 JSON；`submit` 先校验 drop 文件，再把它写到声明的位置：
+
+```bash
+autopaperreview run reviews/my-paper/review.toml       # awaiting_input
+autopaperreview status reviews/my-paper/review.toml --detail
+autopaperreview submit reviews/my-paper/review.toml my-drop.json
+autopaperreview run reviews/my-paper/review.toml       # success
+```
+
+`visual_inspect` 配 `AgentFindingsInspector`，或 `related_work_search` 配 `mode = "agent"` 时，只要声明了 `findings_path` 而文件还不存在，也会这样等待。每次运行都会锁住自己的运行目录，同一项目的第二个 `run` 会返回 `busy`，不会改动运行清单。工具调用没法取消已经在跑的阶段。每个提示词包都带着整份稿件，所以稿件读一遍就够，其余的包只看各自的路线说明。
 
 <a id="known-gaps"></a>
 
@@ -507,7 +557,7 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 - 表里的数字来自一次只算排序分的 forecast 调用，不衡量写出来的审稿、维度分数、致命标签或带批注的 PDF。和人类评分比较的也不是决策档对应的会议评分。完整审稿比「美元 / 篇」那一列贵得多。
 - 十五篇论文、一次 Opus 超时、自助法区间大约从 0.4 到 1.0，这意味着 Spearman 差 0.02 算不上结论。
 - 用 Opus 和 Grok 时，APR 的分数都低于人类均分。
-- 按记录的 effort，Opus 每篇大约 0.66 美元、要几分钟，还可能超时。默认预算是 900 秒。
+- 按记录的 effort，Opus 每篇大约 0.66 美元、要几分钟。那张表里有一次调用超时。模型调用的默认预算是 7200 秒。
 - `forecast-k1` 没有摘录检查。致命问题核验和维度分数是真实输出，但排序分和人类评分相关，并不是靠这两项。
 - 在这份留出集上，Spearman 更高的是 Opus 上的 OpenJudge；到了 tune-30，这个领先就不成立了。见 [消融说明了什么](#ablations)。
 - GPT-6 Astra 上，APR 的 Spearman 和 AUC 都高于 OpenJudge，但 n=15 的区间重叠，这个领先只说明方向。见 [评分与基准](#track-b)。
@@ -515,8 +565,10 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 
 ## 状态
 
-AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.11–3.13，采用 MIT 许可证。
+AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.10–3.13，采用 MIT 许可证。
 
 核心是一个本地运行的 DAG（有向无环图），由 TOML 配置、Pydantic 记录、按内容哈希的缓存和适配器组成。`src/autopaperreview/prompts/` 里的提示词和流水线一起做版本管理。解析器和模型厂商都隔在适配器后面。
+
+所有拉取请求都以 `pre-release` 为目标，并且只有在 CI 全部通过时才合并。`main` 只接受来自 `pre-release` 的晋升。一次晋升只有在回归报告显示 `pre-release` 在同一固定基准上的分数高于或等于 `main` 时才允许。两条分支使用同一个模型：通过 Cursor 运行的 grok-4.7，reasoning_effort 为 `xhigh`。基准定义仍是 TODO，见 [分支](docs/branching.md)。
 
 仓库里的延伸阅读：[架构](docs/architecture.md)、[公开标定](docs/public-calibration.md)、[相关工作检索](docs/related-work-search.md)、[初读写法](docs/first-read-review.md)。[docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) 是 2026-08-29 的一份缺口清单，早于 `forecast-k1`；当前的比较请看「分数之外」一节的对照表。

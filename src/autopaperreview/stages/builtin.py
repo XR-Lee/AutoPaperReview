@@ -28,6 +28,7 @@ from ..model_exec import (
     resolve_review_judgments,
 )
 from ..artifacts import artifact_from_path
+from ..awaiting import AwaitingInput
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
@@ -284,7 +285,8 @@ class CommandParams(ParamsModel):
     command: list[str] = Field(min_length=1)
     cwd: str | None = None
     outputs: list[str] = Field(default_factory=list)
-    timeout_seconds: int = Field(default=900, ge=1)
+    # Same floor as a model call, so a local model CLI is not cut off at 15 minutes.
+    timeout_seconds: int = Field(default=int(DEFAULT_MODEL_TIMEOUT_SECONDS), ge=1)
     allowed_return_codes: list[int] = Field(default_factory=lambda: [0])
     requires_network: bool = False
     network_scope: str = "fulltext"
@@ -1471,6 +1473,7 @@ class ExecuteReviewParams(ParamsModel):
     holistic_samples: int = Field(default=DEFAULT_HOLISTIC_SAMPLES, ge=1, le=8)
     holistic_temperature: float = Field(default=DEFAULT_HOLISTIC_TEMPERATURE, ge=0, le=2)
     holistic_mode: str = DEFAULT_HOLISTIC_MODE
+    verify_excerpts: bool = False
 
     @field_validator("holistic_mode")
     @classmethod
@@ -1497,7 +1500,11 @@ class ExecuteReviewStage(StageHandler):
             "routes": _route_fingerprint(context),
         }
         if params.fixture_path:
-            material["fixture_sha256"] = sha256_file(context.loaded_config.resolve(params.fixture_path))
+            fixture = context.loaded_config.resolve(params.fixture_path)
+            # An agent drop may not exist yet; the stage then waits for it.
+            material["fixture_sha256"] = sha256_file(fixture) if fixture.is_file() else None
+        if params.verify_excerpts:
+            material["verify_excerpts"] = True
         if (
             params.base_url
             or params.model
@@ -1530,21 +1537,26 @@ class ExecuteReviewStage(StageHandler):
         material["judgment_prompt_sha256"] = judgment_prompt_fingerprint()
         return material
 
-    def run(self, context: StageContext) -> StageOutcome:
+    def packet_files(self, context: StageContext) -> list[Path]:
+        return [
+            path
+            for stage_id in context.stage.depends_on
+            for path in sorted(context.dependency_dir(stage_id).glob("*.md"))
+        ]
+
+    def build_request(self, context: StageContext, *, fixture: Path | None = None) -> ReviewRequest:
+        """The adapter request for this stage. ``fixture`` replaces the declared drop path."""
         params = self._params(context)
-        _enforce_network_declaration(
-            context, requires_network=params.requires_network, network_scope=params.network_scope
-        )
         try:
             source_text = context.source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             source_text = ""
         packets: dict[str, str] = {}
-        for stage_id in context.stage.depends_on:
-            for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
-                packets[path.stem] = path.read_text(encoding="utf-8")
-        fixture = context.loaded_config.resolve(params.fixture_path) if params.fixture_path else None
-        request = ReviewRequest(
+        for path in self.packet_files(context):
+            packets[path.stem] = path.read_text(encoding="utf-8")
+        if fixture is None and params.fixture_path:
+            fixture = context.loaded_config.resolve(params.fixture_path)
+        return ReviewRequest(
             project_id=context.loaded_config.config.project.id,
             manuscript=context.manifest.source,
             source_text=source_text,
@@ -1582,6 +1594,8 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
+                "verify_excerpts": params.verify_excerpts,
+                "reuse_prior_exchanges": not context.force,
                 "stage_signature": (
                     context.manifest.stage(context.stage.id).signature
                     if context.manifest.stage(context.stage.id) is not None
@@ -1589,8 +1603,32 @@ class ExecuteReviewStage(StageHandler):
                 ),
             },
         )
+
+    def run(self, context: StageContext) -> StageOutcome:
+        params = self._params(context)
+        _enforce_network_declaration(
+            context, requires_network=params.requires_network, network_scope=params.network_scope
+        )
+        request = self.build_request(context)
+        packets = request.packets
         adapter = load_review_adapter(params.adapter)
-        result = adapter.execute(request, context.stage_dir)
+        try:
+            result = adapter.execute(request, context.stage_dir)
+        except AwaitingInput as exc:
+            exc.request.setdefault("drop_path", params.fixture_path)
+            exc.request.setdefault(
+                "reads",
+                [
+                    {
+                        "id": path.stem,
+                        "path": path.relative_to(context.run_dir).as_posix(),
+                        "chars": len(packets.get(path.stem, "")),
+                    }
+                    for path in self.packet_files(context)
+                ],
+            )
+            exc.request.setdefault("verify_excerpts", params.verify_excerpts)
+            raise
         package = result.package.model_copy(update={"manuscript": context.manifest.source})
         if package.project_id != context.loaded_config.config.project.id:
             raise ValueError("execute_review adapter returned a different project_id")

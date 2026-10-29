@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..artifacts import artifact_from_path
+from ..awaiting import AwaitingInput
 from ..figures import sibling_pdf
 from ..hashing import sha256_file
 from ..models import ReviewPackage, ReviewRoute, RouteKind, VisualFinding
@@ -153,6 +154,20 @@ class FormatCheckParams(ParamsModel):
     profile: str = "iclr2027"
 
 
+def check_page_finding(finding: VisualFinding, by_sha: dict[str, dict[str, Any]]) -> None:
+    """A finding must name a rendered page by hash, page number, and page id, and not repeat the caption."""
+    if finding.page_image_sha256 not in by_sha:
+        raise ValueError(f"visual finding {finding.id} page hash is not in the render manifest")
+    record = by_sha[finding.page_image_sha256]
+    record_id = str(record.get("page_id") or record["page"])
+    if int(record["page"]) != finding.page:
+        raise ValueError(f"visual finding {finding.id} page does not match the image hash")
+    if finding.page_id and finding.page_id != record_id:
+        raise ValueError(f"visual finding {finding.id} page id does not match the image hash")
+    if finding_matches_caption(finding):
+        raise ValueError(f"visual finding {finding.id} repeats the caption")
+
+
 def _manifest_from(context: StageContext) -> tuple[dict[str, Any], Path]:
     for stage_id in context.stage.depends_on:
         stage_dir = context.dependency_dir(stage_id)
@@ -279,6 +294,7 @@ class VisualInspectStage(StageHandler):
                     timeout_seconds=params.timeout_seconds,
                     temperature=params.temperature,
                     json_object=params.json_object,
+                    reuse_prior_exchanges=not context.force,
                     routes=[
                         ReviewRoute(
                             id=route.id,
@@ -294,6 +310,23 @@ class VisualInspectStage(StageHandler):
                     ],
                 )
             page_ids = [str(item.get("page_id") or item["page"]) for item in manifest.get("pages", [])]
+            if getattr(inspector, "waits_for_drop", False) and findings_path is not None and not findings_path.is_file():
+                reads = [
+                    {
+                        "id": str(item.get("page_id") or item["page"]),
+                        "path": (page_dir / item["filename"]).relative_to(context.run_dir).as_posix(),
+                        "sha256": item["sha256"],
+                    }
+                    for item in manifest.get("pages", [])
+                ]
+                for stage_id in context.stage.depends_on if params.packet_route else []:
+                    packet = context.dependency_dir(stage_id) / f"{params.packet_route}.md"
+                    if packet.is_file():
+                        reads.insert(0, {"id": params.packet_route, "path": packet.relative_to(context.run_dir).as_posix()})
+                raise AwaitingInput(
+                    f"visual findings drop does not exist yet: {findings_path}",
+                    request={"kind": "visual_findings", "drop_path": params.findings_path, "reads": reads},
+                )
             if (
                 params.require_pages_seen
                 and hasattr(inspector, "assert_pages_seen")
@@ -307,18 +340,7 @@ class VisualInspectStage(StageHandler):
                     context.stage_dir,
                 )
                 for finding in request_findings:
-                    if finding.page_image_sha256 not in by_sha:
-                        raise ValueError(
-                            f"visual finding {finding.id} page hash is not in the render manifest"
-                        )
-                    record = by_sha[finding.page_image_sha256]
-                    record_id = str(record.get("page_id") or record["page"])
-                    if int(record["page"]) != finding.page:
-                        raise ValueError(f"visual finding {finding.id} page does not match the image hash")
-                    if finding.page_id and finding.page_id != record_id:
-                        raise ValueError(f"visual finding {finding.id} page id does not match the image hash")
-                    if finding_matches_caption(finding):
-                        raise ValueError(f"visual finding {finding.id} repeats the caption")
+                    check_page_finding(finding, by_sha)
                     findings.append(finding)
             status = getattr(inspector, "status", None) or ("checked" if findings or params.adapter else "unchecked")
         package = ReviewPackage(

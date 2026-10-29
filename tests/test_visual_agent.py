@@ -222,7 +222,7 @@ class HostedVisionTests(unittest.TestCase):
         seen: dict[str, object] = {}
 
         def transport(request, timeout):
-            del timeout
+            seen["timeout"] = timeout
             seen["url"] = request.full_url
             seen["body"] = json.loads(request.data.decode("utf-8"))
             digest = seen["body"]["page_image_sha256"]
@@ -250,6 +250,7 @@ class HostedVisionTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"APR_VISION_API_KEY": "test-key"}):
                 found = inspector.inspect(request, Path(temporary) / "scratch")
         self.assertEqual(seen["url"], "https://vision.example/inspect")
+        self.assertGreaterEqual(seen["timeout"], 7200)
         self.assertIn("image_base64", seen["body"])
         self.assertEqual(found[0].id, "V-api")
         self.assertEqual(found[0].severity, Severity.moderate)

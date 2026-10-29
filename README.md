@@ -11,7 +11,7 @@ AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two 
 
 The right half comes from the optional benchmark track.
 
-Version `0.1.10`, alpha. Python 3.11–3.13. MIT license. APR doesn't replace a human reviewer.
+Version `0.1.10`, alpha. Python 3.10–3.13. MIT license. APR doesn't replace a human reviewer.
 
 <a id="track-a"></a>
 
@@ -113,7 +113,7 @@ autopaperreview init reviews/my-paper --project-id my-paper --title "My paper re
    - The key stays in the environment, in `APR_MODEL_API_KEY` by default. APR doesn't write it into the TOML, the request log, or the stage signature.
    - The `deny` network policy still allows a loopback server. A remote host needs `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. The run manifest then records that the manuscript left the machine.
    - `base_url` is the API root (`…/v1`), not a URL with the key in its query string.
-   - The model timeout defaults to 900 seconds.
+   - The model timeout defaults to 7200 seconds.
 
 ```toml
 [project]
@@ -230,13 +230,63 @@ The synthetic example stops at a fixture `execute_review` and a bilingual report
 ### Commands
 
 ```text
-autopaperreview init            Create a local project (deterministic adapter)
+autopaperreview init            Create a local project (deterministic or agent adapter)
 autopaperreview validate        Check TOML, the DAG, and local paths
-autopaperreview run             Run or resume
+autopaperreview run             Run or resume; exit 3 while a stage awaits a drop
+autopaperreview status          Run state, awaiting drops, and outputs as JSON
+autopaperreview submit          Check an agent drop, then write it
+autopaperreview mcp             Serve the review tools to an MCP client over stdio
 autopaperreview inspect         Print a run manifest
 autopaperreview annotate        Highlights, margin tags, and comments
 autopaperreview doctor          Optional extras and adapters
 ```
+
+<a id="agent-mcp"></a>
+
+### Agent harness and MCP
+
+A coding agent such as Claude Code or Codex CLI can act as the reviewer. APR writes the prompt packets, the agent reads them and writes a judgment drop, and APR checks the drop before the report runs. APR needs no API key in this mode. The agent's model reads the manuscript, so the manuscript goes wherever that model runs. APR can't see that egress, and `manuscript_left_machine` stays false.
+
+Create an agent project. Its `execute_review` stage uses `AgentJudgmentAdapter` with `fixture_path = "judgment.json"` and `verify_excerpts = true`.
+
+```bash
+autopaperreview init reviews/my-paper --project-id my-paper --adapter agent
+```
+
+Register the MCP server. Every path a tool receives must resolve inside a `--root` directory. The default root is the server's working directory.
+
+```bash
+claude mcp add autopaperreview -- autopaperreview mcp --root /abs/path/to/reviews
+```
+
+For Codex CLI, add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.autopaperreview]
+command = "autopaperreview"
+args = ["mcp", "--root", "/abs/path/to/reviews"]
+```
+
+Then ask the agent to review the manuscript. The tools are `init_project`, `validate`, `run`, `status`, `read_input`, `drop_template`, `submit_drop`, and `report`.
+
+| Step | What happens |
+| --- | --- |
+| `run` | Stages run until `execute_review` finds no drop. That stage becomes `awaiting_input`, the stages after it become `pending`, and stages that don't depend on it still run. The call sends one progress notification per stage. |
+| `status`, `drop_template` | The packets to read, the drop path, and the `packet_sha256` digests to echo. The template lists the seven dimensions and the `sar_bands_v1` clauses, with no default clause. |
+| `read_input` | A packet or a page render. Text comes back in pages of `max_chars`, so a long manuscript fits the client's output limit. |
+| `submit_drop` | The stage's own checks: digests, schema, all seven dimensions, and quotes that resolve in the manuscript. A rejected drop isn't written. |
+| `run`, `report` | The review stage reads the drop, then consensus and report run. `report` returns `review_report.md`. |
+
+The same loop works from a shell. `run` exits with code 3 while a stage awaits a drop, `status` prints JSON, and `submit` checks a drop file before it writes the drop:
+
+```bash
+autopaperreview run reviews/my-paper/review.toml       # awaiting_input
+autopaperreview status reviews/my-paper/review.toml --detail
+autopaperreview submit reviews/my-paper/review.toml my-drop.json
+autopaperreview run reviews/my-paper/review.toml       # success
+```
+
+`visual_inspect` with `AgentFindingsInspector` and `related_work_search` with `mode = "agent"` wait the same way when their `findings_path` is declared and the file is missing. A run holds a lock on its run directory, so a second `run` of the same project returns `busy` and leaves the manifest alone. A tool call can't cancel a stage that is already running. Every packet repeats the manuscript text, so read the manuscript once and then only the route instructions of the other packets.
 
 <a id="known-gaps"></a>
 
@@ -508,7 +558,7 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 - The table scores one rank-only forecast call. It doesn't measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column shows.
 - Fifteen papers, one Opus timeout, and bootstrap intervals from about 0.4 to about 1.0 mean that a 0.02 Spearman gap isn't a finding.
 - With both Opus and Grok, APR scores below the human mean.
-- At the reported effort, Opus costs about $0.66 and takes several minutes per paper, and it can time out. The default budget is 900 seconds.
+- At the reported effort, Opus costs about $0.66 and takes several minutes per paper. One call in that table timed out. The default model-call budget is 7200 seconds.
 - `forecast-k1` isn't checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs, but they aren't why the rank correlates.
 - On this holdout, OpenJudge on Opus has the higher Spearman. On tune-30 that lead doesn't hold. See [What the ablations show](#ablations).
 - On GPT-6 Astra, APR leads OpenJudge on Spearman and on AUC, and the n=15 intervals overlap. That lead is directional. See [Venue score and benchmark](#track-b).
@@ -516,8 +566,10 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 
 ## Status
 
-AutoPaperReview `0.1.10` is alpha software for Python 3.11–3.13, released under the MIT license.
+AutoPaperReview `0.1.10` is alpha software for Python 3.10–3.13, released under the MIT license.
 
 The core is a local DAG (directed acyclic graph) with TOML configuration, Pydantic records, a content-hash cache, and adapters. Prompts in `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
+
+All pull requests target `pre-release` and merge only when CI is fully green. `main` only takes promotions from `pre-release`. A promotion is allowed only when a regression report shows that `pre-release` scores higher than or equal to `main` on the same fixed benchmark. Both branches run with the same model, grok-4.7 at reasoning_effort `xhigh`, via Cursor. The benchmark definition is a TODO in [Branching](docs/branching.md).
 
 Further reading in this repository: [architecture](docs/architecture.md), [public calibration](docs/public-calibration.md), [related-work search](docs/related-work-search.md), and [first-read writing](docs/first-read-review.md). [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) is a gap list dated 2026-08-29. It predates `forecast-k1`. For the current comparison, use the comparison matrix in this README.

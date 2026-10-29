@@ -429,6 +429,52 @@ class CommandTests(unittest.TestCase):
                 )
         self.assertIn("timed out", str(caught.exception))
 
+    def test_command_reuses_a_stored_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cache"
+            list_catalog(cache, years=(2024,), fixture_dir=FIXTURE)
+            fetch_sample(
+                cache,
+                n_per_tier={"oral": 1, "highlight": 0, "poster": 0},
+                seed=1,
+                fixture_dir=FIXTURE,
+            )
+            prepare_manuscripts(cache)
+            counter = cache / "calls.txt"
+            script = cache / "count_cli.py"
+            script.write_text(
+                "import pathlib, sys\n"
+                "counter = pathlib.Path(sys.argv[1])\n"
+                "count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0\n"
+                "counter.write_text(str(count + 1), encoding='utf-8')\n"
+                "print('{\"rationale\": \"synthetic stored reading\", \"rating\": 4, "
+                "\"predicted_mean\": 6.0, \"tier\": \"poster\"}')\n",
+                encoding="utf-8",
+            )
+            template = f"{sys.executable} {script} {counter}"
+            first = run_model(
+                cache,
+                model_id="opus-local",
+                backend="command",
+                holistic_mode="mean",
+                command_template=template,
+            )
+            self.assertEqual(first["errors"], [])
+            self.assertEqual(len(first["parsed"]), 1)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+            second = run_model(
+                cache,
+                model_id="opus-local",
+                backend="command",
+                holistic_mode="mean",
+                command_template=template,
+                repeats=3,
+            )
+            self.assertEqual(second["errors"], [])
+            self.assertEqual(len(second["parsed"]), 1)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+            self.assertEqual(second["prompt_transport"], "stdin")
+
 
 class ReportTests(unittest.TestCase):
     def test_metrics_and_two_model_agreement(self) -> None:

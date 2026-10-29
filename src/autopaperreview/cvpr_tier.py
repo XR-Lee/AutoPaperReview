@@ -58,6 +58,7 @@ from .cvpr_handoff import (
 )
 from .hashing import sha256_bytes
 from .model_exec import (
+    DEFAULT_MODEL_TIMEOUT_SECONDS,
     AuditJudgment,
     ExpertJudgment,
     ForecastJudgment,
@@ -1188,7 +1189,7 @@ class OpenAIChatCompletion:
         allow_remote: bool = False,
         network_policy: str = "deny",
         temperature: float = LOCKED_HOLISTIC_TEMPERATURE,
-        timeout_seconds: float = 900.0,
+        timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
         transport: Any = None,
     ) -> None:
         self.base_url = base_url
@@ -1260,6 +1261,45 @@ def _usage_row(handoff_id: str, prompt: str, outcome: dict[str, Any]) -> dict[st
         "prompt_chars": len(prompt),
         "retries": int(outcome.get("retries") or 0),
         "usage": outcome.get("usage"),
+    }
+
+
+def _stored_answer_text(answers: Path, handoff_id: str) -> str | None:
+    """Return a non-empty answer already stored under the opaque handoff id."""
+    path = answers / f"{handoff_id}.json"
+    if path.is_file() and path.stat().st_size > 0:
+        return path.read_text(encoding="utf-8")
+    return None
+
+
+def _outcome_from_stored_answer(
+    text: str,
+    mode: str,
+    samples: int,
+    *,
+    transport: str,
+) -> dict[str, Any]:
+    """Reuse a finished answer. Does not call the model again."""
+    try:
+        verdict = parse_verdict(mode, text, samples=samples)
+    except CvprTierError as exc:
+        return {
+            "error": str(exc),
+            "latency_seconds": None,
+            "parsed": False,
+            "prompt_transport": transport,
+            "retries": 0,
+            "text": text,
+            "usage": None,
+        }
+    return {
+        "latency_seconds": None,
+        "parsed": True,
+        "prompt_transport": transport,
+        "retries": 0,
+        "text": text,
+        "usage": None,
+        "verdict": verdict,
     }
 
 
@@ -1372,7 +1412,7 @@ def run_model(
     holistic_mode: str = "forecast",
     holistic_samples: int = 1,
     command_template: str | None = None,
-    command_timeout: float = 900.0,
+    command_timeout: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
     adapter: str | None = None,
     base_url: str | None = None,
     endpoint_model: str | None = None,
@@ -1508,23 +1548,35 @@ def run_model(
     if backend == "command":
         if completion is not None:
             raise CvprTierError("command backend does not take a completion object")
+        command_transport = (
+            "prompt_file" if command_template and "{prompt_file}" in command_template else "stdin"
+        )
         for paper in manifest.papers:
             handoff_id = handoff_ids[paper.paper_id]
-            series: list[dict[str, Any]] = []
-            for _repeat_index in range(repeats):
-                series.append(
-                    _command_paper(
-                        template=command_template or "",
-                        prompt=prompts[paper.paper_id],
-                        handoff_id=handoff_id,
-                        model_id=label,
-                        mode=holistic_mode,
-                        samples=holistic_samples,
-                        timeout=command_timeout,
-                        failure_log=failure_log,
-                    )
+            stored = _stored_answer_text(answers, handoff_id)
+            if stored is not None:
+                outcome = _outcome_from_stored_answer(
+                    stored,
+                    holistic_mode,
+                    holistic_samples,
+                    transport=command_transport,
                 )
-            outcome = _collapse_repeats(series)
+            else:
+                series: list[dict[str, Any]] = []
+                for _repeat_index in range(repeats):
+                    series.append(
+                        _command_paper(
+                            template=command_template or "",
+                            prompt=prompts[paper.paper_id],
+                            handoff_id=handoff_id,
+                            model_id=label,
+                            mode=holistic_mode,
+                            samples=holistic_samples,
+                            timeout=command_timeout,
+                            failure_log=failure_log,
+                        )
+                    )
+                outcome = _collapse_repeats(series)
             outcomes[paper.paper_id] = outcome
             cli_version = str(outcome.get("cli_version") or cli_version)
             cli_flags = list(outcome.get("cli_flags") or cli_flags)
