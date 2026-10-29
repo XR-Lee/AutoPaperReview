@@ -160,35 +160,47 @@ Tier labels also reflect area-chair and program-chair presentation decisions. Th
 
 The draw keeps papers whose tier is oral, highlight, or poster and whose PDF is on CVF Open Access (or `fixture://` in the synthetic fixture). Each tier is shuffled with `Random(f"{seed}:{tier}")`. The default is 20 papers per tier and seed `20261029`. A short stratum keeps every available paper. The manifest records available, requested, and drawn counts.
 
-Per-paper tiers are written only to `heldout/tiers.json`. `prepare` and `run` refuse to open that file or `catalog.json`. The sample manifest has no per-paper tier. PDFs, text, prompts, and answers stay under the cache. The cache and the report must be a gitignored directory (the usual place is `workdir/cvpr-tier/`) or a path outside the checkout.
+Per-paper tiers are written only to `heldout/tiers.json`. `prepare` and `run` refuse to open that file, `catalog.json`, `confirmation/`, `probe_keys/`, `meta/`, and a custody directory recorded for the cache. The sample manifest has no per-paper tier. PDFs and extracted text stay under the cache. Replay prompts and answers go to a handoff directory outside the cache and outside the checkout. The cache and the report must be a gitignored directory (the usual place is `workdir/cvpr-tier/`) or a path outside the checkout.
 
 `cvpr2025` and `cvpr2026` are venue profiles for format and deadlines. CVPR main text is 8 pages excluding references, with no total-page cap. The profiles do not map a score onto a tier.
 
 ### Models
 
-The model id is a free-form label of letters, digits, `.`, `_`, and `-`, up to 64 characters. `grok-4.7-cursor`, `opus-local`, and `astra-local` are ordinary labels. Each label has its own directory under `runs/<model-id>/`, and the run manifest stores the id, the backend, the review mode, and the parameters. The report scores every model on the papers that model parsed, and it compares models on the papers they both scored (score Spearman and tier agreement, with bootstrap intervals).
+The model id is a free-form label of letters, digits, `.`, `_`, and `-`, up to 64 characters. `grok-4.7-cursor`, `opus-local`, and `astra-local` are ordinary labels. Each label has its own directory under `runs/<model-id>/`. The report scores every model on the papers that model parsed, and it compares models on the papers they both scored (score Spearman and tier agreement, with bootstrap intervals).
 
-Grok runs through Cursor. Use `--backend replay`: the command writes `pending/<paper-id>.prompt.txt` and a small JSON packet, then waits. A Cursor agent reads those packets and writes `answers/<paper-id>.json` (or `.txt`). Exit code 3 means at least one answer is still missing. No API key is read.
+Grok, Opus, and Astra run as local CLIs through `--backend command`. Grok does not use an xAI API, an adapter host, or an API key. A Grok adapter whose host is not loopback is refused. Replay remains available for a file handoff: the command writes `<handoff-id>/prompt.txt` and `packet.json` under a directory outside the cache, then waits. The directory name is 12 hex characters from HMAC-SHA256 of the catalog id. The salt stays in the cache (`handoff_salt`, mode 0600) or in `APR_CVPR_HANDOFF_SALT` and is not copied into the packet. A returned answer is checked against the packet hash and against `canaries.txt`. Exit code 3 means at least one answer is still missing.
 
-Opus and Astra run as local CLIs on this machine. Use `--backend command` with that model's own argv template. Placeholders are `{prompt_file}`, `{answer_file}`, `{model}`, `{paper_id}`, and `{mode}`. Each value is shell-quoted, then the template is split into an argument vector. One template is stored on that model run, so Opus and Astra can use different binaries. If the process writes `{answer_file}`, that file is the answer. Otherwise the standard output is saved. A template that contains `api_key`, `secret`, `bearer`, or `sk-` is refused. The harness does not insert an API key.
+The command backend passes the prompt on stdin. `{prompt_file}` still writes the prompt beside the process, outside the empty working directory. `{paper_id}` and `{handoff_id}` are the opaque id, not the catalog id. The process starts in a fresh empty temporary directory with a scrubbed environment. The run records the CLI version (`argv0 --version`), flags, prompt characters, estimated tokens (characters divided by 4), latency, and a `usage` object when the CLI JSON includes one. A timeout or a schema failure is retried once. `usage.json` and `failures.jsonl` live under that model run.
 
-`--backend adapter` calls `complete(prompt, scratch) -> str`, or `OpenAIChatCompletion` when `--base-url` and `--model` are set. The key is read from `--api-key-env` (default `APR_MODEL_API_KEY`) and is not stored. Loopback is allowed under `--network-policy deny`. A remote host also needs `--allow-remote` and `--network-policy allow`.
+`--backend adapter` calls `complete(prompt, scratch) -> str`, or `OpenAIChatCompletion` when `--base-url` and `--model` are set. The key is read from `--api-key-env` (default `APR_MODEL_API_KEY`) and is not stored. Loopback is allowed under `--network-policy deny`. A remote host also needs `--allow-remote` and `--network-policy allow`. That path is not used for Grok.
+
+### Sets, anonymization, and the lock
+
+`benchmarks/cvpr_tier/sets.json` registers `S24-P` (pilot 50, dev), `S24-C1` (existing 120, sealed), `S24-D2` (15/15/20, dev, excluding P and C1), and `S24-C2` (30/40/50, sealed, excluding P, C1, and D2). Membership that already exists is stored as an id-list hash. `S24-D2` and `S24-C2` are not drawn in this change, so their hashes are empty. `fetch --set` refuses a sealed or opened set. A dev fetch filters to the set's year, applies the exclusion lists, and writes `sets/<id>/`.
+
+`prepare --variant A1` writes `manuscripts/A1/`. It removes the title, authors, affiliations, emails, footnotes, acknowledgements, URLs, and the multi-line CVF watermark. `A2` also masks method names. `meta/` keeps the title and authors for anonymization checks and is not a prompt. The leak scan writes counts only. A1 and A2 fail closed when any count is above zero. Omitting `--variant` keeps the historical one-line banner strip at `manuscripts/<paper-id>.txt`.
+
+`cvpr-tier lock` writes `lock.json` (protocol `cvpr-tier-lock-v1`): analysis defaults, model transports, task hashes, and set hashes. It does not contain catalog ids and it does not start a run. A sealed run requires `--confirm --lock` and checks those hashes. `report --confirm` reads labels from the custody directory once, writes `opened.json`, and appends `opened.log`.
 
 ```bash
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier list \
   --cache workdir/cvpr-tier --years 2024,2025
 
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier fetch \
-  --cache workdir/cvpr-tier --n-per-tier 20 --seed 20261029
+  --cache workdir/cvpr-tier --set S24-D2
 
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier prepare \
-  --cache workdir/cvpr-tier
+  --cache workdir/cvpr-tier --set S24-D2 --variant A1
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier lock \
+  --output workdir/cvpr-tier/lock.json --holistic-mode forecast --holistic-samples 1
 
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
   --cache workdir/cvpr-tier \
   --model-id grok-4.7-cursor \
-  --backend replay \
-  --holistic-mode forecast --holistic-samples 1
+  --backend command \
+  --set S24-D2 --variant A1 \
+  --command-template 'grok --output {answer_file} --model {model}'
 
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
   --cache workdir/cvpr-tier \
@@ -196,17 +208,11 @@ PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
   --backend command \
   --command-template 'opus --prompt {prompt_file} --output {answer_file} --model {model}'
 
-PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
-  --cache workdir/cvpr-tier \
-  --model-id astra-local \
-  --backend command \
-  --command-template 'astra --read {prompt_file} --write {answer_file} --model {model} --mode {mode}'
-
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier report \
   --cache workdir/cvpr-tier \
   --output workdir/cvpr-tier/cvpr_tier_report.md
 ```
 
-The command names `opus` and `astra` above are the local binaries. Substitute the argv those CLIs actually accept. A template that starts with `bash -lc` is still an argument vector; the harness does not pick a shell for you.
+The command names above are the local binaries. Substitute the argv those CLIs actually accept. A template that starts with `bash -lc` is still an argument vector; the harness does not pick a shell for you. A sealed set is not fetched or run by the examples above. `S24-D2` still needs a full 2024 catalog before a draw is valid; the synthetic fixture is too small and the fetch refuses it.
 
-`examples/synthetic/cvpr_tier/` is an invented catalog. The unit test runs list, fetch, prepare, command, replay, and report from that directory and does not call the network. A real model sweep is not part of this change.
+`examples/synthetic/cvpr_tier/` is an invented catalog. The unit tests run list, fetch, prepare, command, replay, and report from that directory and do not call the network. A real model sweep is not part of this change.
