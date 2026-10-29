@@ -6,24 +6,25 @@ tier (reject < poster < highlight < oral). The score is that mode's rank
 ``predicted_mean``). Nothing here fits a cutoff or writes a weight back into
 ``rate``.
 
-Per-paper tiers are written only to ``heldout/tiers.json``. ``prepare`` and
-``run`` refuse to read that file or ``catalog.json``. PDFs, prompts, and
-model answers stay in a gitignored cache.
+Per-paper tiers are written only under ``heldout/``. ``prepare`` and ``run``
+refuse to read label files. Model-visible filenames, packet JSON, and argv use
+an opaque handoff id. Grok, Opus, and Astra run as local CLIs through the
+command backend. Grok does not use an xAI API key or a remote adapter.
 
 A model id is a free-form label (``grok-4.7-cursor``, ``opus-local``,
-``astra-local``). Each label has its own run directory. A local CLI supplies
-its own argv template; a Cursor agent uses the pending/answers handoff.
+``astra-local``). Each label has its own run directory.
 """
 
 from __future__ import annotations
 
 import html
 import json
+import os
 import random
 import re
 import shlex
 import statistics
-import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,19 @@ from .anchors import (
     expected_rating,
     forecast_mean,
     panel_mean,
+)
+from .cvpr_anonymize import anonymize, extract_meta, leak_failed
+from .cvpr_handoff import (
+    HandoffError,
+    assert_model_visible,
+    assert_outside,
+    estimated_tokens,
+    export_replay_packet,
+    handoff_id_for,
+    import_replay_answer,
+    load_canaries,
+    load_or_create_salt,
+    run_isolated_command,
 )
 from .hashing import sha256_bytes
 from .model_exec import (
@@ -100,7 +114,11 @@ _TIER_LINE = re.compile(
 _CVPR_STAMP = re.compile(r"(?i)^cvpr\s+20\d{2}\b")
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 _SECRET_IN_TEMPLATE = re.compile(r"(?i)(api[_-]?key|secret|bearer|\bsk-[a-z0-9])")
-COMMAND_PLACEHOLDERS = ("prompt_file", "answer_file", "model", "paper_id", "mode")
+COMMAND_PLACEHOLDERS = ("prompt_file", "answer_file", "model", "paper_id", "handoff_id", "mode")
+_HIDDEN_DIRS = frozenset({"heldout", "confirmation", "custody", "probe_keys", "meta"})
+_HIDDEN_NAMES = frozenset(
+    {"catalog.json", "canaries.txt", "answer_key.json", "probe_answers.json"}
+)
 
 Getter = Callable[[str], bytes]
 
@@ -642,18 +660,105 @@ def _relative(cache: Path, path: Path) -> str:
         return ""
 
 
+def _custody_root(cache: Path) -> Path | None:
+    path = cache / "custody_path.txt"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    return Path(text).expanduser().resolve() if text else None
+
+
+def hidden_from_model(cache: Path, path: Path) -> str | None:
+    """Label, custody, probe-key, and meta paths. Manuscript text is not hidden."""
+    resolved = path.expanduser().resolve()
+    custody = _custody_root(cache)
+    if custody is not None:
+        try:
+            resolved.relative_to(custody)
+            return "custody"
+        except ValueError:
+            pass
+    try:
+        relative = resolved.relative_to(cache.resolve())
+    except ValueError:
+        relative = None
+    if relative is not None:
+        if relative.as_posix() in _HIDDEN_NAMES or relative.name in _HIDDEN_NAMES:
+            return relative.as_posix()
+        if any(part in _HIDDEN_DIRS for part in relative.parts):
+            return relative.as_posix()
+        return None
+    if any(part in _HIDDEN_DIRS for part in resolved.parts):
+        return resolved.name
+    return None
+
+
 def read_judgment_text(cache: Path, path: Path) -> str:
-    relative = _relative(cache, path)
-    if relative in LABEL_FILES:
-        raise CvprTierError(f"judgment must not read {relative}")
+    hidden = hidden_from_model(cache, path)
+    if hidden:
+        raise CvprTierError(f"judgment must not read {hidden}")
     return path.read_text(encoding="utf-8")
 
 
 def read_judgment_bytes(cache: Path, path: Path) -> bytes:
-    relative = _relative(cache, path)
-    if relative in LABEL_FILES:
-        raise CvprTierError(f"judgment must not read {relative}")
+    hidden = hidden_from_model(cache, path)
+    if hidden:
+        raise CvprTierError(f"judgment must not read {hidden}")
     return path.read_bytes()
+
+
+def _remember_custody(cache: Path, custody: Path | None) -> None:
+    if custody is None:
+        return
+    (cache / "custody_path.txt").write_text(str(Path(custody).expanduser().resolve()) + "\n", encoding="utf-8")
+
+
+def _material_root(cache: Path, set_id: str | None) -> Path:
+    return cache / "sets" / set_id if set_id else cache
+
+
+def _handoff_root(cache: Path, handoff_dir: Path | None) -> Path:
+    from .public_calibration import repo_root
+
+    if handoff_dir is not None:
+        root = Path(handoff_dir)
+    else:
+        override = os.environ.get("APR_CVPR_HANDOFF_DIR")
+        if override:
+            root = Path(override)
+        else:
+            digest = sha256_bytes(str(cache.resolve()).encode("utf-8"))[:12]
+            root = Path(tempfile.gettempdir()) / "apr-handoff" / digest
+    assert_outside(root, cache, repo_root(), what="handoff directory")
+    root.mkdir(parents=True, exist_ok=True)
+    return root.resolve()
+
+
+def _reject_remote_grok(model_id: str, backend: str, base_url: str | None) -> None:
+    if backend != "adapter" or "grok" not in model_id.lower():
+        return
+    host = (urllib.parse.urlparse(base_url or "").hostname or "").lower()
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return
+    raise CvprTierError(
+        "Grok uses the local CLI through the command backend. A remote adapter is not used."
+    )
+
+
+def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _wrap_tier(exc: Exception) -> CvprTierError:
+    if isinstance(exc, CvprTierError):
+        return exc
+    return CvprTierError(str(exc))
 
 
 def _default_get(url: str, *, timeout: float = 60.0) -> bytes:
@@ -757,6 +862,133 @@ def stratified_sample(
     return selected, draws
 
 
+def _store_draw(
+    root: Path,
+    selected: list[CatalogPaper],
+    *,
+    seed: int,
+    quotas: dict[str, int],
+    draws: dict[str, dict[str, int]],
+    sources: list[YearSummary],
+    getter: Getter | None,
+    fixture_dir: Path | None,
+) -> SampleManifest:
+    """Write one manifest and its label file, then cache PDF or fixture text."""
+    heldout = HeldoutTiers(
+        papers={paper.paper_id: paper.tier for paper in selected if paper.tier is not None}
+    )
+    _write_json(root / "heldout" / "tiers.json", heldout.model_dump())
+    manifest = SampleManifest(
+        seed=seed,
+        n_per_tier=quotas,
+        years=sorted({paper.year for paper in selected}),
+        draws=draws,
+        sources=sources,
+        papers=[
+            SamplePaper(
+                paper_id=paper.paper_id,
+                year=paper.year,
+                pdf_url=paper.pdf_url,
+                source=paper.source,
+            )
+            for paper in selected
+        ],
+    )
+    _write_json(root / "sample_manifest.json", manifest.model_dump())
+    get = getter or _default_get
+    for paper in selected:
+        destination_raw = root / "raw" / f"{paper.paper_id}.txt"
+        destination_pdf = root / "pdfs" / f"{paper.paper_id}.pdf"
+        if paper.pdf_url.startswith("fixture://"):
+            if fixture_dir is None:
+                raise CvprTierError("fixture PDF urls require --fixture")
+            source = fixture_dir / "raw" / f"{paper.paper_id}.txt"
+            if not source.is_file():
+                raise CvprTierError(f"fixture text is missing for {paper.paper_id}")
+            destination_raw.parent.mkdir(parents=True, exist_ok=True)
+            destination_raw.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            continue
+        if destination_pdf.is_file() and destination_pdf.stat().st_size > 0:
+            continue
+        data = get(paper.pdf_url)
+        if not data.startswith(b"%PDF"):
+            raise CvprTierError(f"Open Access response for {paper.paper_id} is not a PDF")
+        destination_pdf.parent.mkdir(parents=True, exist_ok=True)
+        destination_pdf.write_bytes(data)
+    return manifest
+
+
+def _fetch_registered_set(
+    cache: Path,
+    set_id: str,
+    *,
+    exclude_sets: list[str] | None,
+    getter: Getter | None,
+    fixture_dir: Path | None,
+) -> SampleManifest:
+    from .cvpr_sets import (
+        SetError,
+        ensure_cache_registry,
+        exclusion_ids,
+        find_set,
+        id_list_digest,
+        refuse_sealed_fetch,
+        save_cache_registry,
+        transition,
+    )
+
+    root = _cache(cache)
+    try:
+        registry = ensure_cache_registry(root)
+        spec = find_set(registry, set_id)
+        refuse_sealed_fetch(spec)
+        blocked = exclusion_ids(root, registry, spec, list(exclude_sets or []))
+    except SetError as exc:
+        raise CvprTierError(str(exc)) from exc
+    catalog_path = root / "catalog.json"
+    if not catalog_path.is_file():
+        raise CvprTierError("catalog.json is missing; run list first")
+    catalog = Catalog.model_validate(_read_json(catalog_path))
+    pool = [
+        paper
+        for paper in catalog.papers
+        if paper.year == spec.year and paper.paper_id not in blocked
+    ]
+    quotas = _n_per_tier(dict(spec.quotas))
+    selected, draws = stratified_sample(pool, quotas, spec.seed)
+    if spec.expect_available:
+        for tier, expected in spec.expect_available.items():
+            available = draws.get(tier, {}).get("available")
+            if available != int(expected):
+                raise CvprTierError(
+                    f"{spec.id} {tier} pool is {available}, registry expects {int(expected)}"
+                )
+    digest = id_list_digest([paper.paper_id for paper in selected])
+    if spec.id_list_sha256 and digest != spec.id_list_sha256:
+        raise CvprTierError(f"{spec.id} draw does not match the registered id list hash")
+    if not selected:
+        raise CvprTierError("the sample is empty; no labeled paper has a PDF")
+    manifest = _store_draw(
+        root / "sets" / spec.id,
+        selected,
+        seed=spec.seed,
+        quotas=quotas,
+        draws=draws,
+        sources=[year for year in catalog.years if year.year == spec.year],
+        getter=getter,
+        fixture_dir=fixture_dir,
+    )
+    if spec.id_list_sha256 is None:
+        spec.id_list_sha256 = digest
+    if spec.status == "fresh":
+        try:
+            transition(spec, "dev")
+        except SetError as exc:
+            raise CvprTierError(str(exc)) from exc
+    save_cache_registry(root, registry)
+    return manifest
+
+
 def fetch_sample(
     cache: Path,
     *,
@@ -764,8 +996,18 @@ def fetch_sample(
     seed: int = DEFAULT_SEED,
     getter: Getter | None = None,
     fixture_dir: Path | None = None,
+    set_id: str | None = None,
+    exclude_sets: list[str] | None = None,
 ) -> SampleManifest:
     """Draw the sample and store PDFs or fixture text. Labels go only to heldout/tiers.json."""
+    if set_id:
+        return _fetch_registered_set(
+            cache,
+            set_id,
+            exclude_sets=exclude_sets,
+            getter=getter,
+            fixture_dir=fixture_dir,
+        )
     root = _cache(cache)
     catalog_path = root / "catalog.json"
     if not catalog_path.is_file():
@@ -819,22 +1061,52 @@ def fetch_sample(
     return manifest
 
 
-def _load_sample(cache: Path) -> SampleManifest:
-    path = cache / "sample_manifest.json"
+def _load_sample(cache: Path, set_id: str | None = None) -> SampleManifest:
+    path = _material_root(cache, set_id) / "sample_manifest.json"
     if not path.is_file():
-        raise CvprTierError("sample_manifest.json is missing; run fetch first")
+        missing = f"sets/{set_id}/sample_manifest.json" if set_id else "sample_manifest.json"
+        raise CvprTierError(f"{missing} is missing; run fetch first")
     return SampleManifest.model_validate(json.loads(read_judgment_text(cache, path)))
 
 
-def prepare_manuscripts(cache: Path, *, extract: Callable[[Path], str] | None = None) -> list[dict[str, Any]]:
-    """Extract and strip manuscripts. This does not open heldout/tiers.json or catalog.json."""
+def _manuscript_path(cache: Path, paper_id: str, *, variant: str | None, set_id: str | None) -> Path:
+    base = _material_root(cache, set_id) / "manuscripts"
+    if variant:
+        return base / variant / f"{paper_id}.txt"
+    return base / f"{paper_id}.txt"
+
+
+def prepare_manuscripts(
+    cache: Path,
+    *,
+    extract: Callable[[Path], str] | None = None,
+    variant: str | None = None,
+    set_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Extract manuscripts. Variant A0/A1/A2 writes ``manuscripts/<variant>/``.
+
+    The no-variant path keeps the historical A0 file at ``manuscripts/<paper id>.txt``.
+    Meta (title and authors) is stored for anonymization and is not a prompt.
+    Leak results are counts only.
+    """
+    if variant is not None and variant not in {"A0", "A1", "A2"}:
+        raise CvprTierError("variant must be A0, A1, or A2")
     root = _cache(cache)
-    manifest = _load_sample(root)
+    manifest = _load_sample(root, set_id)
+    material = _material_root(root, set_id)
     extractor = extract or extract_pdf_text
     rows: list[dict[str, Any]] = []
+    totals = {
+        "title_4gram": 0,
+        "author_surname": 0,
+        "residual_url": 0,
+        "tier_phrase": 0,
+        "venue_marker": 0,
+    }
+    failed = 0
     for paper in manifest.papers:
-        raw_path = root / "raw" / f"{paper.paper_id}.txt"
-        pdf_path = root / "pdfs" / f"{paper.paper_id}.pdf"
+        raw_path = material / "raw" / f"{paper.paper_id}.txt"
+        pdf_path = material / "pdfs" / f"{paper.paper_id}.pdf"
         if raw_path.is_file():
             raw = read_judgment_text(root, raw_path)
         elif pdf_path.is_file():
@@ -843,20 +1115,51 @@ def prepare_manuscripts(cache: Path, *, extract: Callable[[Path], str] | None = 
             raw_path.write_text(raw, encoding="utf-8")
         else:
             raise CvprTierError(f"no text or PDF for {paper.paper_id}")
-        manuscript = strip_cvpr_banner(raw)
+        if variant is None:
+            manuscript = strip_cvpr_banner(raw)
+            meta = extract_meta(raw)
+            counts = None
+        else:
+            manuscript, meta, counts = anonymize(raw, variant)
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + int(value)
+            if variant in {"A1", "A2"} and leak_failed(counts):
+                failed += 1
         if not manuscript.strip():
-            raise CvprTierError(f"manuscript text is empty for {paper.paper_id}")
-        destination = root / "manuscripts" / f"{paper.paper_id}.txt"
+            raise CvprTierError("manuscript text is empty")
+        destination = _manuscript_path(root, paper.paper_id, variant=variant, set_id=set_id)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(manuscript, encoding="utf-8")
-        rows.append({"paper_id": paper.paper_id, "characters": len(manuscript)})
+        meta_path = material / "meta" / f"{paper.paper_id}.json"
+        _write_json(meta_path, meta)
+        row: dict[str, Any] = {"paper_id": paper.paper_id, "characters": len(manuscript)}
+        if counts is not None:
+            row["leak"] = counts
+        rows.append(row)
+    if variant is not None:
+        _write_json(
+            material / "manuscripts" / variant / "leak_counts.json",
+            {"variant": variant, "manuscripts": len(rows), "failed": failed, "counts": totals},
+        )
+    if failed:
+        summary = " ".join(f"{key}={totals[key]}" for key in sorted(totals))
+        raise CvprTierError(f"{variant} leak scan failed for {failed} manuscripts: {summary}")
     return rows
 
 
-def _prompt_for(cache: Path, paper_id: str, mode: str, samples: int) -> tuple[str, str]:
-    path = cache / "manuscripts" / f"{paper_id}.txt"
+def _prompt_for(
+    cache: Path,
+    paper_id: str,
+    mode: str,
+    samples: int,
+    *,
+    variant: str | None = None,
+    set_id: str | None = None,
+) -> tuple[str, str]:
+    path = _manuscript_path(cache, paper_id, variant=variant, set_id=set_id)
     if not path.is_file():
-        raise CvprTierError(f"manuscript is missing for {paper_id}; run prepare first")
+        where = f"variant {variant}" if variant else "prepare"
+        raise CvprTierError(f"manuscript is missing for {paper_id}; run {where} first")
     manuscript = read_judgment_text(cache, path)
     prompt = build_prompt(manuscript, mode, samples=samples)
     return prompt, sha256_bytes(prompt.encode("utf-8"))
@@ -926,8 +1229,164 @@ def load_completion_backend(spec: str) -> Any:
     return backend
 
 
-def _run_dir(cache: Path, model_id: str) -> Path:
-    return cache / "runs" / model_id
+def _enforce_sealed_run(
+    cache: Path,
+    set_id: str | None,
+    *,
+    confirm: bool,
+    lock_path: Path | None,
+    holistic_mode: str,
+    holistic_samples: int,
+    member_ids: list[str],
+) -> None:
+    if not set_id:
+        if confirm or lock_path is not None:
+            raise CvprTierError("--confirm --lock requires --set")
+        return
+    from .cvpr_sets import SetError, ensure_cache_registry, find_set, load_lock, verify_lock_for_run
+
+    try:
+        spec = find_set(ensure_cache_registry(cache), set_id)
+        if spec.status == "opened":
+            raise CvprTierError(f"{set_id} is opened; refusing to run")
+        if spec.status == "sealed":
+            if not confirm or lock_path is None:
+                raise CvprTierError("sealed set requires --confirm --lock")
+            lock = load_lock(lock_path)
+            verify_lock_for_run(
+                lock,
+                spec,
+                holistic_mode=holistic_mode,
+                holistic_samples=holistic_samples,
+                member_ids=member_ids,
+            )
+        elif confirm or lock_path is not None:
+            raise CvprTierError("--confirm --lock is only for a sealed set")
+    except SetError as exc:
+        raise CvprTierError(str(exc)) from exc
+
+
+def _usage_row(handoff_id: str, prompt: str, outcome: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "estimated_tokens": outcome.get("estimated_tokens", estimated_tokens(len(prompt))),
+        "handoff_id": handoff_id,
+        "latency_seconds": outcome.get("latency_seconds"),
+        "parsed": bool(outcome.get("parsed")),
+        "prompt_chars": len(prompt),
+        "retries": int(outcome.get("retries") or 0),
+        "usage": outcome.get("usage"),
+    }
+
+
+def _command_paper(
+    *,
+    template: str,
+    prompt: str,
+    handoff_id: str,
+    model_id: str,
+    mode: str,
+    samples: int,
+    timeout: float,
+    failure_log: Path,
+) -> dict[str, Any]:
+    """One local CLI call, retried once after a timeout or a parse failure."""
+    observed: dict[str, Any] = {
+        "argv0": "",
+        "cli_flags": [],
+        "cli_version": "",
+        "latency_seconds": None,
+        "prompt_transport": "stdin",
+        "sentinel": None,
+        "usage": None,
+    }
+    for attempt in (1, 2):
+        try:
+            result = run_isolated_command(
+                template,
+                prompt=prompt,
+                handoff_id=handoff_id,
+                model_id=model_id,
+                mode=mode,
+                timeout=timeout,
+                render=render_command,
+            )
+        except HandoffError as exc:
+            message = str(exc)
+            kind = "timeout" if "timed out" in message else "command"
+            _append_jsonl(
+                failure_log,
+                {"attempt": attempt, "error": message, "handoff_id": handoff_id, "kind": kind},
+            )
+            if attempt == 2:
+                raise CvprTierError(message) from exc
+            continue
+        observed.update(
+            {
+                "argv0": result["argv0"],
+                "cli_flags": result["cli_flags"],
+                "cli_version": result["cli_version"],
+                "estimated_tokens": result["estimated_tokens"],
+                "latency_seconds": result["latency_seconds"],
+                "prompt_transport": result["prompt_transport"],
+                "sentinel": result["sentinel"],
+                "usage": result["usage"],
+            }
+        )
+        try:
+            verdict = parse_verdict(mode, result["text"], samples=samples)
+        except CvprTierError as exc:
+            _append_jsonl(
+                failure_log,
+                {"attempt": attempt, "error": str(exc), "handoff_id": handoff_id, "kind": "parse"},
+            )
+            if attempt == 2:
+                return {**observed, "error": str(exc), "parsed": False, "retries": 1, "text": result["text"]}
+            continue
+        return {**observed, "parsed": True, "retries": attempt - 1, "text": result["text"], "verdict": verdict}
+    raise CvprTierError(f"command failed for {handoff_id}")
+
+
+def _adapter_paper(
+    completer: Any,
+    *,
+    prompt: str,
+    handoff_id: str,
+    mode: str,
+    samples: int,
+    scratch: Path,
+    failure_log: Path,
+) -> dict[str, Any]:
+    text = ""
+    for attempt in (1, 2):
+        text = completer.complete(prompt, scratch / handoff_id)
+        try:
+            verdict = parse_verdict(mode, text, samples=samples)
+        except CvprTierError as exc:
+            _append_jsonl(
+                failure_log,
+                {"attempt": attempt, "error": str(exc), "handoff_id": handoff_id, "kind": "parse"},
+            )
+            if attempt == 2:
+                return {
+                    "error": str(exc),
+                    "latency_seconds": None,
+                    "parsed": False,
+                    "prompt_transport": "adapter",
+                    "retries": 1,
+                    "text": text,
+                    "usage": None,
+                }
+            continue
+        return {
+            "latency_seconds": None,
+            "parsed": True,
+            "prompt_transport": "adapter",
+            "retries": attempt - 1,
+            "text": text,
+            "usage": None,
+            "verdict": verdict,
+        }
+    raise CvprTierError(f"adapter failed for {handoff_id}")
 
 
 def run_model(
@@ -947,13 +1406,22 @@ def run_model(
     network_policy: str = "deny",
     temperature: float | None = None,
     completion: Any = None,
+    set_id: str | None = None,
+    variant: str | None = None,
+    confirm: bool = False,
+    lock_path: Path | None = None,
+    handoff_dir: Path | None = None,
+    custody: Path | None = None,
 ) -> dict[str, Any]:
-    """Judge the sample. Does not open catalog.json or heldout/tiers.json."""
+    """Judge the sample. Does not open label files, meta, or the custody directory."""
     if backend not in {"adapter", "command", "replay"}:
         raise CvprTierError("backend must be adapter, command, or replay")
     if holistic_mode not in HOLISTIC_MODES:
         raise CvprTierError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
+    if variant is not None and variant not in {"A0", "A1", "A2"}:
+        raise CvprTierError("variant must be A0, A1, or A2")
     label = parse_model_id(model_id)
+    _reject_remote_grok(label, backend, base_url)
     if backend == "command":
         render_command(
             command_template or "",
@@ -962,37 +1430,79 @@ def run_model(
                 "answer_file": "answer.json",
                 "model": label,
                 "paper_id": "paper",
+                "handoff_id": "paper",
                 "mode": holistic_mode,
             },
         )
     root = _cache(cache)
-    manifest = _load_sample(root)
-    directory = _run_dir(root, label)
-    pending = directory / "pending"
+    _remember_custody(root, custody)
+    manifest = _load_sample(root, set_id)
+    _enforce_sealed_run(
+        root,
+        set_id,
+        confirm=confirm,
+        lock_path=None if lock_path is None else Path(lock_path),
+        holistic_mode=holistic_mode,
+        holistic_samples=holistic_samples,
+        member_ids=[paper.paper_id for paper in manifest.papers],
+    )
+    material = _material_root(root, set_id)
+    directory = material / "runs" / label
     answers = directory / "answers"
     parsed = directory / "parsed"
-    pending.mkdir(parents=True, exist_ok=True)
     answers.mkdir(parents=True, exist_ok=True)
     parsed.mkdir(parents=True, exist_ok=True)
-    packet_sha: dict[str, str] = {}
-    prompts: dict[str, str] = {}
+    salt = load_or_create_salt(root)
+    handoff_ids: dict[str, str] = {}
+    seen: set[str] = set()
     for paper in manifest.papers:
-        prompt, digest = _prompt_for(root, paper.paper_id, holistic_mode, holistic_samples)
+        handoff_id = handoff_id_for(salt, paper.paper_id)
+        if handoff_id in seen:
+            raise CvprTierError("handoff id collision")
+        seen.add(handoff_id)
+        handoff_ids[paper.paper_id] = handoff_id
+    prompts: dict[str, str] = {}
+    packet_sha: dict[str, str] = {}
+    for paper in manifest.papers:
+        prompt, digest = _prompt_for(
+            root,
+            paper.paper_id,
+            holistic_mode,
+            holistic_samples,
+            variant=variant,
+            set_id=set_id,
+        )
         prompts[paper.paper_id] = prompt
         packet_sha[paper.paper_id] = digest
-        prompt_path = pending / f"{paper.paper_id}.prompt.txt"
-        prompt_path.write_text(prompt, encoding="utf-8")
-        _write_json(
-            pending / f"{paper.paper_id}.json",
-            {
-                "paper_id": paper.paper_id,
-                "model_id": label,
-                "holistic_mode": holistic_mode,
-                "holistic_samples": holistic_samples,
-                "packet_sha256": digest,
-                "prompt_file": f"pending/{paper.paper_id}.prompt.txt",
-            },
-        )
+    handoff_root: Path | None = None
+    exports: list[dict[str, str]] = []
+    if backend == "replay":
+        try:
+            assert_model_visible([label], what="replay directory")
+            handoff_root = _handoff_root(root, None if handoff_dir is None else Path(handoff_dir)) / label
+        except HandoffError as exc:
+            raise CvprTierError(str(exc)) from exc
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        for paper in manifest.papers:
+            handoff_id = handoff_ids[paper.paper_id]
+            try:
+                exported = export_replay_packet(
+                    handoff_root,
+                    handoff_id=handoff_id,
+                    prompt=prompts[paper.paper_id],
+                    packet_sha256=packet_sha[paper.paper_id],
+                    holistic_mode=holistic_mode,
+                    holistic_samples=holistic_samples,
+                )
+            except HandoffError as exc:
+                raise CvprTierError(str(exc)) from exc
+            exports.append(
+                {
+                    "directory": str(exported),
+                    "handoff_id": handoff_id,
+                    "paper_id": paper.paper_id,
+                }
+            )
     params = {
         "command_template": command_template,
         "adapter": adapter,
@@ -1004,30 +1514,30 @@ def run_model(
         "temperature": temperature if backend == "adapter" else None,
         "command_timeout": command_timeout if backend == "command" else None,
     }
-    _write_json(
-        directory / "manifest.json",
-        {
-            "model_id": label,
-            "backend": backend,
-            "holistic_mode": holistic_mode,
-            "holistic_samples": holistic_samples,
-            "params": params,
-            "sample_seed": manifest.seed,
-            "papers": [paper.paper_id for paper in manifest.papers],
-            "packet_sha256": packet_sha,
-        },
-    )
+    failure_log = directory / "failures.jsonl"
+    outcomes: dict[str, dict[str, Any]] = {}
+    cli_version = ""
+    cli_flags: list[str] = []
+    prompt_transport = "replay" if backend == "replay" else backend
     if backend == "command":
         if completion is not None:
             raise CvprTierError("command backend does not take a completion object")
-        _run_commands(
-            manifest.papers,
-            answers,
-            template=command_template or "",
-            model_id=label,
-            mode=holistic_mode,
-            timeout=command_timeout,
-        )
+        for paper in manifest.papers:
+            handoff_id = handoff_ids[paper.paper_id]
+            outcome = _command_paper(
+                template=command_template or "",
+                prompt=prompts[paper.paper_id],
+                handoff_id=handoff_id,
+                model_id=label,
+                mode=holistic_mode,
+                samples=holistic_samples,
+                timeout=command_timeout,
+                failure_log=failure_log,
+            )
+            outcomes[paper.paper_id] = outcome
+            cli_version = str(outcome.get("cli_version") or cli_version)
+            cli_flags = list(outcome.get("cli_flags") or cli_flags)
+            prompt_transport = str(outcome.get("prompt_transport") or prompt_transport)
     elif backend == "adapter":
         completer = completion
         if completer is None:
@@ -1047,100 +1557,178 @@ def run_model(
         scratch = directory / "scratch"
         scratch.mkdir(parents=True, exist_ok=True)
         for paper in manifest.papers:
-            answer_path = answers / f"{paper.paper_id}.json"
-            text = completer.complete(prompts[paper.paper_id], scratch / paper.paper_id)
-            answer_path.write_text(text, encoding="utf-8")
+            outcomes[paper.paper_id] = _adapter_paper(
+                completer,
+                prompt=prompts[paper.paper_id],
+                handoff_id=handoff_ids[paper.paper_id],
+                mode=holistic_mode,
+                samples=holistic_samples,
+                scratch=scratch,
+                failure_log=failure_log,
+            )
+        prompt_transport = "adapter"
+    else:
+        canaries = load_canaries(root)
+        state_path = directory / "parse_state.json"
+        state: dict[str, Any] = _read_json(state_path) if state_path.is_file() else {}
+        export_by_paper = {item["paper_id"]: item for item in exports}
+        for paper in manifest.papers:
+            handoff_id = handoff_ids[paper.paper_id]
+            exported = Path(export_by_paper[paper.paper_id]["directory"])
+            if not (exported / "answer.json").is_file() and not (exported / "answer.txt").is_file():
+                outcomes[paper.paper_id] = {
+                    "awaiting": True,
+                    "latency_seconds": None,
+                    "parsed": False,
+                    "retries": 0,
+                    "usage": None,
+                }
+                continue
+            record = state.get(handoff_id) or {"attempts": 0}
+            if int(record.get("attempts") or 0) >= 2:
+                outcomes[paper.paper_id] = {
+                    "error": "parse retry already used",
+                    "latency_seconds": None,
+                    "parsed": False,
+                    "retries": 1,
+                    "usage": None,
+                }
+                continue
+            try:
+                text = import_replay_answer(
+                    exported,
+                    handoff_id=handoff_id,
+                    packet_sha256=packet_sha[paper.paper_id],
+                    canaries=canaries,
+                )
+            except HandoffError as exc:
+                outcomes[paper.paper_id] = {
+                    "error": str(exc),
+                    "latency_seconds": None,
+                    "parsed": False,
+                    "retries": 0,
+                    "usage": None,
+                }
+                continue
+            record["attempts"] = int(record.get("attempts") or 0) + 1
+            state[handoff_id] = record
+            try:
+                verdict = parse_verdict(holistic_mode, text, samples=holistic_samples)
+            except CvprTierError as exc:
+                _append_jsonl(
+                    failure_log,
+                    {
+                        "attempt": record["attempts"],
+                        "error": str(exc),
+                        "handoff_id": handoff_id,
+                        "kind": "parse",
+                    },
+                )
+                outcomes[paper.paper_id] = {
+                    "error": str(exc),
+                    "latency_seconds": None,
+                    "parsed": False,
+                    "retries": max(0, int(record["attempts"]) - 1),
+                    "text": text,
+                    "usage": None,
+                }
+                continue
+            outcomes[paper.paper_id] = {
+                "latency_seconds": None,
+                "parsed": True,
+                "retries": max(0, int(record["attempts"]) - 1),
+                "text": text,
+                "usage": None,
+                "verdict": verdict,
+            }
+        _write_json(state_path, state)
     awaiting: list[str] = []
     errors: list[dict[str, str]] = []
     done: list[str] = []
+    usage_rows: list[dict[str, Any]] = []
     for paper in manifest.papers:
-        answer_path = _answer_path(answers, paper.paper_id)
-        if answer_path is None:
-            awaiting.append(paper.paper_id)
+        handoff_id = handoff_ids[paper.paper_id]
+        outcome = outcomes[paper.paper_id]
+        usage_rows.append(_usage_row(handoff_id, prompts[paper.paper_id], outcome))
+        if outcome.get("sentinel") is not None:
+            _write_json(directory / "sentinel" / f"{handoff_id}.json", outcome["sentinel"])
+        if outcome.get("text"):
+            (answers / f"{handoff_id}.json").write_text(outcome["text"], encoding="utf-8")
+        if outcome.get("awaiting"):
+            awaiting.append(handoff_id)
             continue
-        try:
-            verdict = parse_verdict(
-                holistic_mode,
-                read_judgment_text(root, answer_path),
-                samples=holistic_samples,
+        if not outcome.get("parsed"):
+            errors.append(
+                {
+                    "error": str(outcome.get("error") or "parse failed"),
+                    "handoff_id": handoff_id,
+                    "paper_id": paper.paper_id,
+                }
             )
-        except CvprTierError as exc:
-            errors.append({"paper_id": paper.paper_id, "error": str(exc)})
             continue
+        verdict = outcome["verdict"]
         _write_json(
-            parsed / f"{paper.paper_id}.json",
+            parsed / f"{handoff_id}.json",
             {
-                "paper_id": paper.paper_id,
-                "model_id": label,
+                "handoff_id": handoff_id,
                 "holistic_mode": holistic_mode,
-                "score": verdict["score"],
+                "model_id": label,
+                "packet_sha256": packet_sha[paper.paper_id],
+                "paper_id": paper.paper_id,
                 "predicted_tier": verdict["predicted_tier"],
+                "rank_samples_used": verdict["rank_samples_used"],
                 "rank_source": verdict["rank_source"],
                 "sample_ranks": verdict["sample_ranks"],
-                "rank_samples_used": verdict["rank_samples_used"],
-                "packet_sha256": packet_sha[paper.paper_id],
+                "score": verdict["score"],
             },
         )
         done.append(paper.paper_id)
+    _write_json(
+        directory / "usage.json",
+        {
+            "backend": backend,
+            "cli_flags": cli_flags,
+            "cli_version": cli_version,
+            "model_id": label,
+            "model_version": cli_version or None,
+            "papers": usage_rows,
+            "prompt_transport": prompt_transport,
+            "retry_max": 1,
+            "set_id": set_id,
+            "variant": variant,
+        },
+    )
+    _write_json(
+        directory / "manifest.json",
+        {
+            "backend": backend,
+            "cli_flags": cli_flags,
+            "cli_version": cli_version,
+            "exports": exports,
+            "handoff_dir": None if handoff_root is None else str(handoff_root),
+            "handoff_ids": handoff_ids,
+            "holistic_mode": holistic_mode,
+            "holistic_samples": holistic_samples,
+            "model_id": label,
+            "model_version": cli_version or None,
+            "packet_sha256": packet_sha,
+            "papers": [paper.paper_id for paper in manifest.papers],
+            "params": params,
+            "prompt_transport": prompt_transport,
+            "sample_seed": manifest.seed,
+            "set_id": set_id,
+            "variant": variant,
+        },
+    )
     return {
-        "model_id": label,
-        "backend": backend,
         "awaiting_judgment": awaiting,
+        "backend": backend,
         "errors": errors,
+        "handoff_dir": None if handoff_root is None else str(handoff_root),
+        "model_id": label,
         "parsed": done,
+        "prompt_transport": prompt_transport,
     }
-
-
-def _answer_path(answers: Path, paper_id: str) -> Path | None:
-    for suffix in (".json", ".txt"):
-        path = answers / f"{paper_id}{suffix}"
-        if path.is_file() and path.stat().st_size > 0:
-            return path
-    return None
-
-
-def _run_commands(
-    papers: list[SamplePaper],
-    answers: Path,
-    *,
-    template: str,
-    model_id: str,
-    mode: str,
-    timeout: float,
-) -> None:
-    for paper in papers:
-        answer_path = answers / f"{paper.paper_id}.json"
-        prompt_path = answer_path.parent.parent / "pending" / f"{paper.paper_id}.prompt.txt"
-        argv = render_command(
-            template,
-            {
-                "prompt_file": str(prompt_path),
-                "answer_file": str(answer_path),
-                "model": model_id,
-                "paper_id": paper.paper_id,
-                "mode": mode,
-            },
-        )
-        try:
-            completed = subprocess.run(
-                argv,
-                check=False,
-                capture_output=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise CvprTierError(f"command timed out for {paper.paper_id}") from exc
-        except OSError as exc:
-            raise CvprTierError(f"command failed to start: {exc}") from exc
-        if answer_path.is_file() and answer_path.stat().st_size > 0:
-            continue
-        if completed.returncode != 0:
-            detail = completed.stderr.decode("utf-8", "replace")[:500]
-            raise CvprTierError(f"command exited {completed.returncode} for {paper.paper_id}: {detail}")
-        stdout = completed.stdout.decode("utf-8", "replace")
-        if not stdout.strip():
-            raise CvprTierError(f"command wrote no answer for {paper.paper_id}")
-        answer_path.write_text(stdout, encoding="utf-8")
 
 
 def _interval(values: list[float]) -> tuple[float | None, float | None]:
@@ -1333,25 +1921,133 @@ def _load_parsed(cache: Path) -> dict[str, tuple[dict[str, Any], list[dict[str, 
     return found
 
 
+def _report_labels(
+    root: Path,
+    set_id: str | None,
+    *,
+    confirm: bool,
+    lock_path: Path | None,
+    custody: Path | None,
+) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """Operator-side labels. A sealed set is read once, from the custody directory."""
+    material = _material_root(root, set_id)
+    if not set_id:
+        if confirm or lock_path is not None or custody is not None:
+            raise CvprTierError("--confirm --lock --custody requires --set")
+        labels_path = root / "heldout" / "tiers.json"
+        if not labels_path.is_file():
+            raise CvprTierError("heldout/tiers.json is missing; run fetch first")
+        labels = HeldoutTiers.model_validate(_read_json(labels_path)).papers
+        return labels, None
+    from .cvpr_sets import (
+        SetError,
+        assert_not_opened,
+        ensure_cache_registry,
+        find_set,
+        load_lock,
+        verify_label_hash,
+        verify_lock_for_run,
+    )
+
+    try:
+        spec = find_set(ensure_cache_registry(root), set_id)
+        if spec.status == "opened":
+            if confirm or lock_path is not None or custody is not None:
+                raise CvprTierError("report --confirm already opened this set")
+        elif spec.status == "sealed":
+            if not confirm or lock_path is None or custody is None:
+                raise CvprTierError("sealed set report requires --confirm --lock --custody")
+            assert_not_opened(custody, set_id)
+            lock = load_lock(lock_path)
+            sample = _load_sample(root, set_id)
+            verify_lock_for_run(
+                lock,
+                spec,
+                holistic_mode=str((lock.get("task") or {}).get("holistic_mode") or ""),
+                holistic_samples=int((lock.get("task") or {}).get("k") or 0),
+                member_ids=[paper.paper_id for paper in sample.papers],
+            )
+            labels_path = custody / set_id / "tiers.json"
+            if not labels_path.is_file():
+                raise CvprTierError("custody tiers.json is missing")
+            verify_label_hash(lock, spec, labels_path)
+            labels = HeldoutTiers.model_validate(_read_json(labels_path)).papers
+            return labels, {"custody": custody, "lock": lock}
+        if confirm or lock_path is not None or custody is not None:
+            raise CvprTierError("--confirm --lock --custody is only for a sealed set")
+    except SetError as exc:
+        raise CvprTierError(str(exc)) from exc
+    labels_path = material / "heldout" / "tiers.json"
+    if not labels_path.is_file():
+        raise CvprTierError("heldout/tiers.json is missing; run fetch first")
+    labels = HeldoutTiers.model_validate(_read_json(labels_path)).papers
+    return labels, None
+
+
+def _mark_report_opened(root: Path, set_id: str, seal: dict[str, Any], report_path: Path) -> None:
+    from .cvpr_sets import (
+        SetError,
+        ensure_cache_registry,
+        find_set,
+        mark_opened,
+        save_cache_registry,
+        transition,
+    )
+    from .hashing import sha256_file
+
+    try:
+        mark_opened(
+            seal["custody"],
+            set_id,
+            {
+                "lock_sha256": seal["lock"].get("sha256"),
+                "report_sha256": sha256_file(report_path),
+                "set_id": set_id,
+            },
+        )
+        registry = ensure_cache_registry(root)
+        spec = find_set(registry, set_id)
+        if spec.status == "sealed":
+            transition(spec, "opened")
+            save_cache_registry(root, registry)
+    except SetError as exc:
+        raise CvprTierError(str(exc)) from exc
+
+
 def write_report(
     cache: Path,
     output: Path,
     *,
     resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
+    set_id: str | None = None,
+    confirm: bool = False,
+    lock_path: Path | None = None,
+    custody: Path | None = None,
 ) -> dict[str, Any]:
     """Join parsed scores to heldout tiers and compare models. Does not fit a weight."""
     root = _cache(cache)
     destination = assert_local_only(output)
-    labels_path = root / "heldout" / "tiers.json"
-    if not labels_path.is_file():
-        raise CvprTierError("heldout/tiers.json is missing; run fetch first")
-    labels = HeldoutTiers.model_validate(_read_json(labels_path)).papers
-    sample_path = root / "sample_manifest.json"
+    material = _material_root(root, set_id)
+    labels, seal = _report_labels(
+        root,
+        set_id,
+        confirm=confirm,
+        lock_path=None if lock_path is None else Path(lock_path),
+        custody=None if custody is None else Path(custody),
+    )
+    sample_path = material / "sample_manifest.json"
     sample = SampleManifest.model_validate(_read_json(sample_path)) if sample_path.is_file() else None
-    runs = _load_parsed(root)
+    runs = _load_parsed(material)
     if not runs:
         raise CvprTierError("no parsed model runs are in the cache")
+    if seal is not None:
+        task = seal["lock"].get("task") or {}
+        for manifest, _rows in runs.values():
+            if manifest.get("holistic_mode") != task.get("holistic_mode"):
+                raise CvprTierError("run holistic mode does not match the lock")
+            if int(manifest.get("holistic_samples") or 0) != int(task.get("k") or 0):
+                raise CvprTierError("run sample count does not match the lock")
     per_model: dict[str, Any] = {}
     joined: dict[str, list[dict[str, Any]]] = {}
     for model_id, (manifest, rows) in runs.items():
@@ -1379,6 +2075,7 @@ def write_report(
             }
     payload = {
         "report_only": True,
+        "set_id": set_id,
         "seed": None if sample is None else sample.seed,
         "n_per_tier": None if sample is None else sample.n_per_tier,
         "draws": None if sample is None else sample.draws,
@@ -1394,6 +2091,7 @@ def write_report(
         "The sample is accepted papers. It cannot measure accept versus reject.",
         "Oral, highlight, and poster labels are program decisions. Area chairs and program chairs assign them, so a tier is not a review score.",
         "",
+        f"Set: {set_id}." if set_id else "Set: legacy sample.",
         f"Sample seed: {payload['seed']}. Requested per tier: {payload['n_per_tier']}.",
         f"Bootstrap: {resamples} resamples, seed {seed}.",
         "",
@@ -1478,4 +2176,6 @@ def write_report(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(text, encoding="utf-8")
     _write_json(destination.with_suffix(".json"), payload)
+    if seal is not None and set_id is not None:
+        _mark_report_opened(root, set_id, seal, destination)
     return payload
