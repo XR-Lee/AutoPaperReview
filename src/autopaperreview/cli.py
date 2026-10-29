@@ -398,9 +398,20 @@ INIT_ADAPTERS = {
 }
 
 
-def _toml_string(value: str) -> str:
-    """A TOML basic string. JSON escapes are a subset of TOML basic-string escapes."""
-    return json.dumps(value, ensure_ascii=False)
+def _toml_basic_string(value: str) -> str:
+    """Quote ``value`` as a TOML basic string, escaping quotes, backslashes, and control characters."""
+    escaped: list[str] = []
+    for character in value:
+        code = ord(character)
+        if character in '"\\':
+            escaped.append("\\" + character)
+        elif code < 0x20 or code == 0x7F:
+            escaped.append(f"\\u{code:04X}")
+        elif 0xD800 <= code <= 0xDFFF:
+            raise ValueError("a TOML string cannot hold a lone surrogate")
+        else:
+            escaped.append(character)
+    return '"' + "".join(escaped) + '"'
 
 
 def command_init(args: argparse.Namespace) -> int:
@@ -455,8 +466,8 @@ def write_project(target: Path, *, project_id: str, title: str, adapter: str = "
         f'''schema_version = 1
 
 [project]
-id = {_toml_string(project_id)}
-title = {_toml_string(title)}
+id = {_toml_basic_string(project_id)}
+title = {_toml_basic_string(title)}
 source = "manuscript.txt"
 run_root = ".runs"
 default_language = "en"

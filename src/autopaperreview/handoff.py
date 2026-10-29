@@ -30,6 +30,7 @@ from .config import LoadedConfig, StageConfig, load_config
 from .hashing import sha256_file
 from .models import RunManifest, SarDimension, Severity, StageStatus, VisualFindingKind
 from .pipeline import (
+    RunLockedError,
     _atomic_write,
     adapter_waits_for_drop,
     awaiting_requests,
@@ -37,6 +38,7 @@ from .pipeline import (
     load_manifest,
     run_directory,
     run_is_locked,
+    run_lock,
 )
 from .rubrics import CLAUSES, RUBRIC_ID
 from .stages.base import StageContext
@@ -221,8 +223,11 @@ def run_status(config_path: str | Path, *, detail: bool = False) -> dict[str, An
             "next": NEXT_STEPS["not_started"],
         }
     statuses = {stage.status for stage in manifest.stages}
-    if StageStatus.running in statuses:
-        state = "running" if run_is_locked(run_dir) else "interrupted"
+    if run_is_locked(run_dir):
+        # Between stages every record may read success while the run still rewrites the manifest.
+        state = "running"
+    elif StageStatus.running in statuses:
+        state = "interrupted"
     elif StageStatus.failed in statuses:
         state = "failed"
     elif StageStatus.awaiting_input in statuses:
@@ -442,7 +447,7 @@ def _check_review(context: StageContext, candidate: Path) -> dict[str, Any]:
 
 
 def _check_visual(context: StageContext, candidate: Path) -> dict[str, Any]:
-    from .stages.visual_stage import VisualInspectParams, _manifest_from, _request
+    from .stages.visual_stage import VisualInspectParams, _manifest_from, _request, check_page_finding
     from .visual import load_visual_inspector
 
     params = VisualInspectParams.model_validate(context.stage.params)
@@ -452,7 +457,12 @@ def _check_visual(context: StageContext, candidate: Path) -> dict[str, Any]:
     pages = pages_manifest.get("pages", [])
     if params.require_pages_seen and hasattr(inspector, "assert_pages_seen"):
         inspector.assert_pages_seen([str(item.get("page_id") or item["page"]) for item in pages])
-    found = sum(len(inspector.inspect(_request(item, page_dir), context.stage_dir)) for item in pages)
+    by_sha = {item["sha256"]: item for item in pages}
+    found = 0
+    for item in pages:
+        for finding in inspector.inspect(_request(item, page_dir), context.stage_dir):
+            check_page_finding(finding, by_sha)
+            found += 1
     return {"page_count": len(pages), "finding_count": found}
 
 
@@ -483,8 +493,10 @@ def submit_drop(
     """Check one agent drop and write it to its declared path.
 
     The check is the one the stage runs: packet digests, schema, the seven
-    dimensions, and, with ``verify_excerpts``, quoted spans. A rejected drop is
-    not written. A drop that passes replaces any earlier drop at that path.
+    dimensions, and, with ``verify_excerpts``, quoted spans; for visual
+    findings, the page hash, number, and id. A rejected drop is not written.
+    A drop that passes replaces any earlier drop at that path. The run lock is
+    held from the check to the write.
     """
     loaded = load_config(config_path)
     run_dir = run_directory(loaded)
@@ -492,8 +504,21 @@ def submit_drop(
     slot = _select_slot(loaded, manifest, stage_id=stage_id, kind=kind)
     if manifest is None:
         raise HandoffError("the project has not run yet; call run so the stage can say what it needs")
-    if run_is_locked(run_dir):
-        raise HandoffError("a run is in progress; submit the drop after it finishes")
+    try:
+        # Hold the run lock so a run cannot start between the check and the write.
+        with run_lock(run_dir):
+            return _submit_locked(loaded, load_manifest(run_dir / "run_manifest.json"), run_dir, slot, drop)
+    except RunLockedError as exc:
+        raise HandoffError("a run is in progress; submit the drop after it finishes") from exc
+
+
+def _submit_locked(
+    loaded: LoadedConfig,
+    manifest: RunManifest,
+    run_dir: Path,
+    slot: DropSlot,
+    drop: dict[str, Any] | str,
+) -> dict[str, Any]:
     target = loaded.resolve(slot.drop_path).resolve()
     if target == loaded.path:
         raise HandoffError("the declared drop path is the review config itself")
@@ -512,6 +537,10 @@ def submit_drop(
         if "the manuscript changed after the last run" in changes:
             raise HandoffError("the manuscript changed after the last run; call run first so the packets are current")
     scratch = run_dir / ".attempts" / f"submit-{slot.stage.id}-{uuid.uuid4().hex[:8]}"
+    context = None
+    if slot.kind in {"review_judgment", "visual_findings"}:
+        # A missing dependency is a state error for the caller, not a fault in the drop.
+        context = _context(loaded, manifest, run_dir, slot.stage, scratch / "stage")
     scratch.mkdir(parents=True)
     summary: dict[str, Any] = {}
     try:
@@ -519,9 +548,9 @@ def submit_drop(
         candidate.write_text(text, encoding="utf-8")
         try:
             if slot.kind == "review_judgment":
-                summary = _check_review(_context(loaded, manifest, run_dir, slot.stage, scratch / "stage"), candidate)
+                summary = _check_review(context, candidate)
             elif slot.kind == "visual_findings":
-                summary = _check_visual(_context(loaded, manifest, run_dir, slot.stage, scratch / "stage"), candidate)
+                summary = _check_visual(context, candidate)
             elif slot.kind == "related_work_findings":
                 summary, warnings = _check_related_findings(candidate)
             else:

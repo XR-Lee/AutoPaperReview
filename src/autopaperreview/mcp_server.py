@@ -319,12 +319,20 @@ class Server:
         if missing:
             raise ToolError(f"missing arguments for {tool.name}: {missing}")
         for key, value in arguments.items():
-            expected = properties[key].get("type")
+            schema = properties[key]
+            expected = schema.get("type")
             kinds = {"string": str, "boolean": bool, "integer": int, "object": dict}
             if expected in kinds and not isinstance(value, kinds[expected]):
                 raise ToolError(f"{key} must be a {expected}")
-            if expected == "integer" and isinstance(value, bool):
-                raise ToolError(f"{key} must be an integer")
+            if expected == "integer":
+                if isinstance(value, bool):
+                    raise ToolError(f"{key} must be an integer")
+                if "minimum" in schema and value < schema["minimum"]:
+                    raise ToolError(f"{key} must be at least {schema['minimum']}")
+                if "maximum" in schema and value > schema["maximum"]:
+                    raise ToolError(f"{key} must be at most {schema['maximum']}")
+            if "enum" in schema and value not in schema["enum"]:
+                raise ToolError(f"{key} must be one of {schema['enum']}")
 
     def _result(
         self,

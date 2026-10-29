@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .adapters import digest_packet_text, load_review_adapter
 from .anchors import HOLISTIC_MODES, LOCKED_HOLISTIC_MODE, LOCKED_HOLISTIC_SAMPLES
-from .pipeline import PipelineError, run_pipeline
+from .pipeline import PipelineError, awaiting_requests, run_pipeline
 from .rating import snap_down
 from .rubrics import COEFFICIENT_SET, ICLR_BINS
 
@@ -1540,6 +1540,12 @@ def run_cache(
                 holistic_mode=holistic_mode,
             )
             manifest = run_pipeline(project / "review.toml")
+            waiting = awaiting_requests(manifest)
+            if waiting:
+                raise PublicCalibrationError(
+                    "stages are waiting for agent drops: "
+                    + ", ".join(f"{item.get('stage_id')} ({item.get('drop_path')})" for item in waiting)
+                )
             package_path = project / ".runs" / manifest.run_id / "stages" / "rate" / "package.json"
             package = json.loads(package_path.read_text(encoding="utf-8"))
             overall = package.get("overall_score") or {}

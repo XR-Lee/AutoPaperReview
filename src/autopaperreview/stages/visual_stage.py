@@ -154,6 +154,20 @@ class FormatCheckParams(ParamsModel):
     profile: str = "iclr2027"
 
 
+def check_page_finding(finding: VisualFinding, by_sha: dict[str, dict[str, Any]]) -> None:
+    """A finding must name a rendered page by hash, page number, and page id, and not repeat the caption."""
+    if finding.page_image_sha256 not in by_sha:
+        raise ValueError(f"visual finding {finding.id} page hash is not in the render manifest")
+    record = by_sha[finding.page_image_sha256]
+    record_id = str(record.get("page_id") or record["page"])
+    if int(record["page"]) != finding.page:
+        raise ValueError(f"visual finding {finding.id} page does not match the image hash")
+    if finding.page_id and finding.page_id != record_id:
+        raise ValueError(f"visual finding {finding.id} page id does not match the image hash")
+    if finding_matches_caption(finding):
+        raise ValueError(f"visual finding {finding.id} repeats the caption")
+
+
 def _manifest_from(context: StageContext) -> tuple[dict[str, Any], Path]:
     for stage_id in context.stage.depends_on:
         stage_dir = context.dependency_dir(stage_id)
@@ -325,18 +339,7 @@ class VisualInspectStage(StageHandler):
                     context.stage_dir,
                 )
                 for finding in request_findings:
-                    if finding.page_image_sha256 not in by_sha:
-                        raise ValueError(
-                            f"visual finding {finding.id} page hash is not in the render manifest"
-                        )
-                    record = by_sha[finding.page_image_sha256]
-                    record_id = str(record.get("page_id") or record["page"])
-                    if int(record["page"]) != finding.page:
-                        raise ValueError(f"visual finding {finding.id} page does not match the image hash")
-                    if finding.page_id and finding.page_id != record_id:
-                        raise ValueError(f"visual finding {finding.id} page id does not match the image hash")
-                    if finding_matches_caption(finding):
-                        raise ValueError(f"visual finding {finding.id} repeats the caption")
+                    check_page_finding(finding, by_sha)
                     findings.append(finding)
             status = getattr(inspector, "status", None) or ("checked" if findings or params.adapter else "unchecked")
         package = ReviewPackage(

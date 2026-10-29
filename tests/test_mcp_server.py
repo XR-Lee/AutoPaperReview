@@ -138,6 +138,9 @@ class ReviewLoopTests(unittest.TestCase):
             page = client.call("read_input", {"config": config, "path": packet["path"], "max_chars": 1000})
             self.assertEqual(page["structuredContent"]["next_offset"], 1000)
             self.assertEqual(len(page["content"][0]["text"]), 1000)
+            for bad in ({"offset": -100}, {"max_chars": 5}, {"max_chars": 10**9}):
+                refused = client.call("read_input", {"config": config, "path": packet["path"], **bad})
+                self.assertTrue(refused["isError"], bad)
             rest = client.call("read_input", {"config": config, "path": packet["path"], "offset": 1000})
             self.assertIsNone(rest["structuredContent"]["next_offset"])
             outside = client.call("read_input", {"config": config, "path": str(root / "paper.txt")})

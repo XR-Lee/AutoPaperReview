@@ -165,17 +165,12 @@ def _source_artifact(loaded: LoadedConfig, source_path: Path) -> Artifact:
     )
 
 
-def _run_id(loaded: LoadedConfig, source: Artifact) -> str:
-    """Stable directory for one project.
+def run_directory(loaded: LoadedConfig) -> Path:
+    """Stable directory for one project: ``<run_root>/<project id>``.
 
     Source and config hashes are not part of the directory name. A stage reruns
     only when its own signature changes.
     """
-    del source
-    return loaded.config.project.id
-
-
-def run_directory(loaded: LoadedConfig) -> Path:
     return loaded.resolve(loaded.config.project.run_root) / loaded.config.project.id
 
 
@@ -379,7 +374,7 @@ def run_pipeline(
 
     source_path = loaded.resolve(loaded.config.project.source)
     source = _source_artifact(loaded, source_path)
-    run_dir = loaded.resolve(loaded.config.project.run_root) / _run_id(loaded, source)
+    run_dir = run_directory(loaded)
     run_dir.mkdir(parents=True, exist_ok=True)
     with run_lock(run_dir):
         return _run_locked(

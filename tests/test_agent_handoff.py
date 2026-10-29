@@ -165,6 +165,30 @@ class SubmitDropTests(unittest.TestCase):
                 with self.assertRaisesRegex(HandoffError, "in progress"):
                     submit_drop(config, drop)
 
+    def test_an_unmet_dependency_is_a_state_error_not_a_rejected_drop(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = agent_project(Path(temporary))
+            run_pipeline(config)
+            drop = judgment_for(run_status(config))
+            manifest_path = run_directory(load_config(config)) / "run_manifest.json"
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for stage in raw["stages"]:
+                if stage["id"] == "prompt_packets":
+                    stage["status"] = "failed"
+            manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(HandoffError, "prompt_packets has not succeeded"):
+                submit_drop(config, drop)
+
+    def test_status_reports_running_while_the_lock_is_held(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = agent_project(Path(temporary))
+            run_pipeline(config)
+            submit_drop(config, judgment_for(run_status(config)))
+            run_pipeline(config)
+            self.assertEqual(run_status(config)["state"], "complete")
+            with run_lock(run_directory(load_config(config))):
+                self.assertEqual(run_status(config)["state"], "running")
+
     def test_submit_before_any_run_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config = agent_project(Path(temporary))
@@ -206,6 +230,14 @@ class InitTests(unittest.TestCase):
             loaded = load_config(project / "review.toml")
             self.assertEqual(loaded.config.project.title, title)
             self.assertEqual(loaded.config.project.network_policy.value, "deny")
+
+    def test_control_characters_and_backslashes_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            title = "tab\there, back\\slash, delete\x7f, bell\x07"
+            write_project(Path(temporary) / "paper", project_id="controls", title=title)
+            self.assertEqual(load_config(Path(temporary) / "paper" / "review.toml").config.project.title, title)
+            with self.assertRaisesRegex(ValueError, "surrogate"):
+                write_project(Path(temporary) / "other", project_id="surrogate", title="bad \ud800")
 
     def test_project_id_is_checked(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -318,6 +350,18 @@ class VisualAwaitingTests(unittest.TestCase):
             self.assertTrue(Path(page["absolute_path"]).is_file())
             self.assertEqual(request["template"]["drop"]["pages_seen"], [page["id"]])
             self.assertEqual(submit_drop(config, {"pages_seen": [], "findings": []})["status"], "rejected")
+            wrong_page = {
+                "id": "V1",
+                "page": 2,
+                "page_id": page["id"],
+                "bbox": [10, 10, 50, 50],
+                "page_image_sha256": page["sha256"],
+                "kind": "axis_legend",
+                "visible_mark": "a line of text near the middle of the page",
+            }
+            result = submit_drop(config, {"pages_seen": [page["id"]], "findings": [wrong_page]})
+            self.assertEqual(result["status"], "rejected")
+            self.assertIn("page does not match the image hash", result["errors"][0])
             result = submit_drop(config, {"pages_seen": [page["id"]], "findings": []})
             self.assertEqual(result["status"], "accepted")
             self.assertEqual(run_pipeline(config).stage("inspect").status, StageStatus.success)
