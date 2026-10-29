@@ -284,7 +284,8 @@ class CommandParams(ParamsModel):
     command: list[str] = Field(min_length=1)
     cwd: str | None = None
     outputs: list[str] = Field(default_factory=list)
-    timeout_seconds: int = Field(default=900, ge=1)
+    # Same floor as a model call, so a local model CLI is not cut off at 15 minutes.
+    timeout_seconds: int = Field(default=int(DEFAULT_MODEL_TIMEOUT_SECONDS), ge=1)
     allowed_return_codes: list[int] = Field(default_factory=lambda: [0])
     requires_network: bool = False
     network_scope: str = "fulltext"
@@ -1582,6 +1583,7 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
+                "reuse_prior_exchanges": not context.force,
                 "stage_signature": (
                     context.manifest.stage(context.stage.id).signature
                     if context.manifest.stage(context.stage.id) is not None

@@ -112,7 +112,7 @@ autopaperreview init reviews/my-paper --project-id my-paper --title "My paper re
    - 密钥放在环境变量里，默认是 `APR_MODEL_API_KEY`。APR 不会把它写进 TOML、请求日志或阶段签名。
    - `network_policy` 为 `deny` 时，仍然可以连本机回环地址上的服务。连远程主机则要设 `allow_remote = true`、`requires_network = true` 和 `network_policy = "allow"`，运行清单随后会记下稿件离开了这台机器。
    - `base_url` 填 API 根路径（`…/v1`）；密钥不要放进 URL 的查询字符串。
-   - 模型超时默认 900 秒。
+   - 模型超时默认 7200 秒。
 
 ```toml
 [project]
@@ -507,7 +507,7 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 - 表里的数字来自一次只算排序分的 forecast 调用，不衡量写出来的审稿、维度分数、致命标签或带批注的 PDF。和人类评分比较的也不是决策档对应的会议评分。完整审稿比「美元 / 篇」那一列贵得多。
 - 十五篇论文、一次 Opus 超时、自助法区间大约从 0.4 到 1.0，这意味着 Spearman 差 0.02 算不上结论。
 - 用 Opus 和 Grok 时，APR 的分数都低于人类均分。
-- 按记录的 effort，Opus 每篇大约 0.66 美元、要几分钟，还可能超时。默认预算是 900 秒。
+- 按记录的 effort，Opus 每篇大约 0.66 美元、要几分钟。那张表里有一次调用超时。模型调用的默认预算是 7200 秒。
 - `forecast-k1` 没有摘录检查。致命问题核验和维度分数是真实输出，但排序分和人类评分相关，并不是靠这两项。
 - 在这份留出集上，Spearman 更高的是 Opus 上的 OpenJudge；到了 tune-30，这个领先就不成立了。见 [消融说明了什么](#ablations)。
 - GPT-6 Astra 上，APR 的 Spearman 和 AUC 都高于 OpenJudge，但 n=15 的区间重叠，这个领先只说明方向。见 [评分与基准](#track-b)。

@@ -434,6 +434,48 @@ class ClosedLoopTests(unittest.TestCase):
             self.assertFalse((run_dir / "stages" / "review" / "package.json").exists())
             _assert_secret_absent(run_dir)
 
+    def test_timeout_rerun_replays_the_finished_judgment(self) -> None:
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            if _judgment_name(payload) == "ledger":
+                raise TimeoutError("synthetic silence")
+            return _chat(_contribution())
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(
+                workspace,
+                base_url=server.base_url,
+                judgments=["contributions", "ledger"],
+            )
+            with mock.patch.dict(os.environ, {"APR_MODEL_API_KEY": SECRET}):
+                with self.assertRaises(PipelineError) as first:
+                    run_pipeline(config)
+                self.assertIn("ledger", str(first.exception))
+                self.assertEqual(server.counts["contributions"], 1)
+                self.assertEqual(server.counts["ledger"], 3)
+                with self.assertRaises(PipelineError):
+                    run_pipeline(config)
+                self.assertEqual(server.counts["contributions"], 1)
+                self.assertEqual(server.counts["ledger"], 6)
+                manifest = json.loads(
+                    (workspace / ".runs" / "synthetic-model-review" / "run_manifest.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                review = next(stage for stage in manifest["stages"] if stage["id"] == "review")
+                reused = [
+                    row["judgment"]
+                    for row in review["metadata"]["model_exchanges"]
+                    if row.get("reused_prior_exchange")
+                ]
+                self.assertEqual(reused, ["contributions"])
+                ingest = next(stage for stage in manifest["stages"] if stage["id"] == "ingest")
+                self.assertEqual(ingest["status"], "skipped")
+                self.assertTrue(ingest["metadata"]["cache_hit"])
+                with self.assertRaises(PipelineError):
+                    run_pipeline(config, force=True)
+                self.assertEqual(server.counts["contributions"], 2)
+
     def test_retry_accepts_the_corrected_json(self) -> None:
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
             del payload
@@ -3083,6 +3125,45 @@ class ForecastPanelTests(unittest.TestCase):
             assert review is not None
             self.assertEqual(max(row["attempt"] for row in review.metadata["model_exchanges"]), 2)
 
+
+class TimeoutDefaultTests(unittest.TestCase):
+    def test_model_call_defaults_are_at_least_two_hours(self) -> None:
+        from autopaperreview.cli import build_parser
+        from autopaperreview.cvpr_tier import OpenAIChatCompletion
+        from autopaperreview.model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
+        from autopaperreview.stages.builtin import CommandParams
+        from autopaperreview.stages.related_work_stage import RelatedWorkSearchParams
+        from autopaperreview.stages.visual_stage import VisualInspectParams
+
+        self.assertGreaterEqual(DEFAULT_MODEL_TIMEOUT_SECONDS, 7200)
+        self.assertEqual(
+            VisualInspectParams().timeout_seconds,
+            DEFAULT_MODEL_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(VisualInspectParams(timeout_seconds=15).timeout_seconds, 15)
+        self.assertEqual(
+            RelatedWorkSearchParams().timeout_seconds,
+            DEFAULT_MODEL_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(RelatedWorkSearchParams(timeout_seconds=15).timeout_seconds, 15)
+        self.assertGreaterEqual(CommandParams(command=["true"]).timeout_seconds, 7200)
+        self.assertEqual(CommandParams(command=["true"], timeout_seconds=30).timeout_seconds, 30)
+        completion = OpenAIChatCompletion(base_url="http://127.0.0.1:9/v1", model="synthetic")
+        self.assertGreaterEqual(completion.timeout_seconds, 7200)
+        args = build_parser().parse_args(
+            [
+                "calibrate-eval",
+                "cvpr-tier",
+                "run",
+                "--cache",
+                "cache",
+                "--model-id",
+                "synthetic",
+                "--backend",
+                "replay",
+            ]
+        )
+        self.assertGreaterEqual(args.command_timeout, 7200)
 
 class tempfile_dir:
     def __enter__(self) -> Path:
