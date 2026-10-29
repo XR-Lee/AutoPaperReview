@@ -140,7 +140,13 @@ def load_allowlist(path: Path) -> set[str]:
 
 
 def tracked_files(root: Path) -> list[Path]:
-    output = subprocess.check_output(["git", "ls-files", "-z"], cwd=root)
+    try:
+        output = subprocess.check_output(["git", "ls-files", "-z"], cwd=root)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(
+            f"check_confidentiality: cannot list tracked files with git ({type(exc).__name__}). "
+            "Run inside a git checkout with git installed, or pass --root DIR to scan a directory."
+        ) from exc
     return [root / part.decode("utf-8") for part in output.split(b"\0") if part]
 
 

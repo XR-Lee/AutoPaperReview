@@ -1,0 +1,87 @@
+{
+  "protocol": "cvpr-tier-lock-v1",
+  "version": 1,
+  "sets": [
+    {
+      "exclude": [],
+      "expect_available": null,
+      "id": "S24-P",
+      "id_list_sha256": "81b04fa5031fcc594d0074702c8280d855f36c40835d05969205a26cdb04d29f",
+      "id_list_source": "benchmarks/cvpr_tier/pilot_2024_50/manifest.json#pilot.paper_ids",
+      "notes": "Pilot 50. Dev half D-a. Results were already inspected. Quotas 13/17/20, seed 20261029.",
+      "quotas": {
+        "highlight": 17,
+        "oral": 13,
+        "poster": 20
+      },
+      "role": "dev",
+      "seed": 20261029,
+      "status": "dev",
+      "year": 2024
+    },
+    {
+      "exclude": [
+        "S24-P"
+      ],
+      "expect_available": null,
+      "id": "S24-C1",
+      "id_list_sha256": "82c6672999cc6d452c3b074ab3b017bba3ee7a0cb199d75c58ceac440b5b0a17",
+      "id_list_source": "benchmarks/cvpr_tier/pilot_2024_50/manifest.json#confirmation.paper_ids",
+      "notes": "Existing confirmation sample of 120 papers. Sealed. The id list stays in the pilot manifest; this registry stores its hash.",
+      "quotas": {
+        "highlight": 40,
+        "oral": 30,
+        "poster": 50
+      },
+      "role": "confirm",
+      "seed": 20261030,
+      "status": "sealed",
+      "year": 2024
+    },
+    {
+      "exclude": [
+        "S24-P",
+        "S24-C1"
+      ],
+      "expect_available": {
+        "highlight": 267,
+        "oral": 47,
+        "poster": 2224
+      },
+      "id": "S24-D2",
+      "id_list_sha256": null,
+      "id_list_source": null,
+      "notes": "Dev half D-b. Quotas 15/15/20, seed 20261031. Draw excludes S24-P and S24-C1. Membership is not drawn in this change.",
+      "quotas": {
+        "highlight": 15,
+        "oral": 15,
+        "poster": 20
+      },
+      "role": "dev",
+      "seed": 20261031,
+      "status": "dev",
+      "year": 2024
+    },
+    {
+      "exclude": [
+        "S24-P",
+        "S24-C1",
+        "S24-D2"
+      ],
+      "expect_available": null,
+      "id": "S24-C2",
+      "id_list_sha256": null,
+      "id_list_source": null,
+      "notes": "Sealed confirmation extension. Quotas 30/40/50, seed 20261032. Excludes S24-P, S24-C1, and S24-D2. Not drawn. When a membership exists, commit only the id-list hash.",
+      "quotas": {
+        "highlight": 40,
+        "oral": 30,
+        "poster": 50
+      },
+      "role": "confirm",
+      "seed": 20261032,
+      "status": "sealed",
+      "year": 2024
+    }
+  ]
+}

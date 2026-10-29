@@ -178,11 +178,19 @@ def assert_local_only(path: Path, *, root: Path | None = None) -> Path:
     relative = resolved.relative_to(checkout)
     if relative.parts and relative.parts[0] in LOCAL_CACHE_PREFIXES:
         return resolved
-    completed = subprocess.run(
-        ["git", "-C", str(checkout), "check-ignore", "-q", "--", str(resolved)],
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(checkout), "check-ignore", "-q", "--", str(resolved)],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        # Fail closed: without git, a tracked path cannot be told from an ignored one.
+        raise PublicCalibrationError(
+            f"{resolved} is inside the repository and git is unavailable to confirm it is gitignored "
+            f"({type(exc).__name__}). Write the cache and the report under workdir/ (or another gitignored "
+            "review directory), not into the checkout."
+        ) from exc
     if completed.returncode == 0:
         return resolved
     raise PublicCalibrationError(

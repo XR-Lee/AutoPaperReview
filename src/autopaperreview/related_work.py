@@ -6,6 +6,9 @@ reference title, a batched arXiv id list, or a DOI, and no manuscript prose. A c
 kept only when a provider payload contains its id and title. Papers are never
 invented.
 
+``mode = "pool"`` reads a local prior-work file instead of calling a provider.
+``cutoff_date`` and ``blocked_ids`` drop post-cutoff records and the target paper.
+
 Cap numbers follow ``apr-iclr-cap-v2``. ``unfair_baseline`` is venue cap 5
 with an experimental-soundness ceiling of 4. ``missing_closest_neighbor`` is
 venue cap 6 with a prior-work ceiling of 2 and an originality ceiling of 4.
@@ -37,7 +40,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -385,6 +388,8 @@ class RelatedWorkJudgment(Strict):
     confirmation: ConfirmationStatus = "not_required"
     confirmation_packet: dict[str, Any] = Field(default_factory=dict)
     integration: str = INTEGRATION_NOTE
+    cutoff_date: str | None = None
+    target_leakage: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -1424,6 +1429,7 @@ def build_candidate(
     entries: Sequence[BibliographyEntry],
     deadline: date,
     index: int,
+    summary_limit: int = 280,
 ) -> RelatedCandidate:
     relation = classify_date(hit.published, hit.year, deadline)
     tier, reason_en, reason_zh = _base_tier(hit, formulation)
@@ -1444,8 +1450,10 @@ def build_candidate(
         reason_en = "Cited in the bibliography, and not otherwise a required baseline."
         reason_zh = "出现在参考文献中，但除此之外不是必须的基线。"
     summary = hit.summary.strip() or "Verified metadata record; the provider returned no abstract."
-    if len(summary) > 280:
-        summary = summary[:277].rstrip() + "..."
+    if summary_limit < 8:
+        raise ValueError("summary_limit must leave room for an ellipsis")
+    if len(summary) > summary_limit:
+        summary = summary[: summary_limit - 3].rstrip() + "..."
     return RelatedCandidate(
         id=f"C{index}",
         title=hit.title.strip(),
@@ -3033,7 +3041,7 @@ def _status_from(
         return "partial"
     if any(entry.status in _DEGRADED_LOGS for entry in logs):
         return "degraded"
-    return "complete" if mode in {"agent", "live"} else "not_run"
+    return "complete" if mode in {"agent", "live", "pool"} else "not_run"
 
 
 def load_confirmations(path: Path) -> list[MustCompareConfirmation]:
@@ -3190,6 +3198,154 @@ def _mark_awaiting(candidates: list[RelatedCandidate]) -> None:
         item.reason_zh += "等待判断模型确认。检索上限还不能引用它。"
 
 
+def work_id_keys(*values: str | None) -> set[str]:
+    """Normalized identifiers for one paper, including unprefixed forms.
+
+    An arXiv id and the same id with a version suffix match. Other identifiers
+    keep a trailing ``v`` plus digits.
+    """
+    keys: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        text = value.strip()
+        if not text:
+            continue
+        lowered = text.casefold()
+        keys.add(lowered)
+        bare = lowered
+        for prefix in ("doi:", "arxiv:", "s2:", "openalex:", "openreview:"):
+            if lowered.startswith(prefix):
+                bare = lowered[len(prefix) :]
+                keys.add(bare)
+                break
+        arxiv_bare = re.sub(r"v\d+$", "", bare)
+        if re.fullmatch(r"\d{4}\.\d{4,5}", arxiv_bare):
+            keys.add(arxiv_bare)
+            keys.add(f"arxiv:{arxiv_bare}")
+    return keys
+
+
+def _pool_identity(raw_id: str) -> dict[str, str | None]:
+    text = raw_id.strip()
+    lowered = text.casefold()
+    identity: dict[str, str | None] = {
+        "arxiv_id": None,
+        "doi": None,
+        "s2_id": None,
+        "openalex_id": None,
+    }
+    if lowered.startswith("doi:"):
+        identity["doi"] = text.split(":", 1)[1]
+    elif lowered.startswith("arxiv:"):
+        identity["arxiv_id"] = text.split(":", 1)[1]
+    elif lowered.startswith("openalex:"):
+        identity["openalex_id"] = text.split(":", 1)[1]
+    elif lowered.startswith("s2:"):
+        identity["s2_id"] = text.split(":", 1)[1]
+    elif re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", text):
+        identity["arxiv_id"] = text
+    elif lowered.startswith("10."):
+        identity["doi"] = text
+    else:
+        identity["s2_id"] = text
+    return identity
+
+
+def load_prior_pool(path: Path) -> tuple[list[RawHit], list[RetrievalLogEntry]]:
+    """Read a supplied prior-work pool. No network. Abstracts stay on the hit."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"prior-work pool is not JSON: {path.name}") from exc
+    papers = payload.get("papers") if isinstance(payload, dict) else payload
+    if isinstance(payload, dict) and papers is None and isinstance(payload.get("pool"), list):
+        papers = payload["pool"]
+    if not isinstance(papers, list):
+        raise ValueError("prior-work pool must be a list or an object with papers or pool")
+    hits: list[RawHit] = []
+    for index, paper in enumerate(papers, start=1):
+        if not isinstance(paper, dict):
+            raise ValueError(f"prior-work pool item {index} is not an object")
+        title = str(paper.get("title") or "").strip()
+        raw_id = str(paper.get("id") or paper.get("paperId") or "").strip()
+        if not title or not raw_id:
+            raise ValueError(f"prior-work pool item {index} needs a title and an id")
+        identity = _pool_identity(raw_id)
+        published = paper.get("published") or paper.get("date") or paper.get("publicationDate")
+        published_text = str(published).strip() if published else None
+        year = paper.get("year")
+        if not isinstance(year, int) and published_text and re.match(r"\d{4}", published_text):
+            year = int(published_text[:4])
+        if not isinstance(year, int):
+            year = None
+        abstract = str(paper.get("abstract") or paper.get("summary") or "").strip()
+        external = RawHit(
+            title=title,
+            summary=abstract,
+            venue=str(paper["venue"]).strip() if paper.get("venue") else None,
+            year=year,
+            published=published_text,
+            arxiv_id=str(paper["arxiv_id"]).strip() if paper.get("arxiv_id") else identity["arxiv_id"],
+            doi=str(paper["doi"]).strip() if paper.get("doi") else identity["doi"],
+            openalex_id=str(paper["openalex_id"]).strip() if paper.get("openalex_id") else identity["openalex_id"],
+            s2_id=str(paper["s2_id"]).strip() if paper.get("s2_id") else identity["s2_id"],
+            link=str(paper.get("link") or f"pool:{raw_id}"),
+            provider="pool",
+            query_ids=["Q-pool"],
+        )
+        if not external.external_id():
+            raise ValueError(f"prior-work pool item {index} has no resolvable id")
+        hits.append(external)
+    logs = [
+        _log("pool", "ok", f"loaded {len(hits)} prior-work records from the supplied pool", "Q-pool")
+    ]
+    return hits, logs
+
+
+def _guard_prior_hits(
+    hits: Sequence[RawHit],
+    *,
+    cutoff: date | None,
+    blocked: set[str],
+) -> tuple[list[RawHit], list[str], list[RetrievalLogEntry]]:
+    """Drop the target paper and anything dated on or after the cutoff.
+
+    ``cutoff`` is exclusive, matching a pool built with publication dates
+    strictly before that day. A retrieved target is logged and removed.
+    """
+    kept: list[RawHit] = []
+    leakage: list[str] = []
+    logs: list[RetrievalLogEntry] = []
+    deadline = cutoff - timedelta(days=1) if cutoff is not None else None
+    for hit in hits:
+        keys = work_id_keys(hit.external_id(), hit.arxiv_id, hit.doi, hit.s2_id, hit.openalex_id)
+        external = hit.external_id()
+        if blocked and keys & blocked:
+            leakage.append(external)
+            logs.append(
+                _log(
+                    hit.provider or "pool",
+                    "dropped",
+                    f"target paper retrieved and excluded: {external}",
+                    hit.query_ids[0] if hit.query_ids else None,
+                )
+            )
+            continue
+        if deadline is not None and classify_date(hit.published, hit.year, deadline) == "concurrent":
+            logs.append(
+                _log(
+                    hit.provider or "pool",
+                    "dropped",
+                    f"dated on or after cutoff {cutoff.isoformat()}: {external}",
+                    hit.query_ids[0] if hit.query_ids else None,
+                )
+            )
+            continue
+        kept.append(hit)
+    return kept, leakage, logs
+
+
 def run_related_work_search(
     manuscript: str,
     *,
@@ -3214,9 +3370,13 @@ def run_related_work_search(
     cache_dir: Path | None = None,
     cache_clock: Callable[[], float] | None = None,
     bibliography_lookup_limit: int = BIBLIOGRAPHY_LOOKUP_LIMIT,
+    pool_path: Path | None = None,
+    cutoff_date: date | None = None,
+    blocked_ids: Sequence[str] | None = None,
+    pool_summary_chars: int = 2000,
 ) -> RelatedWorkJudgment:
-    if mode not in {"agent", "live", "off"}:
-        raise ValueError("mode must be agent, live, or off")
+    if mode not in {"agent", "live", "off", "pool"}:
+        raise ValueError("mode must be agent, live, off, or pool")
     profile = deadlines or load_venue_deadlines(venue_key)
     formulation = derive_formulation(manuscript)
     entries = parse_bibliography(manuscript)
@@ -3226,6 +3386,10 @@ def run_related_work_search(
     queries = generate_search_queries(formulation, method_names)
     if formulation.complete:
         queries.extend(cited_reference_queries(manuscript, entries, limit=bibliography_lookup_limit))
+    if mode == "pool":
+        # The pool is local. Keyword queries are not sent, and a title in the
+        # description must not trip the outbound-title guard.
+        queries = []
     allow = allow_tokens(formulation)
     named = {
         _normalize_title(query.query)
@@ -3244,7 +3408,25 @@ def run_related_work_search(
     if unknown:
         raise ValueError(f"unknown related-work providers: {unknown}")
 
-    if mode == "off" or not formulation.complete:
+    if mode == "pool":
+        if pool_path is None:
+            raise ValueError("pool mode requires pool_path")
+        if not pool_path.is_file():
+            raise FileNotFoundError(f"prior-work pool does not exist: {pool_path}")
+        searched = True
+        queries.append(
+            RelatedWorkQuery(
+                id="Q-pool",
+                perspective=QueryPerspective.same_problem,
+                query="supplied prior-work pool",
+                generated_from="prior_pool",
+                metadata={"family": "prior_pool", "outbound": "none"},
+            )
+        )
+        pool_hits, pool_logs = load_prior_pool(pool_path)
+        hits.extend(pool_hits)
+        logs.extend(pool_logs)
+    elif mode == "off" or not formulation.complete:
         if not formulation.complete:
             logs.append(
                 _log(
@@ -3303,6 +3485,14 @@ def run_related_work_search(
             logs.append(_log("local", "dropped", f"ignored unknown query ids {unknown_ids} on {hit.title}"))
         hit.query_ids = [query_id for query_id in hit.query_ids if query_id in known_query_ids]
 
+    blocked: set[str] = set()
+    for item in blocked_ids or []:
+        blocked |= work_id_keys(item)
+    deduped, target_leakage, guard_logs = _guard_prior_hits(
+        deduped, cutoff=cutoff_date, blocked=blocked
+    )
+    logs.extend(guard_logs)
+
     ranked = sorted(
         deduped,
         key=lambda hit: (
@@ -3319,6 +3509,7 @@ def run_related_work_search(
             entries=entries,
             deadline=profile.submission_deadline,
             index=index,
+            summary_limit=pool_summary_chars if hit.provider == "pool" else 280,
         )
         for index, hit in enumerate(ranked, start=1)
     ]
@@ -3356,7 +3547,7 @@ def run_related_work_search(
     status = _status_from(
         mode,
         logs,
-        searched and formulation.complete,
+        searched and (formulation.complete or mode == "pool"),
         providers_available=providers_available,
     )
     _successful, failed_providers = _provider_sets(logs)
@@ -3399,6 +3590,8 @@ def run_related_work_search(
         failed_providers=failed_providers,
         confirmation=confirmation,
         confirmation_packet=packet,
+        cutoff_date=cutoff_date.isoformat() if cutoff_date is not None else None,
+        target_leakage=target_leakage,
     )
 
 

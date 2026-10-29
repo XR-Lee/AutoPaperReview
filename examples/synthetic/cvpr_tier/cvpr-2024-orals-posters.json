@@ -1,0 +1,77 @@
+{
+  "count": 10,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "uid": "syn-oral-a",
+      "name": "Synthetic Oral Lattice One",
+      "decision": "Accept: Oral",
+      "eventtype": "Oral",
+      "paper_pdf_url": "fixture://cvpr2024-syn-oral-a"
+    },
+    {
+      "uid": "syn-oral-a",
+      "name": "Synthetic Oral Lattice One",
+      "decision": "Accept: Oral",
+      "eventtype": "Poster",
+      "paper_pdf_url": ""
+    },
+    {
+      "uid": "syn-oral-b",
+      "name": "Synthetic Oral Lattice Two",
+      "decision": "Accept: Oral",
+      "eventtype": "Oral",
+      "paper_pdf_url": "fixture://cvpr2024-syn-oral-b"
+    },
+    {
+      "uid": "syn-high-a",
+      "name": "Synthetic Highlight Lattice One",
+      "decision": "Accept: Poster (Highlight)",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2024-syn-high-a"
+    },
+    {
+      "uid": "syn-high-b",
+      "name": "Synthetic Highlight Lattice Two",
+      "decision": "Accept: Poster (Highlight)",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2024-syn-high-b"
+    },
+    {
+      "uid": "syn-post-a",
+      "name": "Synthetic Poster Lattice One",
+      "decision": "Accept: Poster",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2024-syn-post-a"
+    },
+    {
+      "uid": "syn-post-b",
+      "name": "Synthetic Poster Lattice Two",
+      "decision": "Accept: Poster",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2024-syn-post-b"
+    },
+    {
+      "uid": "syn-spot",
+      "name": "Synthetic Spotlight Lattice",
+      "decision": "Accept: Spotlight",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2024-syn-spot"
+    },
+    {
+      "uid": "syn-join",
+      "name": "Synthetic Lattice Counter Alpha",
+      "decision": "Accept",
+      "eventtype": "Poster",
+      "paper_pdf_url": ""
+    },
+    {
+      "uid": "syn-amb",
+      "name": "Synthetic Ambiguous Lattice",
+      "decision": "Accept",
+      "eventtype": "Poster",
+      "paper_pdf_url": ""
+    }
+  ]
+}

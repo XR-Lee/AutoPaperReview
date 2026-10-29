@@ -84,7 +84,8 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(result, 0)
             payload = json.loads(stdout.getvalue())
-            self.assertEqual(len(payload["templates"]), 10)
+            self.assertEqual(len(payload["templates"]), 11)
+            self.assertIn("proposal_audit_v1.md", payload["templates"])
             self.assertIn("closed_book_v1.md", payload["templates"])
             self.assertIn("sar_grounded_review_v1.md", payload["templates"])
             self.assertIn("figure_grounded_v1.md", payload["templates"])

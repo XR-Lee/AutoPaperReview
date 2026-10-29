@@ -1,0 +1,7 @@
+Accepted to CVPR
+CVPR 2025
+Oral presentation
+Highlight paper
+This is the open access version of a synthetic note.
+The method is not a poster child for the claim.
+Synthetic lattice counter cvpr2025-syn-oral-b crosses eight cells and reports a count of eight.
