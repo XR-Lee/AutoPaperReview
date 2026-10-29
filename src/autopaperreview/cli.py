@@ -254,6 +254,15 @@ def command_cvpr_tier_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cvpr_set_list(values: list[str] | None) -> list[str] | None:
+    if not values:
+        return None
+    found: list[str] = []
+    for item in values:
+        found.extend(part.strip() for part in str(item).split(",") if part.strip())
+    return found or None
+
+
 def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
     from .cvpr_tier import fetch_sample
 
@@ -262,6 +271,8 @@ def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
         n_per_tier=args.n_per_tier,
         seed=args.seed,
         fixture_dir=Path(args.fixture) if args.fixture else None,
+        set_id=args.set_id,
+        exclude_sets=_cvpr_set_list(args.exclude_sets),
     )
     _print_json(
         {
@@ -278,8 +289,8 @@ def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
 def command_cvpr_tier_prepare(args: argparse.Namespace) -> int:
     from .cvpr_tier import prepare_manuscripts
 
-    rows = prepare_manuscripts(Path(args.cache))
-    _print_json({"status": "success", "papers": rows})
+    rows = prepare_manuscripts(Path(args.cache), variant=args.variant, set_id=args.set_id)
+    _print_json({"status": "success", "papers": rows, "variant": args.variant, "set_id": args.set_id})
     return 0
 
 
@@ -301,6 +312,12 @@ def command_cvpr_tier_run(args: argparse.Namespace) -> int:
         allow_remote=args.allow_remote,
         network_policy=args.network_policy,
         temperature=args.temperature,
+        set_id=args.set_id,
+        variant=args.variant,
+        confirm=args.confirm,
+        lock_path=Path(args.lock) if args.lock else None,
+        handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
+        custody=Path(args.custody) if args.custody else None,
     )
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
@@ -323,12 +340,37 @@ def command_cvpr_tier_report(args: argparse.Namespace) -> int:
         Path(args.output),
         resamples=args.resamples,
         seed=args.bootstrap_seed,
+        set_id=args.set_id,
+        confirm=args.confirm,
+        lock_path=Path(args.lock) if args.lock else None,
+        custody=Path(args.custody) if args.custody else None,
     )
     _print_json(
         {
             "status": "success",
             "output": str(Path(args.output).expanduser().resolve()),
             "models": list(metrics["models"]),
+        }
+    )
+    return 0
+
+
+def command_cvpr_tier_lock(args: argparse.Namespace) -> int:
+    from .cvpr_sets import build_lock, ensure_cache_registry, write_lock
+
+    registry = ensure_cache_registry(Path(args.cache)) if args.cache else None
+    lock = build_lock(
+        registry,
+        holistic_mode=args.holistic_mode,
+        holistic_samples=args.holistic_samples,
+    )
+    write_lock(Path(args.output), lock)
+    _print_json(
+        {
+            "status": "success",
+            "output": str(Path(args.output).expanduser().resolve()),
+            "protocol": lock["protocol"],
+            "sha256": lock["sha256"],
         }
     )
     return 0
@@ -823,10 +865,19 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_fetch.add_argument("--n-per-tier", type=int, default=DEFAULT_N_PER_TIER)
     cvpr_fetch.add_argument("--seed", type=int, default=DEFAULT_SEED)
     cvpr_fetch.add_argument("--fixture", help="directory of fixture manuscript text for fixture:// PDFs")
+    cvpr_fetch.add_argument("--set", dest="set_id", help="registered set id; quotas and seed come from the registry")
+    cvpr_fetch.add_argument(
+        "--exclude-sets",
+        action="append",
+        default=None,
+        help="extra set ids to exclude, repeatable or comma-separated",
+    )
     cvpr_fetch.set_defaults(func=command_cvpr_tier_fetch)
 
     cvpr_prepare = cvpr_sub.add_parser("prepare", help="extract manuscripts without opening tier labels")
     cvpr_prepare.add_argument("--cache", required=True)
+    cvpr_prepare.add_argument("--set", dest="set_id", help="prepare one registered set")
+    cvpr_prepare.add_argument("--variant", choices=("A0", "A1", "A2"), help="write manuscripts/<variant>/")
     cvpr_prepare.set_defaults(func=command_cvpr_tier_prepare)
 
     cvpr_run = cvpr_sub.add_parser(
@@ -851,13 +902,20 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_run.add_argument(
         "--command-template",
         help=(
-            "argv template for this model's local CLI. Placeholders are {prompt_file} "
-            "{answer_file} {model} {paper_id} {mode}. Values are quoted. The template "
-            "is split into argv and must not contain an API key"
+            "argv template for this model's local CLI. The prompt is passed on stdin. "
+            "Placeholders are {prompt_file} {answer_file} {model} {paper_id} {handoff_id} {mode}. "
+            "{paper_id} and {handoff_id} are the opaque handoff id. {prompt_file} is optional. "
+            "Values are quoted. The template is split into argv and must not contain an API key"
         ),
     )
     cvpr_run.add_argument("--command-timeout", type=float, default=DEFAULT_MODEL_TIMEOUT_SECONDS)
     cvpr_run.add_argument("--temperature", type=float, default=None)
+    cvpr_run.add_argument("--set", dest="set_id", help="run one registered set")
+    cvpr_run.add_argument("--variant", choices=("A0", "A1", "A2"))
+    cvpr_run.add_argument("--confirm", action="store_true", help="required with --lock for a sealed set")
+    cvpr_run.add_argument("--lock", help="lock.json from cvpr-tier lock")
+    cvpr_run.add_argument("--handoff-dir", help="replay directory outside the cache and the checkout")
+    cvpr_run.add_argument("--custody", help="directory that holds sealed labels, outside the cache")
     cvpr_run.set_defaults(func=command_cvpr_tier_run)
 
     cvpr_report = cvpr_sub.add_parser("report", help="compare stored model runs on the shared sample")
@@ -865,7 +923,18 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_report.add_argument("--output", required=True)
     cvpr_report.add_argument("--resamples", type=int, default=DEFAULT_BOOTSTRAP_RESAMPLES)
     cvpr_report.add_argument("--bootstrap-seed", type=int, default=DEFAULT_BOOTSTRAP_SEED)
+    cvpr_report.add_argument("--set", dest="set_id", help="report one registered set")
+    cvpr_report.add_argument("--confirm", action="store_true", help="open a sealed set once")
+    cvpr_report.add_argument("--lock", help="lock.json from cvpr-tier lock")
+    cvpr_report.add_argument("--custody", help="directory that holds sealed labels")
     cvpr_report.set_defaults(func=command_cvpr_tier_report)
+
+    cvpr_lock = cvpr_sub.add_parser("lock", help="write lock.json hashes and protocol defaults")
+    cvpr_lock.add_argument("--output", required=True)
+    cvpr_lock.add_argument("--cache", help="use this cache's set registry; default is the committed registry")
+    cvpr_lock.add_argument("--holistic-mode", choices=HOLISTIC_MODES, default=DEFAULT_HOLISTIC_MODE)
+    cvpr_lock.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
+    cvpr_lock.set_defaults(func=command_cvpr_tier_lock)
 
     init = subparsers.add_parser("init", help="create a minimal local-first review project")
     init.add_argument("path")

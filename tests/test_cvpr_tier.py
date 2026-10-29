@@ -213,13 +213,18 @@ class IsolationTests(unittest.TestCase):
             )
             self.assertEqual(result["backend"], "replay")
             self.assertTrue(result["awaiting_judgment"])
-            prompts = list((cache / "runs" / "grok-4.7-cursor" / "pending").glob("*.prompt.txt"))
+            handoff = Path(result["handoff_dir"])
+            prompts = list(handoff.glob("*/prompt.txt"))
             self.assertTrue(prompts)
             for path in prompts:
+                self.assertRegex(path.parent.name, r"^[0-9a-f]{12}$")
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("Do not add a second score", text)
                 self.assertIn("poster child", text)
                 self.assertNotIn(CANARY, text)
+                packet = json.loads((path.parent / "packet.json").read_text(encoding="utf-8"))
+                self.assertNotIn("paper_id", packet)
+                self.assertNotIn("cvpr", json.dumps(packet).lower())
             with self.assertRaises(CvprTierError):
                 read_judgment_text(cache, cache / "heldout" / "tiers.json")
             with self.assertRaises(CvprTierError):
@@ -469,9 +474,16 @@ class ReportTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 f"BASES = {json.dumps(BASES)}\n"
                 "prompt, answer, model, paper, mode = sys.argv[1:6]\n"
+                "joined = ' '.join(sys.argv)\n"
+                "if 'cvpr20' in joined.lower():\n"
+                "    raise SystemExit('catalog id in argv')\n"
                 "text = Path(prompt).read_text(encoding='utf-8')\n"
                 f"if {CANARY!r} in text:\n"
                 "    raise SystemExit('label leaked')\n"
+                "matched = [key for key in BASES if key in text]\n"
+                "if len(matched) != 1:\n"
+                "    raise SystemExit('paper id not in prompt')\n"
+                "paper = matched[0]\n"
                 "score = BASES[paper]\n"
                 "if model == 'opus-local':\n"
                 "    score = round(10.5 - score, 4)\n"
@@ -510,14 +522,19 @@ class ReportTests(unittest.TestCase):
             waiting = run_model(cache, model_id="grok-4.7-cursor", backend="replay", holistic_mode="mean")
             self.assertTrue(waiting["awaiting_judgment"])
             manifest = json.loads((cache / "sample_manifest.json").read_text(encoding="utf-8"))
-            answers = cache / "runs" / "grok-4.7-cursor" / "answers"
+            handoff = Path(waiting["handoff_dir"])
+            grok_manifest = json.loads(
+                (cache / "runs" / "grok-4.7-cursor" / "manifest.json").read_text(encoding="utf-8")
+            )
             for paper in manifest["papers"]:
                 paper_id = paper["paper_id"]
-                prompt = (cache / "runs" / "grok-4.7-cursor" / "pending" / f"{paper_id}.prompt.txt").read_text(
-                    encoding="utf-8"
-                )
+                hid = grok_manifest["handoff_ids"][paper_id]
+                self.assertRegex(hid, r"^[0-9a-f]{12}$")
+                prompt = (handoff / hid / "prompt.txt").read_text(encoding="utf-8")
                 self.assertNotIn(CANARY, prompt)
-                (answers / f"{paper_id}.json").write_text(mean_answer("grok-4.7-cursor", paper_id), encoding="utf-8")
+                (handoff / hid / "answer.json").write_text(
+                    mean_answer("grok-4.7-cursor", paper_id), encoding="utf-8"
+                )
             finished = run_model(cache, model_id="grok-4.7-cursor", backend="replay", holistic_mode="mean")
             self.assertEqual(finished["awaiting_judgment"], [])
             self.assertEqual(finished["errors"], [])
@@ -761,9 +778,11 @@ class CliTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(waiting, 3)
-            self.assertIn("awaiting_judgment", stdout.getvalue())
-            papers = json.loads((cache / "sample_manifest.json").read_text(encoding="utf-8"))["papers"]
-            answer = cache / "runs" / "grok-4.7-cursor" / "answers" / f"{papers[0]['paper_id']}.json"
+            waiting_body = json.loads(stdout.getvalue())
+            self.assertTrue(waiting_body["awaiting_judgment"])
+            hid = waiting_body["awaiting_judgment"][0]
+            self.assertRegex(hid, r"^[0-9a-f]{12}$")
+            answer = Path(waiting_body["handoff_dir"]) / hid / "answer.json"
             answer.write_text("{not json", encoding="utf-8")
             stdout = io.StringIO()
             with redirect_stdout(stdout):
