@@ -22,6 +22,7 @@ class StageContext:
     source_path: Path
     manifest: RunManifest
     dependency_records: dict[str, StageRecord]
+    force: bool = False
 
     @property
     def workspace(self) -> Path:

@@ -289,6 +289,24 @@ class RunRefusalTests(unittest.TestCase):
         self.assertTrue(judgment["target_leakage"])
         self.assertEqual(judgment["status"], "complete")
 
+    def test_model_project_writes_a_two_hour_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_project(
+                root,
+                project_id="synthetic-proposal",
+                proposal_text="Title: Synthetic Widget Counter\n\nAbstract\nCount synthetic widgets.\n",
+                pool=[],
+                cutoff_date="2026-03-01",
+                blocked_ids=[],
+                prompts=PROMPTS,
+                model="synthetic-reviewer",
+                base_url="http://127.0.0.1:9/v1",
+                use_model=True,
+            )
+            text = (root / "review.toml").read_text(encoding="utf-8")
+        self.assertIn("timeout_seconds = 7200", text)
+
 
 if __name__ == "__main__":
     unittest.main()

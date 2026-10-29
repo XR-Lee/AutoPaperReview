@@ -140,8 +140,10 @@ Transport = Callable[[urllib.request.Request, float], bytes]
 TEXT_JUDGMENTS = ("contributions", "ledger", "dimensions", "fatal")
 OPTIONAL_JUDGMENTS = ("holistic",)
 KNOWN_JUDGMENTS = TEXT_JUDGMENTS + OPTIONAL_JUDGMENTS
-# One xhigh reasoning call is often several minutes. 60s aborted every paper.
-DEFAULT_MODEL_TIMEOUT_SECONDS = 900.0
+# A full manuscript on a reasoning model can sit silent for half an hour.
+# 900s aborted those calls. This value is the socket silence budget, not a
+# total-time cap: streaming bytes renew it. There is no upper bound.
+DEFAULT_MODEL_TIMEOUT_SECONDS = 7200.0
 TRANSPORT_RETRIES = 2
 TRANSPORT_BACKOFF_SECONDS = (0.5, 1.0)
 _UNRESOLVED_ANCHOR = "excerpt does not occur in the manuscript or a retrieved snapshot"
@@ -1203,6 +1205,7 @@ class ModelSession:
         scratch: Path,
         stage_signature: str,
         transport: Transport | None = None,
+        reuse_prior_exchanges: bool = False,
     ) -> None:
         self.base_url = public_base_url(base_url)
         self.model_name = model
@@ -1215,6 +1218,7 @@ class ModelSession:
         self.scratch = scratch
         self.stage_signature = stage_signature
         self._transport = transport or type(self).transport or _urlopen_transport
+        self.reuse_prior_exchanges = reuse_prior_exchanges
         self.egress = endpoint_kind(self.base_url)
         self.manuscript_left_machine = False
         self.exchanges: list[dict[str, Any]] = []
@@ -1434,6 +1438,25 @@ class ModelSession:
         )
         directory = self.scratch / "model"
         directory.mkdir(parents=True, exist_ok=True)
+        if self.reuse_prior_exchanges:
+            reused = _reused_exchange_bytes(self.scratch, wire)
+            if reused is not None:
+                request_name, response_name = _exchange_names(judgment, attempt, 1)
+                request_path = directory / request_name
+                response_path = directory / response_name
+                request_path.write_bytes(wire)
+                response_path.write_bytes(reused)
+                self._record_exchange(
+                    judgment,
+                    attempt,
+                    1,
+                    request_name,
+                    response_name,
+                    request_path,
+                    response_path,
+                    reused_prior_exchange=True,
+                )
+                return self._consume_envelope(reused)
         tries = TRANSPORT_RETRIES + 1
         last_detail = "request failed"
         for index in range(tries):
@@ -1486,24 +1509,27 @@ class ModelSession:
                 request_path,
                 response_path,
             )
-            try:
-                payload = json.loads(stored.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                return f"invalid chat envelope: {exc}"
-            if not isinstance(payload, dict):
-                return "invalid chat envelope: response is not an object"
-            usage = payload.get("usage")
-            if isinstance(usage, dict):
-                with self._lock:
-                    for key in self.usage_totals:
-                        raw_tokens = usage.get(key)
-                        if isinstance(raw_tokens, int):
-                            self.usage_totals[key] += raw_tokens
-            try:
-                return _message_text(payload)
-            except ValueError as exc:
-                return str(exc)
+            return self._consume_envelope(stored)
         self.fail(f"judgment {judgment} request failed after {TRANSPORT_RETRIES} transport retries: {last_detail}")
+
+    def _consume_envelope(self, stored: bytes) -> str:
+        try:
+            payload = json.loads(stored.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return f"invalid chat envelope: {exc}"
+        if not isinstance(payload, dict):
+            return "invalid chat envelope: response is not an object"
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            with self._lock:
+                for key in self.usage_totals:
+                    raw_tokens = usage.get(key)
+                    if isinstance(raw_tokens, int):
+                        self.usage_totals[key] += raw_tokens
+        try:
+            return _message_text(payload)
+        except ValueError as exc:
+            return str(exc)
 
     def _record_exchange(
         self,
@@ -1514,6 +1540,8 @@ class ModelSession:
         response_name: str,
         request_path: Path,
         response_path: Path,
+        *,
+        reused_prior_exchange: bool = False,
     ) -> None:
         row = {
             "judgment": judgment,
@@ -1524,8 +1552,93 @@ class ModelSession:
             "request_path": f"model/{request_name}",
             "response_path": f"model/{response_name}",
         }
+        if reused_prior_exchange:
+            row["reused_prior_exchange"] = True
         with self._lock:
             self.exchanges.append(row)
+
+
+# Attempt directories are `{stage_id}-{attempt}-{8 hex}` under `run/.attempts`.
+_ATTEMPT_DIR_NAME = re.compile(r"^(?P<stage>.+)-(?P<attempt>[1-9][0-9]*)-(?P<nonce>[0-9a-f]{8})$")
+
+
+def _reusable_chat_bytes(raw: bytes) -> bool:
+    """True when `raw` is a chat envelope with assistant text worth replaying."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    try:
+        _message_text(payload)
+    except ValueError:
+        return False
+    return True
+
+
+def _prior_model_directories(scratch: Path) -> list[Path]:
+    """Model logs from earlier attempts of this stage, including a promoted success."""
+    parent = scratch.parent
+    if parent.name != ".attempts":
+        return []
+    match = _ATTEMPT_DIR_NAME.fullmatch(scratch.name)
+    if match is None:
+        return []
+    stage_id = match.group("stage")
+    found: list[Path] = []
+    try:
+        siblings = list(parent.iterdir())
+    except OSError:
+        return []
+    for sibling in siblings:
+        if sibling == scratch or not sibling.is_dir():
+            continue
+        sibling_match = _ATTEMPT_DIR_NAME.fullmatch(sibling.name)
+        if sibling_match is None or sibling_match.group("stage") != stage_id:
+            continue
+        model_dir = sibling / "model"
+        if model_dir.is_dir():
+            found.append(model_dir)
+    promoted = parent.parent / "stages" / stage_id / "model"
+    if promoted.is_dir():
+        found.append(promoted)
+    return found
+
+
+def _reused_exchange_bytes(scratch: Path, wire: bytes) -> bytes | None:
+    """Newest stored response whose request bytes match `wire`.
+
+    Error bodies are skipped. A timeout leaves the finished judgments on disk
+    so the next run does not pay for them again.
+    """
+    digest = sha256_bytes(wire)
+    newest: tuple[float, bytes] | None = None
+    for model_dir in _prior_model_directories(scratch):
+        try:
+            request_paths = list(model_dir.glob("*.request.json"))
+        except OSError:
+            continue
+        for request_path in request_paths:
+            try:
+                if sha256_bytes(request_path.read_bytes()) != digest:
+                    continue
+                response_path = request_path.with_name(
+                    request_path.name.removesuffix(".request.json") + ".response.json"
+                )
+                if not response_path.is_file():
+                    continue
+                raw = response_path.read_bytes()
+                stamp = response_path.stat().st_mtime
+            except OSError:
+                continue
+            if not _reusable_chat_bytes(raw):
+                continue
+            if newest is None or stamp >= newest[0]:
+                newest = (stamp, raw)
+    if newest is None:
+        return None
+    return newest[1]
 
 
 def _safe_name(judgment: str) -> str:
@@ -1592,6 +1705,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
         "packet_routes": {str(key): str(value) for key, value in packet_routes.items()},
         "stage_signature": str(metadata.get("stage_signature") or ""),
         "bilingual": bool(metadata.get("bilingual")),
+        "reuse_prior_exchanges": bool(metadata.get("reuse_prior_exchanges", False)),
     }
 
 
@@ -3520,6 +3634,7 @@ class OpenAICompatibleVisionInspector:
         self._timeout_seconds = DEFAULT_MODEL_TIMEOUT_SECONDS
         self._temperature = 0.0
         self._json_object = True
+        self._reuse_prior_exchanges = False
         self._routes: list[ReviewRoute] = []
         self.session: ModelSession | None = None
 
@@ -3552,6 +3667,7 @@ class OpenAICompatibleVisionInspector:
         temperature: float,
         json_object: bool,
         routes: list[ReviewRoute] | None = None,
+        reuse_prior_exchanges: bool = False,
     ) -> None:
         self._model = (model or "").strip() or None
         self._allow_remote = allow_remote
@@ -3564,6 +3680,7 @@ class OpenAICompatibleVisionInspector:
         self._timeout_seconds = timeout_seconds
         self._temperature = temperature
         self._json_object = json_object
+        self._reuse_prior_exchanges = reuse_prior_exchanges
         self._routes = list(routes or [])
         self.status = "ready"
 
@@ -3585,6 +3702,7 @@ class OpenAICompatibleVisionInspector:
                 scratch=scratch,
                 stage_signature=self._stage_signature,
                 transport=self._transport,
+                reuse_prior_exchanges=self._reuse_prior_exchanges,
             )
         overrides = {"visual": self._packet_route} if self._packet_route else {}
         _route_id, packet = select_packet("visual", self._packets, self._routes, overrides)

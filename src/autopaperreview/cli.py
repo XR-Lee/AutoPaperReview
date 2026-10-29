@@ -16,6 +16,7 @@ from . import __version__
 from .artifacts import artifact_from_path
 from .config import HarnessConfig, load_config
 from .migration import load_review_input
+from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
@@ -855,7 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
             "is split into argv and must not contain an API key"
         ),
     )
-    cvpr_run.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_run.add_argument("--command-timeout", type=float, default=DEFAULT_MODEL_TIMEOUT_SECONDS)
     cvpr_run.add_argument("--temperature", type=float, default=None)
     cvpr_run.set_defaults(func=command_cvpr_tier_run)
 

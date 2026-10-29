@@ -44,6 +44,7 @@ from .anchors import (
 )
 from .hashing import sha256_bytes
 from .model_exec import (
+    DEFAULT_MODEL_TIMEOUT_SECONDS,
     AuditJudgment,
     ExpertJudgment,
     ForecastJudgment,
@@ -874,7 +875,7 @@ class OpenAIChatCompletion:
         allow_remote: bool = False,
         network_policy: str = "deny",
         temperature: float = LOCKED_HOLISTIC_TEMPERATURE,
-        timeout_seconds: float = 900.0,
+        timeout_seconds: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
         transport: Any = None,
     ) -> None:
         self.base_url = base_url
@@ -938,7 +939,7 @@ def run_model(
     holistic_mode: str = "forecast",
     holistic_samples: int = 1,
     command_template: str | None = None,
-    command_timeout: float = 900.0,
+    command_timeout: float = DEFAULT_MODEL_TIMEOUT_SECONDS,
     adapter: str | None = None,
     base_url: str | None = None,
     endpoint_model: str | None = None,
@@ -1048,6 +1049,8 @@ def run_model(
         scratch.mkdir(parents=True, exist_ok=True)
         for paper in manifest.papers:
             answer_path = answers / f"{paper.paper_id}.json"
+            if answer_path.is_file() and answer_path.stat().st_size > 0:
+                continue
             text = completer.complete(prompts[paper.paper_id], scratch / paper.paper_id)
             answer_path.write_text(text, encoding="utf-8")
     awaiting: list[str] = []
@@ -1110,6 +1113,8 @@ def _run_commands(
 ) -> None:
     for paper in papers:
         answer_path = answers / f"{paper.paper_id}.json"
+        if answer_path.is_file() and answer_path.stat().st_size > 0:
+            continue
         prompt_path = answer_path.parent.parent / "pending" / f"{paper.paper_id}.prompt.txt"
         argv = render_command(
             template,

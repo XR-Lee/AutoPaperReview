@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..artifacts import artifact_from_path
 from ..hashing import sha256_file
+from ..model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from ..models import (
     EvidenceRecord,
     NetworkPolicy,
@@ -78,6 +79,7 @@ class RelatedWorkSearchParams(ParamsModel):
     cutoff_date: str | None = None
     blocked_ids: list[str] = Field(default_factory=list)
     pool_summary_chars: int = Field(default=2000, ge=280, le=20000)
+    timeout_seconds: float = Field(default=DEFAULT_MODEL_TIMEOUT_SECONDS, gt=0)
 
     def model_post_init(self, __context: Any) -> None:
         if self.mode == "live" and not self.requires_network:
@@ -266,6 +268,7 @@ class RelatedWorkSearchStage(StageHandler):
                 "model": params.confirmation_model,
                 "api_key_env": params.confirmation_api_key_env,
                 "allow_remote": params.confirmation_allow_remote,
+                "timeout_seconds": params.timeout_seconds,
             },
             confirmation_scratch=context.stage_dir,
             network_policy=context.loaded_config.config.project.network_policy.value,
