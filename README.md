@@ -11,7 +11,7 @@ AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two 
 
 The right half comes from the optional benchmark track.
 
-Version `0.1.10`, alpha. Python 3.11–3.13. MIT license. APR doesn't replace a human reviewer.
+Version `0.1.10`, alpha. Python 3.10–3.13. MIT license. APR doesn't replace a human reviewer.
 
 <a id="track-a"></a>
 
@@ -516,7 +516,7 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 
 ## Status
 
-AutoPaperReview `0.1.10` is alpha software for Python 3.11–3.13, released under the MIT license.
+AutoPaperReview `0.1.10` is alpha software for Python 3.10–3.13, released under the MIT license.
 
 The core is a local DAG (directed acyclic graph) with TOML configuration, Pydantic records, a content-hash cache, and adapters. Prompts in `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
 
