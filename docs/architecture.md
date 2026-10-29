@@ -240,3 +240,4 @@ Timestamps document execution history but are excluded from stage signatures. De
 - [First-read review writing](first-read-review.md)
 - [Maintenance policy](maintenance.md)
 - [Roadmap](roadmap.md)
+- [Branching](branching.md)

@@ -3,6 +3,7 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: "/"
+    target-branch: pre-release
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
@@ -11,6 +12,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: pre-release
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
