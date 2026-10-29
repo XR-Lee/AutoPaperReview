@@ -231,6 +231,108 @@ def command_calibrate_eval_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cvpr_years(value: str) -> tuple[int, ...]:
+    try:
+        years = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("years must be comma-separated integers") from exc
+    if not years:
+        raise argparse.ArgumentTypeError("years must list at least one year")
+    return years
+
+
+def command_cvpr_tier_list(args: argparse.Namespace) -> int:
+    from .cvpr_tier import list_catalog
+
+    catalog = list_catalog(
+        Path(args.cache),
+        years=args.years,
+        fixture_dir=Path(args.fixture) if args.fixture else None,
+    )
+    _print_json({"years": [year.model_dump() for year in catalog.years]})
+    return 0
+
+
+def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
+    from .cvpr_tier import fetch_sample
+
+    manifest = fetch_sample(
+        Path(args.cache),
+        n_per_tier=args.n_per_tier,
+        seed=args.seed,
+        fixture_dir=Path(args.fixture) if args.fixture else None,
+    )
+    _print_json(
+        {
+            "status": "success",
+            "seed": manifest.seed,
+            "n_per_tier": manifest.n_per_tier,
+            "draws": manifest.draws,
+            "paper_count": len(manifest.papers),
+        }
+    )
+    return 0
+
+
+def command_cvpr_tier_prepare(args: argparse.Namespace) -> int:
+    from .cvpr_tier import prepare_manuscripts
+
+    rows = prepare_manuscripts(Path(args.cache))
+    _print_json({"status": "success", "papers": rows})
+    return 0
+
+
+def command_cvpr_tier_run(args: argparse.Namespace) -> int:
+    from .cvpr_tier import run_model
+
+    result = run_model(
+        Path(args.cache),
+        model_id=args.model_id,
+        backend=args.backend,
+        holistic_mode=args.holistic_mode,
+        holistic_samples=args.holistic_samples,
+        command_template=args.command_template,
+        command_timeout=args.command_timeout,
+        adapter=args.adapter,
+        base_url=args.base_url,
+        endpoint_model=args.model_name,
+        api_key_env=args.api_key_env,
+        allow_remote=args.allow_remote,
+        network_policy=args.network_policy,
+        temperature=args.temperature,
+    )
+    if result["awaiting_judgment"]:
+        status = "awaiting_judgment"
+        code = 3
+    elif result["errors"]:
+        status = "error"
+        code = 2
+    else:
+        status = "success"
+        code = 0
+    _print_json({"status": status, **result})
+    return code
+
+
+def command_cvpr_tier_report(args: argparse.Namespace) -> int:
+    from .cvpr_tier import write_report
+
+    metrics = write_report(
+        Path(args.cache),
+        Path(args.output),
+        resamples=args.resamples,
+        seed=args.bootstrap_seed,
+    )
+    _print_json(
+        {
+            "status": "success",
+            "output": str(Path(args.output).expanduser().resolve()),
+            "models": list(metrics["models"]),
+        }
+    )
+    return 0
+
+
 def command_annotate(args: argparse.Namespace) -> int:
     from .pdf_annotate import (
         annotate_pdf,
@@ -689,6 +791,80 @@ def build_parser() -> argparse.ArgumentParser:
     eval_report.add_argument("--cache", required=True)
     eval_report.add_argument("--output", required=True)
     eval_report.set_defaults(func=command_calibrate_eval_report)
+
+    from .cvpr_tier import (
+        DEFAULT_BOOTSTRAP_RESAMPLES,
+        DEFAULT_BOOTSTRAP_SEED,
+        DEFAULT_N_PER_TIER,
+        DEFAULT_SEED,
+        DEFAULT_YEARS,
+    )
+
+    cvpr_tier = eval_sub.add_parser(
+        "cvpr-tier",
+        help="report whether a review mode's rank separates CVPR oral, highlight, and poster",
+    )
+    cvpr_sub = cvpr_tier.add_subparsers(dest="cvpr_command", required=True)
+
+    cvpr_list = cvpr_sub.add_parser("list", help="write the tier catalog and print year counts")
+    cvpr_list.add_argument("--cache", required=True)
+    cvpr_list.add_argument(
+        "--years",
+        type=_cvpr_years,
+        default=DEFAULT_YEARS,
+        help="comma-separated years, default 2024,2025",
+    )
+    cvpr_list.add_argument("--fixture", help="directory of synthetic virtual JSON and Open Access HTML")
+    cvpr_list.set_defaults(func=command_cvpr_tier_list)
+
+    cvpr_fetch = cvpr_sub.add_parser("fetch", help="draw a stratified sample and cache PDFs or fixture text")
+    cvpr_fetch.add_argument("--cache", required=True)
+    cvpr_fetch.add_argument("--n-per-tier", type=int, default=DEFAULT_N_PER_TIER)
+    cvpr_fetch.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_fetch.add_argument("--fixture", help="directory of fixture manuscript text for fixture:// PDFs")
+    cvpr_fetch.set_defaults(func=command_cvpr_tier_fetch)
+
+    cvpr_prepare = cvpr_sub.add_parser("prepare", help="extract manuscripts without opening tier labels")
+    cvpr_prepare.add_argument("--cache", required=True)
+    cvpr_prepare.set_defaults(func=command_cvpr_tier_prepare)
+
+    cvpr_run = cvpr_sub.add_parser(
+        "run",
+        help="judge the sample with a free-form model id and a pluggable backend",
+    )
+    cvpr_run.add_argument("--cache", required=True)
+    cvpr_run.add_argument(
+        "--model-id",
+        required=True,
+        help="free-form label such as grok-4.7-cursor, opus-local, or astra-local",
+    )
+    cvpr_run.add_argument("--backend", choices=("adapter", "command", "replay"), required=True)
+    cvpr_run.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
+    cvpr_run.add_argument("--holistic-mode", choices=HOLISTIC_MODES, default=DEFAULT_HOLISTIC_MODE)
+    cvpr_run.add_argument("--adapter", help="module:attribute with complete(prompt, scratch) -> str")
+    cvpr_run.add_argument("--base-url", help="OpenAI-compatible chat base URL")
+    cvpr_run.add_argument("--model", dest="model_name", help="endpoint model name, separate from --model-id")
+    cvpr_run.add_argument("--api-key-env", default="APR_MODEL_API_KEY")
+    cvpr_run.add_argument("--allow-remote", action="store_true")
+    cvpr_run.add_argument("--network-policy", choices=("deny", "metadata_only", "allow"), default="deny")
+    cvpr_run.add_argument(
+        "--command-template",
+        help=(
+            "argv template for this model's local CLI. Placeholders are {prompt_file} "
+            "{answer_file} {model} {paper_id} {mode}. Values are quoted. The template "
+            "is split into argv and must not contain an API key"
+        ),
+    )
+    cvpr_run.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_run.add_argument("--temperature", type=float, default=None)
+    cvpr_run.set_defaults(func=command_cvpr_tier_run)
+
+    cvpr_report = cvpr_sub.add_parser("report", help="compare stored model runs on the shared sample")
+    cvpr_report.add_argument("--cache", required=True)
+    cvpr_report.add_argument("--output", required=True)
+    cvpr_report.add_argument("--resamples", type=int, default=DEFAULT_BOOTSTRAP_RESAMPLES)
+    cvpr_report.add_argument("--bootstrap-seed", type=int, default=DEFAULT_BOOTSTRAP_SEED)
+    cvpr_report.set_defaults(func=command_cvpr_tier_report)
 
     init = subparsers.add_parser("init", help="create a minimal local-first review project")
     init.add_argument("path")

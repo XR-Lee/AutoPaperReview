@@ -1,0 +1,12 @@
+{
+  "id": "cvpr-2026-submission",
+  "venue": "CVPR",
+  "year": 2026,
+  "profile_key": "cvpr2026",
+  "source": "https://cvpr.thecvf.com/Conferences/2026/Dates",
+  "abstract_deadline": "2025-11-07",
+  "submission_deadline": "2025-11-13",
+  "deadline_timezone": "Anywhere on Earth",
+  "pinned": "2026-10-29",
+  "notes": "Abstract deadline 2025-11-07 Anywhere on Earth and paper deadline 2025-11-13 Anywhere on Earth, from the CVPR 2026 dates page. The author guidelines also mention Nov 06 2025 in one sentence about author-list changes. Concurrent-work checks use the dates-page submission_deadline. Format-check keys belong on the visual profile and are not duplicated here. This sidecar is not a fitted review score."
+}

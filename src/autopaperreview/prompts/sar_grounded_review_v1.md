@@ -9,7 +9,7 @@ Required sections:
 3. Weaknesses — concrete, actionable problems.
 4. Questions — items that would change the assessment if answered.
 5. Dimension scores — one numeric score on a 1–10 scale for each of: originality, importance_of_research_question, claims_supported, experimental_soundness, writing_clarity, community_value, prior_work_contextualization. Each score needs a short rationale. Do not combine them into an overall number.
-6. Venue conclusions — for conferences (at least ICLR, NeurIPS, AAAI, CVPR, RSS) and journals (at least TMLR, JMLR, TPAMI, T-RO), give a venue-specific outcome (reject / weak_reject / borderline / major_revision / minor_revision / weak_accept / accept / not_a_fit) and a short rationale. Journals may recommend revision; conferences typically accept or reject. Do not emit an overall 0–10.
+6. Venue conclusions — for conferences (at least ICLR, NeurIPS, AAAI, CVPR, RSS) and journals (at least TMLR, JMLR, TPAMI, T-RO), give a venue-specific outcome and a short rationale. For CVPR the outcome is an ordinal presentation tier, one of reject, poster, highlight, or oral, ordered reject < poster < highlight < oral. State that tier. Do not invent a numeric cutoff that maps a score onto a tier. The underlying score, when a review mode already produces one, stays that mode's rank. Other conferences use reject / weak_reject / borderline / major_revision / minor_revision / weak_accept / accept / not_a_fit. Journals may recommend revision. Do not emit an overall 0–10.
 7. Related-work queries — at least one query for baselines, one for the same problem, and one for related techniques.
 
 Rules:

@@ -1,0 +1,20 @@
+{
+  "id": "cvpr-2025-submission",
+  "source": "https://cvpr.thecvf.com/Conferences/2025/AuthorGuidelines",
+  "style_reference": "CVPR 2025 author guidelines and the CVPR style: US Letter, two-column, text area 6.875in wide by 8.875in high.",
+  "pinned": "2026-10-29",
+  "max_content_pages": 8,
+  "page_limit_fatal": true,
+  "page_width_pt": 612,
+  "page_height_pt": 792,
+  "page_size_tolerance_pt": 3,
+  "min_margin_pt": 56,
+  "header_band_pt": 56,
+  "footer_band_pt": 56,
+  "template_markers": ["cvpr"],
+  "anonymous": true,
+  "anonymity_metadata_fatal": true,
+  "min_page_image_px": 400,
+  "render_dpi": 150,
+  "notes": "Main text is 8 pages excluding references. References have no page cap, so there is no total-page limit. The style text block is 6.875in by 8.875in on US Letter, which puts the side margin near 58.5pt and the top margin near 72pt. The checker floor is 56pt, and the outer 56pt band is not scored as body ink. A non-empty PDF Author field or an email address on page 1 fails closed. This profile is not a fitted review score and it does not map a score onto oral, highlight, or poster."
+}

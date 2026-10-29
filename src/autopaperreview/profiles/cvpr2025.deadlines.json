@@ -1,0 +1,12 @@
+{
+  "id": "cvpr-2025-submission",
+  "venue": "CVPR",
+  "year": 2025,
+  "profile_key": "cvpr2025",
+  "source": "https://cvpr.thecvf.com/Conferences/2025/Dates",
+  "abstract_deadline": "2024-11-08",
+  "submission_deadline": "2024-11-15",
+  "deadline_timezone": "UTC",
+  "pinned": "2026-10-29",
+  "notes": "The CVPR 2025 dates page lists paper registration as Nov 08 2024 07:59 AM UTC and paper submission as Nov 15 2024 07:59 AM UTC. Concurrent-work checks use submission_deadline. The author guidelines also name November 14 as the author-list freeze. Format-check keys belong on the visual profile and are not duplicated here. This sidecar is not a fitted review score."
+}

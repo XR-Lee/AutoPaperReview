@@ -1,0 +1,21 @@
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "uid": "syn-a",
+      "name": "Synthetic Uniform Lattice One",
+      "decision": "Accept",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2023-syn-a"
+    },
+    {
+      "uid": "syn-b",
+      "name": "Synthetic Uniform Lattice Two",
+      "decision": "Accept",
+      "eventtype": "Poster",
+      "paper_pdf_url": "fixture://cvpr2023-syn-b"
+    }
+  ]
+}
