@@ -519,4 +519,6 @@ AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.10–3.13，�
 
 核心是一个本地运行的 DAG（有向无环图），由 TOML 配置、Pydantic 记录、按内容哈希的缓存和适配器组成。`src/autopaperreview/prompts/` 里的提示词和流水线一起做版本管理。解析器和模型厂商都隔在适配器后面。
 
+所有拉取请求都以 `pre-release` 为目标，并且只有在 CI 全部通过时才合并。`main` 只接受来自 `pre-release` 的晋升。一次晋升只有在回归报告显示 `pre-release` 在同一固定基准上的分数高于或等于 `main` 时才允许。两条分支使用同一个模型：通过 Cursor 运行的 grok-4.7，reasoning_effort 为 `xhigh`。基准定义仍是 TODO，见 [分支](docs/branching.md)。
+
 仓库里的延伸阅读：[架构](docs/architecture.md)、[公开标定](docs/public-calibration.md)、[相关工作检索](docs/related-work-search.md)、[初读写法](docs/first-read-review.md)。[docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) 是 2026-08-29 的一份缺口清单，早于 `forecast-k1`；当前的比较请看「分数之外」一节的对照表。
