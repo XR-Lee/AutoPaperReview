@@ -11,7 +11,7 @@ AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two 
 
 The right half comes from the optional benchmark track.
 
-Version `0.1.10`, alpha. Python 3.11–3.13. MIT license. APR doesn't replace a human reviewer.
+Version `0.1.10`, alpha. Python 3.10–3.13. MIT license. APR doesn't replace a human reviewer.
 
 <a id="track-a"></a>
 
@@ -113,7 +113,7 @@ autopaperreview init reviews/my-paper --project-id my-paper --title "My paper re
    - The key stays in the environment, in `APR_MODEL_API_KEY` by default. APR doesn't write it into the TOML, the request log, or the stage signature.
    - The `deny` network policy still allows a loopback server. A remote host needs `allow_remote = true`, `requires_network = true`, and `network_policy = "allow"`. The run manifest then records that the manuscript left the machine.
    - `base_url` is the API root (`…/v1`), not a URL with the key in its query string.
-   - The model timeout defaults to 900 seconds.
+   - The model timeout defaults to 7200 seconds.
 
 ```toml
 [project]
@@ -558,7 +558,7 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 - The table scores one rank-only forecast call. It doesn't measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column shows.
 - Fifteen papers, one Opus timeout, and bootstrap intervals from about 0.4 to about 1.0 mean that a 0.02 Spearman gap isn't a finding.
 - With both Opus and Grok, APR scores below the human mean.
-- At the reported effort, Opus costs about $0.66 and takes several minutes per paper, and it can time out. The default budget is 900 seconds.
+- At the reported effort, Opus costs about $0.66 and takes several minutes per paper. One call in that table timed out. The default model-call budget is 7200 seconds.
 - `forecast-k1` isn't checked against an excerpt. Fatal-flaw verification and dimension scores are real outputs, but they aren't why the rank correlates.
 - On this holdout, OpenJudge on Opus has the higher Spearman. On tune-30 that lead doesn't hold. See [What the ablations show](#ablations).
 - On GPT-6 Astra, APR leads OpenJudge on Spearman and on AUC, and the n=15 intervals overlap. That lead is directional. See [Venue score and benchmark](#track-b).
@@ -566,7 +566,7 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 
 ## Status
 
-AutoPaperReview `0.1.10` is alpha software for Python 3.11–3.13, released under the MIT license.
+AutoPaperReview `0.1.10` is alpha software for Python 3.10–3.13, released under the MIT license.
 
 The core is a local DAG (directed acyclic graph) with TOML configuration, Pydantic records, a content-hash cache, and adapters. Prompts in `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
 

@@ -1527,9 +1527,15 @@ class RankMetricTests(unittest.TestCase):
 
 class HarnessConstraintTests(unittest.TestCase):
     def test_adapter_timeout_default_covers_a_long_reasoning_call(self) -> None:
+        self.assertGreaterEqual(DEFAULT_MODEL_TIMEOUT_SECONDS, 7200)
         params = ExecuteReviewParams(adapter="autopaperreview.model_exec:OpenAICompatibleAdapter")
-        self.assertGreaterEqual(params.timeout_seconds, 900)
+        self.assertGreaterEqual(params.timeout_seconds, 7200)
         self.assertEqual(params.timeout_seconds, DEFAULT_MODEL_TIMEOUT_SECONDS)
+        explicit = ExecuteReviewParams(
+            adapter="autopaperreview.model_exec:OpenAICompatibleAdapter",
+            timeout_seconds=30,
+        )
+        self.assertEqual(explicit.timeout_seconds, 30)
 
     def test_status_banner_is_removed_and_body_text_stays(self) -> None:
         text = "Published as a conference paper at ICLR 2099\nSynthetic cohort result holds.\n"

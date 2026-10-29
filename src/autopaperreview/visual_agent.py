@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from .models import Severity, VisualFinding
 from .visual import VisualPageRequest, finding_matches_caption
 
@@ -177,7 +178,7 @@ class HostedVisionInspector:
             method="POST",
         )
         try:
-            raw = self._transport(http_request, 30.0)
+            raw = self._transport(http_request, DEFAULT_MODEL_TIMEOUT_SECONDS)
         except urllib.error.URLError as exc:
             raise RuntimeError(f"hosted vision endpoint failed: {exc}") from exc
         payload = json.loads(raw.decode("utf-8"))

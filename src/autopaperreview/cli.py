@@ -18,6 +18,7 @@ from . import __version__
 from .artifacts import artifact_from_path
 from .config import HarnessConfig, load_config
 from .migration import load_review_input
+from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
@@ -749,7 +750,10 @@ require_quote_on_major = true
 
 
 def command_calibrate(args: argparse.Namespace) -> int:
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
 
     from .rating import TieNote, calibrate_packages
 
@@ -1052,7 +1056,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Values are quoted. The template is split into argv and must not contain an API key"
         ),
     )
-    cvpr_run.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_run.add_argument("--command-timeout", type=float, default=DEFAULT_MODEL_TIMEOUT_SECONDS)
     cvpr_run.add_argument("--temperature", type=float, default=None)
     cvpr_run.add_argument("--set", dest="set_id", help="run one registered set")
     cvpr_run.add_argument("--variant", choices=("A0", "A1", "A2"))

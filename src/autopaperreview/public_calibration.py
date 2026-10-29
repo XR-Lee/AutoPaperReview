@@ -17,7 +17,10 @@ import re
 import shutil
 import statistics
 import subprocess
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 import urllib.error
 import urllib.parse
 import urllib.request

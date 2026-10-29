@@ -484,6 +484,7 @@ def _run_locked(
             source_path=source_path,
             manifest=manifest,
             dependency_records=dependencies,
+            force=force,
         )
         handler = registry.get(stage.type)
         handler_material = {
@@ -525,6 +526,7 @@ def _run_locked(
             source_path=source_path,
             manifest=manifest,
             dependency_records=dependencies,
+            force=force,
         )
         running = StageRecord(
             id=stage.id,

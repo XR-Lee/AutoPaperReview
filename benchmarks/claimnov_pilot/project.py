@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from autopaperreview.model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
+
 
 def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -51,7 +53,7 @@ allow_remote = true
 requires_network = true
 network_scope = "fulltext"
 judgments = ["contributions", "dimensions", "fatal"]
-timeout_seconds = 900
+timeout_seconds = {int(DEFAULT_MODEL_TIMEOUT_SECONDS)}
 """
     config = f"""schema_version = 1
 

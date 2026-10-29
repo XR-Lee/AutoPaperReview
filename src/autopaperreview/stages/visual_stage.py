@@ -294,6 +294,7 @@ class VisualInspectStage(StageHandler):
                     timeout_seconds=params.timeout_seconds,
                     temperature=params.temperature,
                     json_object=params.json_object,
+                    reuse_prior_exchanges=not context.force,
                     routes=[
                         ReviewRoute(
                             id=route.id,

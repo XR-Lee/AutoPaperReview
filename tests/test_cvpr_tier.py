@@ -644,6 +644,20 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(result["errors"], [])
             self.assertEqual(result["parsed"], result["parsed"])
             self.assertTrue(captured)
+            calls = len(captured)
+            again = run_model(
+                cache,
+                model_id="grok-4.7-cursor",
+                backend="adapter",
+                holistic_mode="mean",
+                endpoint_model="fixture-endpoint",
+                base_url="http://127.0.0.1:9/v1",
+                temperature=0.25,
+                completion=completion,
+            )
+            self.assertEqual(len(captured), calls)
+            self.assertEqual(again["errors"], [])
+            self.assertEqual(again["parsed"], result["parsed"])
             self.assertIn(token, captured[0].get_header("Authorization"))
             self.assertIn(b"0.25", captured[0].data)
             run_dir = cache / "runs" / "grok-4.7-cursor"

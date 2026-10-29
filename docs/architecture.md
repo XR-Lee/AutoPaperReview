@@ -153,6 +153,10 @@ Invalid JSON or a schema mismatch is retried once. The retry appends the validat
 
 Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times (three attempts) with a 0.5s then 1s backoff. Any other HTTP 4xx fails on the first response. Transport retries do not consume the schema retry. Each transport try is stored with its own SHA-256.
 
+The model-call timeout defaults to 7200 seconds. The same default covers `execute_review`, visual inspection, hosted vision, related-work confirmation, and the CVPR tier chat and command backends. A `timeout_seconds` written in the stage config replaces that default, including a smaller one. The socket timeout is silence between reads. Streaming bytes renew it, so a call that keeps sending tokens can run longer than the budget. A gap with no bytes ends the call. There is no upper cap.
+
+A later `run` skips a stage that already succeeded with the same signature. `contributions` and `ledger` are judgments inside one `execute_review` stage. If a later judgment times out, the finished judgment stays in the failed attempt directory. The next run replays that stored exchange when the request bytes match, and does not call the endpoint again. `--force` calls the endpoint again. `calibrate-eval cvpr-tier run` leaves a paper alone when its answer file is already non-empty.
+
 Every request and response is stored under `stages/<id>/model/` as the bytes that were sent and received. Each file's SHA-256 is listed on the stage record in `model_exchanges`. The API key is not part of those bytes. A successful stage is reused when its signature matches, so the endpoint is not called again. The signature includes the packet hashes, model name, endpoint, and `bilingual`. It does not include the API key value. Replacing the key in the environment does not change the signature and does not rerun a cached stage.
 
 Egress is separate from the project network policy:
