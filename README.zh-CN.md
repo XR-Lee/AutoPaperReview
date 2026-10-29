@@ -11,7 +11,7 @@ AutoPaperReview（简称 APR）是一条在本地运行的审稿流水线。它�
 
 图的右半边来自可选的评分与基准部分。
 
-版本 `0.1.10`，Alpha。Python 3.11–3.13。MIT 许可证。APR 不能代替人工审稿。
+版本 `0.1.10`，Alpha。Python 3.10–3.13。MIT 许可证。APR 不能代替人工审稿。
 
 <a id="track-a"></a>
 
@@ -515,7 +515,7 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 
 ## 状态
 
-AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.11–3.13，采用 MIT 许可证。
+AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.10–3.13，采用 MIT 许可证。
 
 核心是一个本地运行的 DAG（有向无环图），由 TOML 配置、Pydantic 记录、按内容哈希的缓存和适配器组成。`src/autopaperreview/prompts/` 里的提示词和流水线一起做版本管理。解析器和模型厂商都隔在适配器后面。
 
