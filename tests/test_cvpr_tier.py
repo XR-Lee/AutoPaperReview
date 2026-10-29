@@ -17,7 +17,6 @@ from autopaperreview.anchors import forecast_mean, panel_mean
 from autopaperreview.cli import main
 from autopaperreview.cvpr_tier import (
     CvprTierError,
-    OpenAIChatCompletion,
     SamplePaper,
     build_prompt,
     build_year_catalog,
@@ -602,60 +601,32 @@ class AdapterTests(unittest.TestCase):
                 fixture_dir=FIXTURE,
             )
             prepare_manuscripts(cache)
-            captured: list = []
-
-            def transport(request, timeout):
-                captured.append(request)
-                content = json.dumps(
-                    {
-                        "rationale": "synthetic lattice reading",
-                        "rating": 4,
-                        "predicted_mean": 6.5,
-                        "tier": "highlight",
-                    }
-                )
-                return json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
-
-            completion = OpenAIChatCompletion(
-                base_url="http://127.0.0.1:9/v1",
-                model="fixture-endpoint",
-                api_key_env="APR_MODEL_API_KEY",
-                temperature=0.25,
-                transport=transport,
-            )
             previous = os.environ.get("APR_MODEL_API_KEY")
             os.environ["APR_MODEL_API_KEY"] = token
             try:
-                result = run_model(
-                    cache,
-                    model_id="grok-4.7-cursor",
-                    backend="adapter",
-                    holistic_mode="mean",
-                    endpoint_model="fixture-endpoint",
-                    base_url="http://127.0.0.1:9/v1",
-                    temperature=0.25,
-                    completion=completion,
-                )
+                with self.assertRaises(CvprTierError) as caught:
+                    run_model(
+                        cache,
+                        model_id="grok-4.7-cursor",
+                        backend="adapter",
+                        holistic_mode="mean",
+                        endpoint_model="fixture-endpoint",
+                        base_url="http://127.0.0.1:9/v1",
+                        temperature=0.25,
+                    )
             finally:
                 if previous is None:
                     os.environ.pop("APR_MODEL_API_KEY", None)
                 else:
                     os.environ["APR_MODEL_API_KEY"] = previous
-            self.assertEqual(result["errors"], [])
-            self.assertEqual(result["parsed"], result["parsed"])
-            self.assertTrue(captured)
-            self.assertIn(token, captured[0].get_header("Authorization"))
-            self.assertIn(b"0.25", captured[0].data)
-            run_dir = cache / "runs" / "grok-4.7-cursor"
+            self.assertIn("local CLI", str(caught.exception))
+            self.assertIn("no API key", str(caught.exception))
             blob = b""
-            for path in run_dir.rglob("*"):
+            for path in cache.rglob("*"):
                 if path.is_file():
                     blob += path.read_bytes()
             self.assertNotIn(token.encode("utf-8"), blob)
-            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["params"]["api_key_env"], "APR_MODEL_API_KEY")
-            self.assertEqual(manifest["params"]["temperature"], 0.25)
-            self.assertNotIn(token, json.dumps(manifest))
+            self.assertFalse((cache / "runs" / "grok-4.7-cursor").exists())
 
 
 class VenueTests(unittest.TestCase):
