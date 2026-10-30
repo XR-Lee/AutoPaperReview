@@ -47,6 +47,7 @@ from autopaperreview.cvpr_tier import (
     SampleManifest,
     SamplePaper,
     YearSummary,
+    prepare_manuscripts,
     run_directory,
     run_model,
     write_report,
@@ -132,10 +133,8 @@ def _write_cache(root: Path, papers: list[tuple[str, str, str]]) -> None:
     for paper_id, _tier, text in papers:
         (root / "raw" / f"{paper_id}.txt").write_text(text, encoding="utf-8")
         (root / "manuscripts" / f"{paper_id}.txt").write_text(text, encoding="utf-8")
-        for variant in ("A0", "A1"):
-            folder = root / "manuscripts" / variant
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / f"{paper_id}.txt").write_text(text, encoding="utf-8")
+    for variant in ("A0", "A1"):
+        prepare_manuscripts(root, variant=variant)
 
 
 def _paper(paper_id: str, base: str) -> str:

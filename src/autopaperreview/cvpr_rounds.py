@@ -37,6 +37,7 @@ def append_round(cache: Path, record: dict[str, Any]) -> dict[str, Any]:
         "repeats": record.get("repeats"),
         "round": _token(record.get("round"), what="round"),
         "set_id": _optional_token(record.get("set_id"), what="set_id"),
+        "skipped": record.get("skipped", 0),
         "tokens": record.get("tokens"),
         "variant": _optional_token(record.get("variant"), what="variant"),
     }
@@ -76,17 +77,17 @@ def format_rounds_table(rows: list[dict[str, Any]]) -> list[str]:
         "",
         "Every line of rounds.jsonl, in append order. A later report does not delete a candidate.",
         "",
-        "| round | model | variant | set | repeats | calls | tokens | parsed | macro-AUC | notes |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| round | model | variant | set | repeats | calls | tokens | parsed | skipped | macro-AUC | notes |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     if not rows:
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | none |")
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | none |")
         return lines
     for row in rows:
         macro = row.get("macro_auc")
         macro_text = "n/a" if not isinstance(macro, (int, float)) else f"{float(macro):.3f}"
         lines.append(
-            "| {round} | {model} | {variant} | {set_id} | {repeats} | {calls} | {tokens} | {parsed} | {macro} | {notes} |".format(
+            "| {round} | {model} | {variant} | {set_id} | {repeats} | {calls} | {tokens} | {parsed} | {skipped} | {macro} | {notes} |".format(
                 round=_cell(row.get("round")),
                 model=_cell(row.get("model_id")),
                 variant=_cell(row.get("variant")),
@@ -95,6 +96,7 @@ def format_rounds_table(rows: list[dict[str, Any]]) -> list[str]:
                 calls=_cell(row.get("calls")),
                 tokens=_cell(row.get("tokens")),
                 parsed=_cell(row.get("parsed")),
+                skipped=_cell(row.get("skipped", 0)),
                 macro=macro_text,
                 notes=_cell(row.get("notes")) or "",
             )
