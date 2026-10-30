@@ -1,6 +1,6 @@
 # Proposed ICLR dev set (fixed-eval-v1)
 
-Status: **proposed**. This list is not locked. The manifest digest in `manifest.json` already refuses a run that uses a different id list. Change the status to `locked` only after this table is accepted, and recompute `content_sha256` with `autopaperreview.fixed_eval`.
+Status: **locked** (accepted by Geek on 2026-10-30, tiers by mean official rating as proposed). The manifest digest refuses any run that uses a different id list. Changing membership requires a new manifest version.
 
 The tier is the mean of the official ratings (1, 3, 5, 6, 8, 10), at least two ratings. The venue decision is recorded beside the tier and is not a second cut, except that every clear-reject and borderline-reject paper in this draw is in fact a reject, and every clear-accept paper is an accept. Four borderline-accept papers were rejected; their means sit between 5.5 and 6.0. Those rows are marked in the note column.
 

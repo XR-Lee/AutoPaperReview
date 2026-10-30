@@ -97,9 +97,9 @@ def _score(cache: Path, forum_id: str, rank: float, ratings: list[int]) -> None:
 
 
 class FixedEvalManifestTests(unittest.TestCase):
-    def test_committed_manifest_is_proposed_and_balanced(self) -> None:
+    def test_committed_manifest_is_locked_and_balanced(self) -> None:
         payload = assert_manifest()
-        self.assertEqual(payload["status"], "proposed")
+        self.assertEqual(payload["status"], "locked")
         self.assertEqual(payload["content_sha256"], content_digest(payload))
         papers = dev_papers(payload)
         self.assertEqual(len(papers), 48)
@@ -333,7 +333,7 @@ class FixedEvalCommandTests(unittest.TestCase):
             self.assertEqual(code, 0)
             saved = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(saved["fixed_set"], "iclr-dev")
-            self.assertEqual(saved["status"], "proposed")
+            self.assertEqual(saved["status"], "locked")
             self.assertEqual(saved["model_id"], "grok-4.7")
             self.assertEqual(saved["effort"], "xhigh")
             self.assertEqual(saved["content_sha256"], assert_manifest()["content_sha256"])
@@ -395,7 +395,7 @@ class FixedEvalCommandTests(unittest.TestCase):
             stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
             self.assertEqual(stamp["model_id"], "grok-4.7")
             self.assertEqual(stamp["effort"], "xhigh")
-            self.assertEqual(stamp["status"], "proposed")
+            self.assertEqual(stamp["status"], "locked")
             self.assertEqual(stamp["content_sha256"], assert_manifest()["content_sha256"])
 
     def test_cvpr_run_refuses_sealed_and_the_excluded_paper(self) -> None:
