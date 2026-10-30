@@ -1186,12 +1186,50 @@ def prepare_manuscripts(
     if variant is not None:
         _write_json(
             material / "manuscripts" / variant / "leak_counts.json",
-            {"variant": variant, "manuscripts": len(rows), "failed": failed, "counts": totals},
+            {
+                "variant": variant,
+                "manuscripts": len(rows),
+                "failed": failed,
+                "counts": totals,
+                "papers": {row["paper_id"]: row["leak"] for row in rows},
+            },
         )
     if failed:
         summary = " ".join(f"{key}={totals[key]}" for key in sorted(totals))
         raise CvprTierError(f"{variant} leak scan failed for {failed} manuscripts: {summary}")
     return rows
+
+
+def _run_leak_failures(
+    cache: Path,
+    manifest: SampleManifest,
+    *,
+    variant: str | None,
+    set_id: str | None,
+) -> dict[str, dict[str, int]]:
+    if variant not in {"A1", "A2"}:
+        return {}
+    path = _material_root(cache, set_id) / "manuscripts" / variant / "leak_counts.json"
+    message = f"{variant} per-paper leak counts are missing or invalid; rerun prepare --variant {variant}"
+    try:
+        payload = json.loads(read_judgment_text(cache, path))
+    except (OSError, ValueError) as exc:
+        raise CvprTierError(message) from exc
+    if not isinstance(payload, dict) or payload.get("variant") != variant:
+        raise CvprTierError(message)
+    papers = payload.get("papers")
+    if not isinstance(papers, dict):
+        raise CvprTierError(message)
+    failures: dict[str, dict[str, int]] = {}
+    for paper in manifest.papers:
+        counts = papers.get(paper.paper_id)
+        if not isinstance(counts, dict) or not counts or any(
+            type(value) is not int or value < 0 for value in counts.values()
+        ):
+            raise CvprTierError(message)
+        if leak_failed(counts):
+            failures[paper.paper_id] = {key: value for key, value in counts.items() if value > 0}
+    return failures
 
 
 def _prompt_for(
@@ -1508,6 +1546,8 @@ def run_model(
         member_ids=[paper.paper_id for paper in manifest.papers],
     )
     material = _material_root(root, set_id)
+    leak_failures = _run_leak_failures(root, manifest, variant=variant, set_id=set_id)
+    eligible = [paper for paper in manifest.papers if paper.paper_id not in leak_failures]
     directory = run_directory(material, label, variant=variant, round_id=round_id)
     answers = directory / "answers"
     parsed = directory / "parsed"
@@ -1522,9 +1562,23 @@ def run_model(
             raise CvprTierError("handoff id collision")
         seen.add(handoff_id)
         handoff_ids[paper.paper_id] = handoff_id
+    skipped: list[dict[str, Any]] = []
+    for paper_id, counts in leak_failures.items():
+        record = {
+            "status": "skipped",
+            "reason": "leak_failed",
+            "paper_id": paper_id,
+            "variant": variant,
+            "handoff_id": handoff_ids[paper_id],
+            "model_id": label,
+            "holistic_mode": holistic_mode,
+            "leak_counts": counts,
+        }
+        _write_json(parsed / f"{handoff_ids[paper_id]}.json", record)
+        skipped.append(record)
     prompts: dict[str, str] = {}
     packet_sha: dict[str, str] = {}
-    for paper in manifest.papers:
+    for paper in eligible:
         prompt, digest = _prompt_for(
             root,
             paper.paper_id,
@@ -1544,7 +1598,7 @@ def run_model(
         except HandoffError as exc:
             raise CvprTierError(str(exc)) from exc
         handoff_root.mkdir(parents=True, exist_ok=True)
-        for paper in manifest.papers:
+        for paper in eligible:
             handoff_id = handoff_ids[paper.paper_id]
             try:
                 exported = export_replay_packet(
@@ -1586,7 +1640,7 @@ def run_model(
         command_transport = (
             "prompt_file" if command_template and "{prompt_file}" in command_template else "stdin"
         )
-        for paper in manifest.papers:
+        for paper in eligible:
             handoff_id = handoff_ids[paper.paper_id]
             stored = _stored_answer_text(answers, handoff_id)
             if stored is not None:
@@ -1626,7 +1680,7 @@ def run_model(
         state_path = directory / "parse_state.json"
         state: dict[str, Any] = _read_json(state_path) if state_path.is_file() else {}
         export_by_paper = {item["paper_id"]: item for item in exports}
-        for paper in manifest.papers:
+        for paper in eligible:
             handoff_id = handoff_ids[paper.paper_id]
             exported = Path(export_by_paper[paper.paper_id]["directory"])
             if not (exported / "answer.json").is_file() and not (exported / "answer.txt").is_file():
@@ -1699,8 +1753,14 @@ def run_model(
     awaiting: list[str] = []
     errors: list[dict[str, str]] = []
     done: list[str] = []
-    usage_rows: list[dict[str, Any]] = []
-    for paper in manifest.papers:
+    usage_rows: list[dict[str, Any]] = [
+        {
+            **record,
+            **_usage_row(record["handoff_id"], "", {"estimated_tokens": 0, "latency_seconds": 0}),
+        }
+        for record in skipped
+    ]
+    for paper in eligible:
         handoff_id = handoff_ids[paper.paper_id]
         outcome = outcomes[paper.paper_id]
         usage_rows.append(_usage_row(handoff_id, prompts[paper.paper_id], outcome))
@@ -1753,6 +1813,7 @@ def run_model(
             "retry_max": 1,
             "round": round_id,
             "set_id": set_id,
+            "skipped": len(skipped),
             "variant": variant,
         },
     )
@@ -1777,6 +1838,7 @@ def run_model(
             "round": round_id,
             "sample_seed": manifest.seed,
             "set_id": set_id,
+            "skipped": [record["paper_id"] for record in skipped],
             "variant": variant,
         },
     )
@@ -1787,12 +1849,13 @@ def run_model(
             root,
             {
                 "backend": backend,
-                "calls": len(manifest.papers) * repeats,
+                "calls": len(eligible) * repeats,
                 "model_id": label,
                 "parsed": len(done),
                 "repeats": repeats,
                 "round": round_id,
                 "set_id": set_id,
+                "skipped": len(skipped),
                 "tokens": sum(int(row.get("estimated_tokens") or 0) for row in usage_rows),
                 "variant": variant,
             },
@@ -1805,6 +1868,7 @@ def run_model(
         "model_id": label,
         "parsed": done,
         "prompt_transport": prompt_transport,
+        "skipped": skipped,
     }
 
 
@@ -1824,6 +1888,8 @@ def _rows_for_model(
     years = years or {}
     rows = []
     for row in parsed_rows:
+        if row.get("status") == "skipped":
+            continue
         tier = labels.get(str(row["paper_id"]))
         if tier not in TIER_RANK:
             continue
@@ -2435,6 +2501,9 @@ def write_report(
                 row["familiarity"] = flag.get("familiarity")
         joined[model_id] = usable
         metrics = model_metrics(usable, resamples=resamples, seed=seed)
+        skipped = [row for row in rows if row.get("status") == "skipped"]
+        metrics["skipped"] = len(skipped)
+        metrics["skipped_by_reason"] = dict(Counter(str(row.get("reason") or "unknown") for row in skipped))
         metrics["extended"] = extended_metrics(usable, resamples=resamples, seed=seed)
         metrics["recognition"] = split_by_recognition(usable, resamples=resamples, seed=seed)
         per_model[model_id] = {
@@ -2494,19 +2563,22 @@ def write_report(
         "",
         "## Per model",
         "",
-        "| model | backend | mode | n | spearman | oral vs poster | highlight vs poster | oral vs highlight | spread stdev | clustered |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "Skipped manuscripts are counted separately and excluded from scoring and analysis CSV rows.",
+        "",
+        "| model | backend | mode | n | skipped (leak_failed) | spearman | oral vs poster | highlight vs poster | oral vs highlight | spread stdev | clustered |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for model_id, body in per_model.items():
         metrics = body["metrics"]
         manifest = body["manifest"]
         spread = metrics["spread"]
         lines.append(
-            "| {model} | {backend} | {mode} | {n} | {spearman} | {oral} | {highlight} | {talk} | {stdev} | {clustered} |".format(
+            "| {model} | {backend} | {mode} | {n} | {skipped} | {spearman} | {oral} | {highlight} | {talk} | {stdev} | {clustered} |".format(
                 model=model_id,
                 backend=manifest.get("backend"),
                 mode=manifest.get("holistic_mode"),
                 n=metrics["n"],
+                skipped=metrics["skipped_by_reason"].get("leak_failed", 0),
                 spearman=_format_interval(metrics["spearman"]),
                 oral=_format_interval(metrics["pairwise_auc"]["oral_vs_poster"]),
                 highlight=_format_interval(metrics["pairwise_auc"]["highlight_vs_poster"]),
