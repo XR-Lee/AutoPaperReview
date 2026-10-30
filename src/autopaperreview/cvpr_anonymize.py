@@ -15,9 +15,9 @@ from typing import Any
 
 from .hashing import sha256_bytes
 
-ANONYMIZER_VERSION = "a1-a2-v2"
+ANONYMIZER_VERSION = "a1-a2-v3"
 ANONYMIZER_RULES = """
-a1-a2-v2
+a1-a2-v3
 A0: strip_cvpr_banner only (single-line open-access stamp).
 A1: A0, then the whole CVF watermark cluster (open access version,
     accepted version, proceedings, Computer Vision Foundation, IEEE Xplore
@@ -26,9 +26,11 @@ A1: A0, then the whole CVF watermark cluster (open access version,
     acknowledgement and funding sections (acknowledgement/acknowledgment,
     singular or plural, numbered or inline, through the references heading);
     replace URLs and project links with [URL]; delete short conference header
-    and footer lines; replace title 4-grams in the first 3000 characters after
-    normalizing line breaks, hyphenation, ligatures, and case; mask author
-    surnames outside References.
+    and footer lines; replace title 4-grams throughout the manuscript,
+    including column-split text, small caps, subtitles, and running headers,
+    after normalizing line breaks, hyphenation, ligatures, and case; mask author
+    surnames outside References. Reference headings may share a layout line;
+    absent headings require a dense, sequential run of dated citations.
 A2: A1, then mask a title NAME: phrase and invented Capitalized tokens that
     occur at least 5 times. Dataset context becomes [DATASET], otherwise
     [METHOD].
@@ -51,7 +53,12 @@ _ABSTRACT_STOP = re.compile(
     r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:introduction|references|bibliography|related\s+work|"
     r"acknowledgements|acknowledgments|acknowledgement|acknowledgment)\b"
 )
-_REFERENCES = re.compile(r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:references|bibliography)\s*$")
+_REFERENCES = re.compile(
+    r"(?i)^(?:\d+(?:\.\d+)*\.?\s*)?(?:references|bibliography)(?=$|[ \t]{2,}|[.:](?:\s|$))"
+)
+_NUMBERED_HEADING = re.compile(r"^\d+(?:\.\d+)*\.?[ \t]+[A-Za-z]")
+_CITATION = re.compile(r"^\s*(?:\[(\d{1,4})\]|(\d{1,4})[.)])[ \t]+\S")
+_CITATION_YEAR = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b")
 _ACK_LABEL = (
     r"(?:acknowledgements|acknowledgments|acknowledgement|acknowledgment|"
     r"funding(?:\s+information)?|"
@@ -93,7 +100,9 @@ _AFFILIATION = re.compile(
     r"college|academy|faculty|centre|center|google|microsoft|nvidia|meta|research)\b"
 )
 _HEADER = re.compile(
-    r"(?i)^.{0,160}(?:cvpr\s*20\d{2}|conference on computer vision and pattern recognition)\b.{0,80}$"
+    r"(?i)^(?:(?:accepted (?:to|at)|proceedings of(?: the)?)\s+)?(?:20\d{2}\s+)?"
+    r"(?:cvpr\s*20\d{2}|(?:ieee/cvf\s+)?conference on computer vision and pattern recognition)"
+    r"(?:\s+20\d{2})?(?:\s*[-–|]\s*\d+)?[ .]*$"
 )
 _TIER_PHRASE = re.compile(
     r"(?i)\b(?:oral|highlight|spotlight|award)\s+(?:presentation|paper|session)\b"
@@ -226,19 +235,64 @@ def stops_abstract(line: str) -> bool:
     if not stripped:
         return False
     left = _left_column(line)
-    return bool(_ABSTRACT_STOP.match(left) or _ABSTRACT_STOP.match(stripped))
+    return bool(_ABSTRACT_STOP.match(left) or _NUMBERED_HEADING.match(left))
+
+
+def _layout_columns(text: str) -> list[list[tuple[int, int]]]:
+    """Column cells with source offsets, retaining single-column reading order."""
+    columns: list[list[tuple[int, int]]] = [[]]
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n\f")
+        for column, match in enumerate(re.finditer(r"\S.*?(?=[ \t]{3,}|$)", content)):
+            if column == len(columns):
+                columns.append([])
+            columns[column].append((offset + match.start(), offset + match.end()))
+        offset += len(line)
+    return columns
+
+
+def _reference_start(lines: list[str]) -> int | None:
+    heading = next((index for index, line in enumerate(lines) if _REFERENCES.match(line.strip())), None)
+    for index, line in enumerate(lines[:heading]):
+        if not _CITATION.match(line):
+            continue
+        window = lines[index : index + 16]
+        citations = [match for candidate in window if (match := _CITATION.match(candidate))]
+        numbers = [int(match.group(1) or match.group(2)) for match in citations[:3]]
+        if len(numbers) != 3 or numbers != list(range(numbers[0], numbers[0] + 3)):
+            continue
+        if len(_CITATION_YEAR.findall("\n".join(window))) >= 3:
+            if index > 0 and _CITATION_YEAR.search(lines[index - 1]) and re.search(
+                r"(?i)\b(?:pages?|pp\.)\s*\d", lines[index - 1]
+            ):
+                index -= 1
+            return index
+    return heading
 
 
 def _split_references(text: str) -> tuple[str, str]:
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if _REFERENCES.fullmatch(line.strip()):
-            outside = "\n".join(lines[:index])
-            refs = "\n".join(lines[index:])
-            if outside and not outside.endswith("\n"):
-                outside += "\n"
-            return outside, refs if refs.endswith("\n") or not refs else refs + "\n"
-    return text, ""
+    spans: list[tuple[int, int]] = []
+    for cells in _layout_columns(text):
+        lines = [text[start:end] for start, end in cells]
+        start = _reference_start(lines)
+        if start is None:
+            continue
+        for index in range(start, len(cells)):
+            line = lines[index]
+            if index > start and not _CITATION.match(line) and (
+                _NUMBERED_HEADING.match(line) or _SECTION.match(line)
+            ):
+                if not _REFERENCES.match(line):
+                    break
+            spans.append(cells[index])
+    if not spans:
+        return text, ""
+    outside = _replace_spans(text, spans, "").rstrip()
+    refs = "\n".join(text[start:end] for start, end in sorted(spans))
+    if not _REFERENCES.match(refs):
+        refs = "References\n" + refs
+    return outside + ("\n" if outside else ""), refs + "\n"
 
 
 def _split_abstract(text: str) -> tuple[str, str]:
@@ -292,11 +346,20 @@ def extract_meta(raw: str) -> dict[str, Any]:
     cleaned = strip_cvf_watermark(_banner(raw))
     preamble, _body = _split_abstract(cleaned)
     paragraphs = _paragraphs(preamble)
-    title = " ".join(paragraphs[0].split()) if paragraphs else ""
+    title_lines = paragraphs.pop(0).splitlines() if paragraphs else []
+    if any(_AFFILIATION.search(line) or _EMAIL.search(line) for line in title_lines[1:]):
+        for index, line in enumerate(title_lines[1:], 1):
+            if re.search(r"\S[ \t]{3,}\S", line) or _AFFILIATION.search(line) or _EMAIL.search(line):
+                paragraphs.insert(0, "\n".join(title_lines[index:]))
+                title_lines = title_lines[:index]
+                break
+    title = " ".join(" ".join(title_lines).split())
+    if title.endswith(":") and paragraphs:
+        title += " " + " ".join(paragraphs.pop(0).split())
     authors: list[str] = []
     affiliations: list[str] = []
     emails = sorted(set(_EMAIL.findall(preamble)))
-    for block in paragraphs[1:]:
+    for block in paragraphs:
         for line in block.splitlines():
             stripped = line.strip()
             if not stripped or _EMAIL.search(stripped):
@@ -306,7 +369,7 @@ def extract_meta(raw: str) -> dict[str, Any]:
             if _AFFILIATION.search(stripped):
                 affiliations.append(stripped)
                 continue
-            authors.append(stripped)
+            authors.extend(re.split(r"[ \t]{3,}", stripped))
     return {
         "title": title,
         "authors": authors,
@@ -382,15 +445,16 @@ def _ack_leak_count(text: str) -> int:
 
 
 def _drop_short_venue_lines(text: str) -> str:
+    outside, refs = _split_references(text)
     kept: list[str] = []
-    for line in text.splitlines():
+    for line in outside.splitlines():
         compact = line.strip()
         if compact and len(compact) < 180 and (_HEADER.match(compact) or _TIER_PHRASE.fullmatch(compact)):
             continue
         if compact and len(compact) < 180 and _FOOTNOTE.search(compact):
             continue
         kept.append(line)
-    return "\n".join(kept)
+    return "\n".join(kept) + ("\n" + refs if refs else "")
 
 
 def _replace_phrase(text: str, words: list[str], replacement: str) -> str:
@@ -491,32 +555,60 @@ def _replace_spans(text: str, spans: list[tuple[int, int]], replacement: str) ->
     return text
 
 
-def _mask_title_ngrams(text: str, title: str) -> str:
+def _title_matches(text: str, title: str) -> list[tuple[int, list[tuple[int, int]]]]:
+    """Match title words in reading order, allowing small-cap letter spacing."""
     grams = _title_grams(title)
     if not grams:
-        return text
-    head, tail = text[:PREAMBLE_CHARS], text[PREAMBLE_CHARS:]
-    tokens = _token_spans(head)
-    spans: list[tuple[int, int]] = []
-    for gram in grams:
-        width = len(gram)
-        for index in range(len(tokens) - width + 1):
-            if tuple(token for token, _start, _end in tokens[index : index + width]) == gram:
-                spans.append((tokens[index][1], tokens[index + width - 1][2]))
-    return _replace_spans(head, spans, "[TITLE]") + tail
+        return []
+    needles: dict[str, list[int]] = {}
+    for index, gram in enumerate(grams):
+        needles.setdefault("".join(gram), []).append(index)
+    max_length = max(map(len, needles))
+    views: list[tuple[str, list[int] | None]] = [(text, None)]
+    columns = _layout_columns(text)
+    if len(columns) > 1:
+        for cells in columns:
+            projected: list[str] = []
+            origins: list[int] = []
+            for start, end in cells:
+                projected.append(text[start:end] + "\n")
+                origins.extend(range(start, end))
+                origins.append(-1)
+            views.append(("".join(projected), origins))
+    matches: list[tuple[int, list[tuple[int, int]]]] = []
+    for view, origins in views:
+        tokens = _token_spans(view)
+        for index, (_token, start, _end) in enumerate(tokens):
+            compact = ""
+            for end_index in range(index, len(tokens)):
+                token, _start, end = tokens[end_index]
+                compact += token
+                if len(compact) > max_length:
+                    break
+                if compact not in needles:
+                    continue
+                spans: list[tuple[int, int]] = []
+                if origins is None:
+                    spans.append((start, end))
+                else:
+                    for origin in origins[start:end]:
+                        if origin < 0:
+                            continue
+                        if spans and origin == spans[-1][1]:
+                            spans[-1] = (spans[-1][0], origin + 1)
+                        else:
+                            spans.append((origin, origin + 1))
+                matches.extend((gram_index, spans) for gram_index in needles[compact])
+    return matches
+
+
+def _mask_title_ngrams(text: str, title: str) -> str:
+    spans = [span for _gram, matched in _title_matches(text, title) for span in matched]
+    return _replace_spans(text, spans, "[TITLE]")
 
 
 def _title_ngram_hits(text: str, title: str) -> int:
-    grams = _title_grams(title)
-    if not grams:
-        return 0
-    tokens = [token for token, _start, _end in _token_spans(text[:PREAMBLE_CHARS])]
-    hits = 0
-    for gram in grams:
-        width = len(gram)
-        if any(tuple(tokens[index : index + width]) == gram for index in range(len(tokens) - width + 1)):
-            hits += 1
-    return hits
+    return len({gram for gram, _spans in _title_matches(text[:PREAMBLE_CHARS], title)})
 
 
 def _mask_surnames(text: str, surnames: list[str]) -> str:
@@ -628,9 +720,9 @@ def anonymize(raw: str, variant: str) -> tuple[str, dict[str, Any], dict[str, in
     text = _replace_urls(text)
     text = _EMAIL.sub("", text)
     text = _drop_short_venue_lines(text)
-    text = _mask_title_ngrams(text, str(meta.get("title") or ""))
     text = _mask_surnames(text, list(meta.get("surnames") or []))
     if variant == "A2":
         text = _mask_methods(text, str(meta.get("title") or ""))
     text = _collapse(text)
+    text = _mask_title_ngrams(text, str(meta.get("title") or ""))
     return text, meta, leak_counts(text, meta)

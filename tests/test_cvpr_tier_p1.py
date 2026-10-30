@@ -145,6 +145,7 @@ def _paper(paper_id: str, base: str) -> str:
         "Bea South\n\n"
         "Abstract\n\n"
         "This synthetic note counts eight lattice cells and stops there.\n\n"
+        "1 Introduction\n"
         f"BASE {base}\n"
         f"PAPERMARK {paper_id}\n"
     )
