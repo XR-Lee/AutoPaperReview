@@ -1,6 +1,7 @@
 name: Confidentiality
 
 on:
+  # Pushes and pull requests for every branch, including pre-release and main.
   push:
   pull_request:
   workflow_dispatch:

@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .awaiting import AwaitingInput
 from .hashing import digest_excerpt, sha256_bytes
 from .integrity import reporting_is_present
 from .ledger import apply_contribution_audits
@@ -408,6 +409,40 @@ def _packet_sha_map(raw: dict[str, Any]) -> dict[str, str] | None:
     return {str(key): str(value) for key, value in found.items()}
 
 
+def unresolved_drop_excerpts(
+    package: ReviewPackage,
+    *,
+    source_text: str,
+    manuscript_sha: str,
+    literature: ReviewPackage | None = None,
+) -> tuple[int, list[str]]:
+    """Count the quoted spans in a drop and list the ones that are not in the sources.
+
+    Evidence excerpts, first-read quotes, and issue anchor excerpts must resolve
+    in the manuscript or a retrieved snapshot, with the same matcher the chat
+    adapter uses.
+    """
+    from .model_exec import locate_excerpt
+
+    snapshots = list(literature.retrieved_snapshots) if literature is not None else []
+    quoted: list[tuple[str, str]] = []
+    for item in package.evidence:
+        if item.excerpt and item.excerpt.strip():
+            quoted.append((f"evidence {item.id} excerpt", item.excerpt))
+    for issue in package.issues:
+        if issue.first_read is not None and issue.first_read.quote and issue.first_read.quote.strip():
+            quoted.append((f"issue {issue.id} first_read.quote", issue.first_read.quote))
+        if issue.anchor is not None and issue.anchor.excerpt and issue.anchor.excerpt.strip():
+            quoted.append((f"issue {issue.id} anchor.excerpt", issue.anchor.excerpt))
+    unresolved = [
+        label
+        for label, excerpt in quoted
+        if locate_excerpt(excerpt, manuscript=source_text, manuscript_sha=manuscript_sha, snapshots=snapshots)
+        is None
+    ]
+    return len(quoted), unresolved
+
+
 class AgentJudgmentAdapter:
     """Load a judgment drop written after the prompt packets were read.
 
@@ -415,8 +450,13 @@ class AgentJudgmentAdapter:
     echo ``packet_sha256`` for every packet on the request. Any overall score
     in the drop is removed so ``rate`` remains the only place a venue bin is
     assigned. This adapter does not call a model and does not read held-out
-    human scores.
+    human scores. A missing drop raises ``AwaitingInput`` with the digests to
+    echo. With ``verify_excerpts`` on the request metadata, every quoted span
+    must resolve in the manuscript or a retrieved snapshot.
     """
+
+    # The drop is written after the prompt packets exist, so validation does not require it.
+    waits_for_drop = True
 
     def execute(self, request: ReviewRequest, scratch: Path) -> ReviewResult:
         scratch.mkdir(parents=True, exist_ok=True)
@@ -424,15 +464,18 @@ class AgentJudgmentAdapter:
             raise ValueError("AgentJudgmentAdapter requires fixture_path to point at the judgment drop")
         if not request.packets:
             raise ValueError("AgentJudgmentAdapter requires prompt packets; run the prompt_packet stage first")
+        expected = {route_id: digest_packet_text(text) for route_id, text in request.packets.items()}
         path = Path(request.fixture_path)
         if not path.is_file():
-            raise FileNotFoundError(f"judgment drop does not exist: {path}")
+            raise AwaitingInput(
+                f"judgment drop does not exist yet: {path}",
+                request={"kind": "review_judgment", "echo": {"packet_sha256": dict(sorted(expected.items()))}},
+            )
         raw_text = path.read_text(encoding="utf-8")
         (scratch / "raw_judgment.json").write_text(raw_text, encoding="utf-8")
         raw = json.loads(raw_text)
         if not isinstance(raw, dict):
             raise ValueError("judgment drop must be a JSON object")
-        expected = {route_id: digest_packet_text(text) for route_id, text in request.packets.items()}
         seen = _packet_sha_map(raw)
         if seen is None:
             missing = ", ".join(sorted(expected))
@@ -465,12 +508,31 @@ class AgentJudgmentAdapter:
         missing_dims = [item.value for item in SarDimension if item not in present]
         if missing_dims:
             raise ValueError(f"judgment drop is missing dimension scores: {missing_dims}")
+        excerpt_check: dict[str, Any] | None = None
+        if request.metadata.get("verify_excerpts"):
+            if not request.source_text:
+                excerpt_check = {"status": "skipped", "reason": "the manuscript source is not text"}
+            else:
+                checked, unresolved = unresolved_drop_excerpts(
+                    package,
+                    source_text=request.source_text,
+                    manuscript_sha=request.manuscript.sha256,
+                    literature=request.literature,
+                )
+                if unresolved:
+                    raise ValueError(
+                        "judgment drop quotes text that is not in the manuscript or a retrieved snapshot "
+                        "(copy each excerpt verbatim): " + "; ".join(unresolved)
+                    )
+                excerpt_check = {"status": "verified", "checked": checked}
         metadata = dict(package.metadata)
         metadata["judgment"] = {
             "adapter": "agent",
             "packet_sha256": expected,
             "stripped_overall_score": stripped_overall,
         }
+        if excerpt_check is not None:
+            metadata["judgment"]["excerpt_check"] = excerpt_check
         package = package.model_copy(update={"metadata": metadata, "project_id": request.project_id, "manuscript": request.manuscript})
         if request.routes:
             known = {route.id: route for route in package.routes}
@@ -486,5 +548,6 @@ class AgentJudgmentAdapter:
                 "adapter": "agent",
                 "packet_count": len(request.packets),
                 "stripped_overall_score": stripped_overall,
+                **({"excerpt_check": excerpt_check} if excerpt_check is not None else {}),
             },
         )

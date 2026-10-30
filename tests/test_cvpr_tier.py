@@ -17,7 +17,6 @@ from autopaperreview.anchors import forecast_mean, panel_mean
 from autopaperreview.cli import main
 from autopaperreview.cvpr_tier import (
     CvprTierError,
-    OpenAIChatCompletion,
     SamplePaper,
     build_prompt,
     build_year_catalog,
@@ -430,6 +429,52 @@ class CommandTests(unittest.TestCase):
                 )
         self.assertIn("timed out", str(caught.exception))
 
+    def test_command_reuses_a_stored_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cache"
+            list_catalog(cache, years=(2024,), fixture_dir=FIXTURE)
+            fetch_sample(
+                cache,
+                n_per_tier={"oral": 1, "highlight": 0, "poster": 0},
+                seed=1,
+                fixture_dir=FIXTURE,
+            )
+            prepare_manuscripts(cache)
+            counter = cache / "calls.txt"
+            script = cache / "count_cli.py"
+            script.write_text(
+                "import pathlib, sys\n"
+                "counter = pathlib.Path(sys.argv[1])\n"
+                "count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0\n"
+                "counter.write_text(str(count + 1), encoding='utf-8')\n"
+                "print('{\"rationale\": \"synthetic stored reading\", \"rating\": 4, "
+                "\"predicted_mean\": 6.0, \"tier\": \"poster\"}')\n",
+                encoding="utf-8",
+            )
+            template = f"{sys.executable} {script} {counter}"
+            first = run_model(
+                cache,
+                model_id="opus-local",
+                backend="command",
+                holistic_mode="mean",
+                command_template=template,
+            )
+            self.assertEqual(first["errors"], [])
+            self.assertEqual(len(first["parsed"]), 1)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+            second = run_model(
+                cache,
+                model_id="opus-local",
+                backend="command",
+                holistic_mode="mean",
+                command_template=template,
+                repeats=3,
+            )
+            self.assertEqual(second["errors"], [])
+            self.assertEqual(len(second["parsed"]), 1)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+            self.assertEqual(second["prompt_transport"], "stdin")
+
 
 class ReportTests(unittest.TestCase):
     def test_metrics_and_two_model_agreement(self) -> None:
@@ -602,60 +647,32 @@ class AdapterTests(unittest.TestCase):
                 fixture_dir=FIXTURE,
             )
             prepare_manuscripts(cache)
-            captured: list = []
-
-            def transport(request, timeout):
-                captured.append(request)
-                content = json.dumps(
-                    {
-                        "rationale": "synthetic lattice reading",
-                        "rating": 4,
-                        "predicted_mean": 6.5,
-                        "tier": "highlight",
-                    }
-                )
-                return json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
-
-            completion = OpenAIChatCompletion(
-                base_url="http://127.0.0.1:9/v1",
-                model="fixture-endpoint",
-                api_key_env="APR_MODEL_API_KEY",
-                temperature=0.25,
-                transport=transport,
-            )
             previous = os.environ.get("APR_MODEL_API_KEY")
             os.environ["APR_MODEL_API_KEY"] = token
             try:
-                result = run_model(
-                    cache,
-                    model_id="grok-4.7-cursor",
-                    backend="adapter",
-                    holistic_mode="mean",
-                    endpoint_model="fixture-endpoint",
-                    base_url="http://127.0.0.1:9/v1",
-                    temperature=0.25,
-                    completion=completion,
-                )
+                with self.assertRaises(CvprTierError) as caught:
+                    run_model(
+                        cache,
+                        model_id="grok-4.7-cursor",
+                        backend="adapter",
+                        holistic_mode="mean",
+                        endpoint_model="fixture-endpoint",
+                        base_url="http://127.0.0.1:9/v1",
+                        temperature=0.25,
+                    )
             finally:
                 if previous is None:
                     os.environ.pop("APR_MODEL_API_KEY", None)
                 else:
                     os.environ["APR_MODEL_API_KEY"] = previous
-            self.assertEqual(result["errors"], [])
-            self.assertEqual(result["parsed"], result["parsed"])
-            self.assertTrue(captured)
-            self.assertIn(token, captured[0].get_header("Authorization"))
-            self.assertIn(b"0.25", captured[0].data)
-            run_dir = cache / "runs" / "grok-4.7-cursor"
+            self.assertIn("local CLI", str(caught.exception))
+            self.assertIn("no API key", str(caught.exception))
             blob = b""
-            for path in run_dir.rglob("*"):
+            for path in cache.rglob("*"):
                 if path.is_file():
                     blob += path.read_bytes()
             self.assertNotIn(token.encode("utf-8"), blob)
-            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["params"]["api_key_env"], "APR_MODEL_API_KEY")
-            self.assertEqual(manifest["params"]["temperature"], 0.25)
-            self.assertNotIn(token, json.dumps(manifest))
+            self.assertFalse((cache / "runs" / "grok-4.7-cursor").exists())
 
 
 class VenueTests(unittest.TestCase):

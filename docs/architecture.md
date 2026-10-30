@@ -102,6 +102,10 @@ Each enabled stage follows this lifecycle:
 7. Atomically promote the completed attempt to `stages/<stage-id>`, preserving the previous completed directory if promotion fails.
 8. Record success or failure in `run_manifest.json` through an atomic file replacement.
 
+A stage that raises `AwaitingInput` is recorded as `awaiting_input`. The request is stored on the stage metadata and the attempt directory is removed. Stages that depend on it, directly or through another stage, are recorded as `pending` with `blocked_by`. The other stages still run, so one pass lists every drop the run needs. See [Agent handoff and MCP](#agent-handoff-and-mcp).
+
+One process at a time holds `<run>/.lock` while it runs a project (`flock` on POSIX, `msvcrt.locking` on Windows). The operating system drops the lock when the process exits. A second run of the same project fails with `RunLockedError` and does not touch the manifest.
+
 The run directory name is the project id. Source and configuration hashes are stored on the manifest and do not name the directory. An export-gate change updates the report stage's parameters and reuses ingest, render, search, and judgments when those stages' own inputs are unchanged. A manuscript edit reruns stages that read the manuscript, and downstream stages whose dependency hashes changed.
 
 ## Built-in stages
@@ -148,6 +152,10 @@ The adapter reads the `prompt_packet` files already produced for the run. It cal
 Invalid JSON or a schema mismatch is retried once. The retry appends the validation error. A second failure fails the stage. An empty contribution list or an empty ledger list is that kind of schema failure. The adapter does not substitute deterministic output.
 
 Connection errors, timeouts, HTTP 429, and HTTP 5xx are retried up to two times (three attempts) with a 0.5s then 1s backoff. Any other HTTP 4xx fails on the first response. Transport retries do not consume the schema retry. Each transport try is stored with its own SHA-256.
+
+The model-call timeout defaults to 7200 seconds. The same default covers `execute_review`, visual inspection, hosted vision, related-work confirmation, and the CVPR tier chat and command backends. A `timeout_seconds` written in the stage config replaces that default, including a smaller one. The socket timeout is silence between reads. Streaming bytes renew it, so a call that keeps sending tokens can run longer than the budget. A gap with no bytes ends the call. There is no upper cap.
+
+A later `run` skips a stage that already succeeded with the same signature. `contributions` and `ledger` are judgments inside one `execute_review` stage. If a later judgment times out, the finished judgment stays in the failed attempt directory. The next run replays that stored exchange when the request bytes match, and does not call the endpoint again. `--force` calls the endpoint again. `calibrate-eval cvpr-tier run` leaves a paper alone when its answer file is already non-empty.
 
 Every request and response is stored under `stages/<id>/model/` as the bytes that were sent and received. Each file's SHA-256 is listed on the stage record in `model_exchanges`. The API key is not part of those bytes. A successful stage is reused when its signature matches, so the endpoint is not called again. The signature includes the packet hashes, model name, endpoint, and `bilingual`. It does not include the API key value. Replacing the key in the environment does not change the signature and does not rerun a cached stage.
 
@@ -199,6 +207,33 @@ A remote endpoint adds `allow_remote = true`, `requires_network = true`, and `ne
 
 The consensus stage counts distinct route IDs as independent support. This is a conservative v0.1 mechanism, not a scientific model of reviewer independence. It does not yet preserve structured opposition or contradictory findings; see [Roadmap](roadmap.md#consensus-and-dissent).
 
+## Agent handoff and MCP
+
+A host agent, such as Claude Code, Codex CLI, or another MCP client, can make the judgments that `execute_review`, `visual_inspect`, and `related_work_search` otherwise get from a fixture, a chat endpoint, or a live provider. The agent writes a JSON drop. APR checks the drop with the stage's own code, and the pipeline stays the only writer of durable state.
+
+| Stage | Waits when | Request lists | Drop |
+|---|---|---|---|
+| `execute_review` with `AgentJudgmentAdapter` | `fixture_path` is declared and missing | Prompt packets, and `echo.packet_sha256` | Legacy review JSON or a canonical package that echoes the digests |
+| `visual_inspect` with `AgentFindingsInspector` | `findings_path` is declared and missing | Page renders with their SHA-256, and the visual packet | `pages_seen` and `findings` |
+| `related_work_search` with `mode = "agent"` | `findings_path` is declared and missing | Locally generated queries | `candidates` with raw provider payloads |
+
+`validate` accepts a missing drop for an adapter class that sets `waits_for_drop`. A declared `FixtureReviewAdapter` fixture must still exist. When the drop is missing, the stage signature records `fixture_sha256: null`. Writing the drop changes the signature, so the stage reruns.
+
+`autopaperreview status` (`handoff.run_status`) reads the manifest and prints the state (`not_started`, `running`, `interrupted`, `failed`, `awaiting_input`, `stale`, or `complete`), each awaiting request with absolute paths, related-work confirmations still open, input changes since the last run, the report outputs, and the next step. `--detail` adds a fill-in template. The review template lists the seven dimensions and the `sar_bands_v1` clauses with no clause chosen. `autopaperreview submit` (`handoff.submit_drop`) refuses while a run holds the lock or after the manuscript changed. It runs the stage's check in a scratch directory and writes the drop to its declared path only when the check passes. `run` exits 3 while a stage awaits a drop, the code `calibrate-eval run` already uses for `awaiting_judgment`, and prints JSON on failure as well.
+
+`verify_excerpts = true` on `execute_review` makes `AgentJudgmentAdapter` resolve every evidence excerpt, first-read quote, and issue anchor excerpt in the manuscript or a retrieved snapshot, with the matcher the chat adapter uses. An unresolved span fails the stage and names the record. The parameter enters the signature only when it is true, so existing caches stay valid. `init --adapter agent` turns it on.
+
+`autopaperreview mcp` serves these steps as MCP tools over stdio: `init_project`, `validate`, `run`, `status`, `read_input`, `drop_template`, `submit_drop`, and `report`. The server is JSON-RPC 2.0 on the standard library and negotiates protocol versions `2025-06-18`, `2025-03-26`, and `2024-11-05`. It is a surface over the CLI functions, not an agent loop.
+
+- Paths. Every tool path, the run directory, and each declared drop path must resolve inside a `--root` directory (default: the working directory). `read_input` reads files of the project and its run directory only.
+- Output. Text comes back in pages of `max_chars` (default 40,000 characters). A PNG or JPEG render comes back as image content.
+- Progress. A `run` call that carries a `progressToken` gets one notification when each stage starts and one when it ends.
+- Concurrency. Tool calls run on worker threads, so `ping` is answered during a long run. The run lock turns a second run of the same project into `busy`.
+- Stdout. The protocol keeps a private copy of stdout. File descriptor 1 and `sys.stdout` point at stderr, so a stray print or a child process cannot corrupt the stream.
+- Trust. `review.toml` is trusted configuration, as it is for the CLI. Its `command` stages and adapters run in the server process. The tools cannot write a `review.toml` other than the one `init_project` generates.
+
+The host agent's model reads the packets, so the manuscript goes wherever that model runs. APR cannot observe that egress, and `manuscript_left_machine` is not set for it.
+
 ## Plugin boundary
 
 Built-ins and external plugins implement the stage-handler interface and are registered under the `autopaperreview.stages` entry-point group. A stage handler provides:
@@ -240,3 +275,4 @@ Timestamps document execution history but are excluded from stage signatures. De
 - [First-read review writing](first-read-review.md)
 - [Maintenance policy](maintenance.md)
 - [Roadmap](roadmap.md)
+- [Branching](branching.md)

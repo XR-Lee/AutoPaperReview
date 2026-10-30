@@ -1,5 +1,9 @@
 # Contributing
 
+## Branches
+
+All pull requests target `pre-release` and merge only when CI is fully green. `main` only takes promotions from `pre-release`. A promotion is allowed only when a regression report shows that `pre-release` scores higher than or equal to `main` on the same fixed benchmark. Both branches run with the same model, grok-4.7 at reasoning_effort `xhigh`, via Cursor. The benchmark definition is a TODO in [Branching](docs/branching.md).
+
 ## Compatibility rules
 
 - Do not persist objects owned by parser, agent, workflow, telemetry, or journal-platform libraries.

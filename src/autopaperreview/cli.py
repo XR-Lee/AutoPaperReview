@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import sys
@@ -16,15 +18,20 @@ from . import __version__
 from .artifacts import artifact_from_path
 from .config import HarnessConfig, load_config
 from .migration import load_review_input
+from .model_exec import DEFAULT_MODEL_TIMEOUT_SECONDS
 from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
+    RunLockedError,
     default_registry,
     load_manifest,
     run_pipeline,
     validate_config_paths,
 )
 from .reporting import write_package_json
+
+# Exit code of `run` when a stage waits for an agent drop. `calibrate-eval run` uses the same code.
+EXIT_AWAITING_INPUT = 3
 
 
 def _print_json(value) -> None:
@@ -46,21 +53,72 @@ def command_validate(args: argparse.Namespace) -> int:
     return 0 if not errors else 1
 
 
+def run_summary(config: str | Path, *, force: bool = False, on_event=None) -> dict:
+    """Run a project and describe the result. Shared by `run` and the MCP server."""
+    from .handoff import run_status
+
+    try:
+        manifest = run_pipeline(config, force=force, on_event=on_event)
+    except RunLockedError as exc:
+        return {"status": "busy", "error": str(exc)}
+    except PipelineError as exc:
+        summary = {"status": "failed", "failed_stage": exc.stage_id, "error": str(exc)}
+        if exc.stage_id is not None:
+            summary["next"] = run_status(config)["next"]
+        return summary
+    status = run_status(config)
+    return {
+        "status": "awaiting_input" if status["awaiting"] else "success",
+        "run_id": manifest.run_id,
+        "project_id": manifest.project_id,
+        "source_sha256": manifest.source.sha256,
+        "stages": [
+            {"id": stage.id, "status": stage.status.value, "outputs": len(stage.outputs)}
+            for stage in manifest.stages
+        ],
+        "awaiting": status["awaiting"],
+        "notices": status["notices"],
+        "outputs": status["outputs"],
+        "next": status["next"],
+    }
+
+
 def command_run(args: argparse.Namespace) -> int:
-    manifest = run_pipeline(args.config, force=args.force)
-    _print_json(
-        {
-            "status": "success",
-            "run_id": manifest.run_id,
-            "project_id": manifest.project_id,
-            "source_sha256": manifest.source.sha256,
-            "stages": [
-                {"id": stage.id, "status": stage.status.value, "outputs": len(stage.outputs)}
-                for stage in manifest.stages
-            ],
-        }
-    )
+    summary = run_summary(args.config, force=args.force)
+    _print_json(summary)
+    if summary["status"] in {"failed", "busy"}:
+        print(f"error: {summary['error']}", file=sys.stderr)
+        return 2
+    return EXIT_AWAITING_INPUT if summary["status"] == "awaiting_input" else 0
+
+
+def command_status(args: argparse.Namespace) -> int:
+    from .handoff import run_status
+
+    _print_json(run_status(args.config, detail=args.detail))
     return 0
+
+
+def command_submit(args: argparse.Namespace) -> int:
+    from .handoff import submit_drop
+
+    drop_path = Path(args.drop).expanduser()
+    if not drop_path.is_file():
+        raise FileNotFoundError(f"drop file does not exist: {drop_path}")
+    result = submit_drop(
+        args.config,
+        drop_path.read_text(encoding="utf-8"),
+        stage_id=args.stage,
+        kind=args.kind,
+    )
+    _print_json(result)
+    return 0 if result["status"] == "accepted" else 1
+
+
+def command_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import serve_stdio
+
+    return serve_stdio([Path(root) for root in args.root] or [Path.cwd()])
 
 
 def command_inspect(args: argparse.Namespace) -> int:
@@ -190,8 +248,36 @@ def _load_only_ids(path: str | None, split: str | None) -> set[str] | None:
 
 
 def command_calibrate_eval_run(args: argparse.Namespace) -> int:
-    from .public_calibration import run_cache
+    from .fixed_eval import assert_forecast_flags, assert_manifest, assert_model_recorded, dev_ids
+    from .public_calibration import assert_local_only, run_cache
 
+    only_ids = _load_only_ids(args.only_ids, args.split)
+    fixed_stamp = None
+    if args.fixed_set == "iclr-dev":
+        if args.only_ids:
+            raise ValueError("do not pass --only-ids with --fixed-set iclr-dev")
+        manifest = assert_manifest()
+        model_id, effort = assert_model_recorded(args.model_id, args.effort)
+        assert_forecast_flags(
+            cheap=args.cheap,
+            holistic_mode=args.holistic_mode,
+            holistic_samples=args.holistic_samples,
+            related_work=args.related_work,
+            coefficient_set=args.coefficient_set,
+        )
+        only_ids = set(dev_ids(manifest))
+        fixed_stamp = {
+            "cheap": bool(args.cheap),
+            "coefficient_set": args.coefficient_set,
+            "content_sha256": manifest["content_sha256"],
+            "effort": effort,
+            "fixed_set": "iclr-dev",
+            "holistic_mode": args.holistic_mode,
+            "holistic_samples": int(args.holistic_samples),
+            "model_id": model_id,
+            "related_work": args.related_work,
+            "status": manifest["status"],
+        }
     result = run_cache(
         Path(args.cache),
         mode=args.mode,
@@ -208,8 +294,13 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
         cheap=args.cheap,
         holistic_samples=args.holistic_samples,
         holistic_mode=args.holistic_mode,
-        only_ids=_load_only_ids(args.only_ids, args.split),
+        only_ids=only_ids,
     )
+    if fixed_stamp is not None:
+        cache = assert_local_only(Path(args.cache))
+        stamp = cache / "fixed-eval-run.json"
+        stamp.write_text(json.dumps(fixed_stamp, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = {**result, "fixed_eval": fixed_stamp}
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
         code = 3
@@ -273,15 +364,23 @@ def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
         set_id=args.set_id,
         exclude_sets=_cvpr_set_list(args.exclude_sets),
     )
-    _print_json(
-        {
-            "status": "success",
-            "seed": manifest.seed,
-            "n_per_tier": manifest.n_per_tier,
-            "draws": manifest.draws,
-            "paper_count": len(manifest.papers),
-        }
+    from .fixed_eval import assert_cvpr_stage
+
+    note = assert_cvpr_stage(
+        args.set_id,
+        [paper.paper_id for paper in manifest.papers],
+        stage="fetch",
     )
+    body = {
+        "status": "success",
+        "seed": manifest.seed,
+        "n_per_tier": manifest.n_per_tier,
+        "draws": manifest.draws,
+        "paper_count": len(manifest.papers),
+    }
+    if note is not None:
+        body["fixed_eval"] = note
+    _print_json(body)
     return 0
 
 
@@ -293,8 +392,30 @@ def command_cvpr_tier_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _registered_sample_ids(cache: Path, set_id: str) -> list[str] | None:
+    path = cache / "sets" / set_id / "sample_manifest.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    papers = payload.get("papers") if isinstance(payload, dict) else None
+    if not isinstance(papers, list):
+        raise ValueError(f"{set_id} sample manifest has no papers")
+    return [str(item["paper_id"]) for item in papers if isinstance(item, dict) and item.get("paper_id")]
+
+
 def command_cvpr_tier_run(args: argparse.Namespace) -> int:
     from .cvpr_tier import run_model
+    from .fixed_eval import SEALED_CVPR, assert_cvpr_stage
+    from .public_calibration import assert_local_only
+
+    if args.set_id in {"S24-P", "S24-D2", *SEALED_CVPR}:
+        cache = assert_local_only(Path(args.cache))
+        if args.set_id in SEALED_CVPR:
+            assert_cvpr_stage(args.set_id, [], stage="run")
+        else:
+            sample_ids = _registered_sample_ids(cache, args.set_id)
+            if sample_ids is not None:
+                assert_cvpr_stage(args.set_id, sample_ids, stage="run")
 
     result = run_model(
         Path(args.cache),
@@ -317,6 +438,8 @@ def command_cvpr_tier_run(args: argparse.Namespace) -> int:
         lock_path=Path(args.lock) if args.lock else None,
         handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
         custody=Path(args.custody) if args.custody else None,
+        repeats=args.repeats,
+        round_id=args.round_id,
     )
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
@@ -351,6 +474,89 @@ def command_cvpr_tier_report(args: argparse.Namespace) -> int:
             "models": list(metrics["models"]),
         }
     )
+    return 0
+
+
+def _cvpr_templates(value: str) -> tuple[str, ...]:
+    found = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not found:
+        raise argparse.ArgumentTypeError("templates must name at least one of P-A, P-T, P-D")
+    return found
+
+
+def command_cvpr_tier_probe(args: argparse.Namespace) -> int:
+    from .cvpr_probe import run_probe
+
+    result = run_probe(
+        Path(args.cache),
+        model_id=args.model_id,
+        backend=args.backend,
+        command_template=args.command_template,
+        command_timeout=args.command_timeout,
+        templates=tuple(args.templates),
+        batch_size=args.batch_size,
+        seed=args.seed,
+        decoy_count=args.decoys,
+        controls_path=Path(args.controls) if args.controls else None,
+        passages_path=Path(args.passages) if args.passages else None,
+        catalog_path=Path(args.catalog) if args.catalog else None,
+        set_id=args.set_id,
+        variant=args.variant,
+        handoff_dir=Path(args.handoff_dir) if args.handoff_dir else None,
+        custody=Path(args.custody) if args.custody else None,
+    )
+    status = "error" if result["errors"] else "success"
+    _print_json({"status": status, **result})
+    return 2 if result["errors"] else 0
+
+
+def command_cvpr_tier_controls(args: argparse.Namespace) -> int:
+    from .cvpr_probe import fetch_negative_controls
+
+    payload = fetch_negative_controls(since=args.since, category=args.category, limit=args.limit)
+    destination = Path(args.output).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _print_json({"status": "success", "output": str(destination), "papers": len(payload["papers"])})
+    return 0
+
+
+def command_cvpr_tier_decoys(args: argparse.Namespace) -> int:
+    from .cvpr_probe import synthetic_decoys, titles_from_catalog_payload
+
+    titles: list[str] = []
+    digests: set[str] = set()
+    if args.catalog:
+        catalog_payload = json.loads(Path(args.catalog).expanduser().read_text(encoding="utf-8"))
+        titles, digests = titles_from_catalog_payload(catalog_payload)
+    payload = {
+        "papers": synthetic_decoys(args.count, seed=args.seed, catalog_titles=titles, catalog_digests=digests),
+        "seed": args.seed,
+        "source": "synthetic",
+    }
+    destination = Path(args.output).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _print_json({"status": "success", "output": str(destination), "papers": len(payload["papers"])})
+    return 0
+
+
+def command_cvpr_tier_round(args: argparse.Namespace) -> int:
+    from .cvpr_rounds import append_round
+
+    row = append_round(
+        Path(args.cache),
+        {
+            "backend": args.backend,
+            "model_id": args.model_id,
+            "notes": args.notes,
+            "repeats": args.repeats,
+            "round": args.round_id,
+            "set_id": args.set_id,
+            "variant": args.variant,
+        },
+    )
+    _print_json({"status": "success", "round": row["round"], "model_id": row["model_id"]})
     return 0
 
 
@@ -479,8 +685,59 @@ def command_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+INIT_ADAPTERS = {
+    "deterministic": "autopaperreview.adapters:DeterministicManuscriptAdapter",
+    "agent": "autopaperreview.adapters:AgentJudgmentAdapter",
+}
+
+
+def _toml_basic_string(value: str) -> str:
+    """Quote ``value`` as a TOML basic string, escaping quotes, backslashes, and control characters."""
+    escaped: list[str] = []
+    for character in value:
+        code = ord(character)
+        if character in '"\\':
+            escaped.append("\\" + character)
+        elif code < 0x20 or code == 0x7F:
+            escaped.append(f"\\u{code:04X}")
+        elif 0xD800 <= code <= 0xDFFF:
+            raise ValueError("a TOML string cannot hold a lone surrogate")
+        else:
+            escaped.append(character)
+    return '"' + "".join(escaped) + '"'
+
+
 def command_init(args: argparse.Namespace) -> int:
-    target = Path(args.path).expanduser().resolve()
+    _print_json(
+        write_project(
+            Path(args.path),
+            project_id=args.project_id,
+            title=args.title,
+            adapter=args.adapter,
+        )
+    )
+    return 0
+
+
+def write_project(target: Path, *, project_id: str, title: str, adapter: str = "deterministic") -> dict:
+    """Create a minimal local-first review project. ``adapter`` is a key of ``INIT_ADAPTERS``."""
+    import re
+
+    if adapter not in INIT_ADAPTERS:
+        raise ValueError(f"adapter must be one of {sorted(INIT_ADAPTERS)}")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", project_id):
+        raise ValueError("project id must start with a letter and use letters, digits, '.', '_', or '-'")
+    if not title.strip():
+        raise ValueError("title must not be empty")
+    if adapter == "agent":
+        review_params = (
+            f'adapter = "{INIT_ADAPTERS[adapter]}"\n'
+            'fixture_path = "judgment.json"\n'
+            "verify_excerpts = true\n"
+        )
+    else:
+        review_params = f'adapter = "{INIT_ADAPTERS[adapter]}"\n'
+    target = target.expanduser().resolve()
     if target.exists() and any(target.iterdir()):
         raise FileExistsError(f"target directory is not empty: {target}")
     target.mkdir(parents=True, exist_ok=True)
@@ -496,13 +753,14 @@ def command_init(args: argparse.Namespace) -> int:
     )
     templates_dir = target / "prompts"
     template_args = argparse.Namespace(output_dir=str(templates_dir), force=True)
-    command_templates(template_args)
+    with contextlib.redirect_stdout(io.StringIO()):
+        command_templates(template_args)
     (target / "review.toml").write_text(
         f'''schema_version = 1
 
 [project]
-id = "{args.project_id}"
-title = "{args.title}"
+id = {_toml_basic_string(project_id)}
+title = {_toml_basic_string(title)}
 source = "manuscript.txt"
 run_root = ".runs"
 default_language = "en"
@@ -604,8 +862,7 @@ id = "review"
 type = "execute_review"
 depends_on = ["prompt_packets", "ledger"]
 [stages.params]
-adapter = "autopaperreview.adapters:DeterministicManuscriptAdapter"
-
+{review_params}
 [[stages]]
 id = "integrity"
 type = "integrity"
@@ -629,19 +886,22 @@ require_quote_on_major = true
 ''',
         encoding="utf-8",
     )
-    _print_json(
-        {
-            "status": "success",
-            "project_dir": str(target),
-            "config": str(target / "review.toml"),
-            "adapter": "autopaperreview.adapters:DeterministicManuscriptAdapter",
-        }
-    )
-    return 0
+    result = {
+        "status": "success",
+        "project_dir": str(target),
+        "config": str(target / "review.toml"),
+        "adapter": INIT_ADAPTERS[adapter],
+    }
+    if adapter == "agent":
+        result["drop_path"] = str(target / "judgment.json")
+    return result
 
 
 def command_calibrate(args: argparse.Namespace) -> int:
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
 
     from .rating import TieNote, calibrate_packages
 
@@ -697,10 +957,47 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("config")
     validate.set_defaults(func=command_validate)
 
-    run = subparsers.add_parser("run", help="run or resume a review pipeline")
+    run = subparsers.add_parser(
+        "run",
+        help="run or resume a review pipeline; exit 3 when a stage awaits an agent drop",
+    )
     run.add_argument("config")
     run.add_argument("--force", action="store_true", help="rerun every enabled stage")
     run.set_defaults(func=command_run)
+
+    status = subparsers.add_parser(
+        "status",
+        help="print the run state, awaiting agent drops, and outputs as JSON",
+    )
+    status.add_argument("config")
+    status.add_argument("--detail", action="store_true", help="add a fill-in template to each awaiting drop")
+    status.set_defaults(func=command_status)
+
+    submit = subparsers.add_parser(
+        "submit",
+        help="check an agent drop with the stage's own validation, then write it to its declared path",
+    )
+    submit.add_argument("config")
+    submit.add_argument("drop", help="JSON file holding the drop")
+    submit.add_argument("--stage", help="stage id; needed when review.toml declares several drops")
+    submit.add_argument(
+        "--kind",
+        choices=("review_judgment", "visual_findings", "related_work_findings", "related_work_confirmation"),
+        help="drop kind; needed when one stage declares two drops",
+    )
+    submit.set_defaults(func=command_submit)
+
+    mcp = subparsers.add_parser(
+        "mcp",
+        help="serve the review tools to an MCP client (Claude Code, Codex CLI, ...) over stdio",
+    )
+    mcp.add_argument(
+        "--root",
+        action="append",
+        default=[],
+        help="directory the tools may read and write; repeatable; default is the working directory",
+    )
+    mcp.set_defaults(func=command_mcp)
 
     inspect = subparsers.add_parser("inspect", help="print a run manifest")
     inspect.add_argument("path")
@@ -827,6 +1124,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")
+    eval_run.add_argument(
+        "--fixed-set",
+        choices=("none", "iclr-dev"),
+        default="none",
+        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+    )
+    eval_run.add_argument("--model-id", default="", help="required with --fixed-set iclr-dev")
+    eval_run.add_argument("--effort", default="", help="required with --fixed-set iclr-dev")
     eval_run.set_defaults(func=command_calibrate_eval_run)
 
     eval_report = eval_sub.add_parser("report", help="write Spearman, MAE, bin agreement, AUC, and spread")
@@ -889,7 +1194,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="free-form label such as grok-4.7-cursor, opus-local, or astra-local",
     )
-    cvpr_run.add_argument("--backend", choices=("adapter", "command", "replay"), required=True)
+    cvpr_run.add_argument(
+        "--backend",
+        choices=("command", "replay", "adapter"),
+        required=True,
+        help="command runs the local CLI. replay is a file handoff. adapter is refused and no API key is read",
+    )
     cvpr_run.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
     cvpr_run.add_argument("--holistic-mode", choices=HOLISTIC_MODES, default=DEFAULT_HOLISTIC_MODE)
     cvpr_run.add_argument("--adapter", help="module:attribute with complete(prompt, scratch) -> str")
@@ -907,7 +1217,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Values are quoted. The template is split into argv and must not contain an API key"
         ),
     )
-    cvpr_run.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_run.add_argument("--command-timeout", type=float, default=DEFAULT_MODEL_TIMEOUT_SECONDS)
     cvpr_run.add_argument("--temperature", type=float, default=None)
     cvpr_run.add_argument("--set", dest="set_id", help="run one registered set")
     cvpr_run.add_argument("--variant", choices=("A0", "A1", "A2"))
@@ -915,6 +1225,8 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_run.add_argument("--lock", help="lock.json from cvpr-tier lock")
     cvpr_run.add_argument("--handoff-dir", help="replay directory outside the cache and the checkout")
     cvpr_run.add_argument("--custody", help="directory that holds sealed labels, outside the cache")
+    cvpr_run.add_argument("--repeats", type=int, default=1, help="command-backend repeats of each paper, for ICC")
+    cvpr_run.add_argument("--round", dest="round_id", help="record this candidate in rounds.jsonl and key the run directory")
     cvpr_run.set_defaults(func=command_cvpr_tier_run)
 
     cvpr_report = cvpr_sub.add_parser("report", help="compare stored model runs on the shared sample")
@@ -935,10 +1247,66 @@ def build_parser() -> argparse.ArgumentParser:
     cvpr_lock.add_argument("--holistic-samples", type=int, default=DEFAULT_HOLISTIC_SAMPLES)
     cvpr_lock.set_defaults(func=command_cvpr_tier_lock)
 
+    cvpr_probe = cvpr_sub.add_parser(
+        "probe",
+        help="run P-A, P-T, and P-D contamination probes without reading tier labels",
+    )
+    cvpr_probe.add_argument("--cache", required=True)
+    cvpr_probe.add_argument("--model-id", required=True)
+    cvpr_probe.add_argument("--backend", choices=("command", "replay"), required=True)
+    cvpr_probe.add_argument("--command-template")
+    cvpr_probe.add_argument("--command-timeout", type=float, default=900.0)
+    cvpr_probe.add_argument("--templates", type=_cvpr_templates, default=("P-A", "P-T", "P-D"))
+    cvpr_probe.add_argument("--batch-size", type=int, default=10)
+    cvpr_probe.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_probe.add_argument("--decoys", type=int, default=3, help="synthetic decoys mixed into each batch")
+    cvpr_probe.add_argument("--controls", help="JSON from cvpr-tier controls; omit to skip negative controls")
+    cvpr_probe.add_argument("--passages", help="JSON of verbatim passages and three paraphrases per paper id")
+    cvpr_probe.add_argument("--catalog", help="catalog JSON or title-digest file; decoys must not match it")
+    cvpr_probe.add_argument("--set", dest="set_id")
+    cvpr_probe.add_argument("--variant", choices=("A0", "A1", "A2"))
+    cvpr_probe.add_argument("--handoff-dir")
+    cvpr_probe.add_argument("--custody")
+    cvpr_probe.set_defaults(func=command_cvpr_tier_probe)
+
+    cvpr_controls = cvpr_sub.add_parser(
+        "controls",
+        help="fetch arXiv cs.CV metadata in a date window; not used by the unit tests",
+    )
+    cvpr_controls.add_argument("--output", required=True)
+    cvpr_controls.add_argument("--since", default="2026-07-15")
+    cvpr_controls.add_argument("--category", default="cs.CV")
+    cvpr_controls.add_argument("--limit", type=int, default=20)
+    cvpr_controls.set_defaults(func=command_cvpr_tier_controls)
+
+    cvpr_decoys = cvpr_sub.add_parser("decoys", help="write synthetic decoy metadata; no network")
+    cvpr_decoys.add_argument("--output", required=True)
+    cvpr_decoys.add_argument("--count", type=int, default=4)
+    cvpr_decoys.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    cvpr_decoys.add_argument("--catalog", help="catalog JSON or title-digest file; decoys must not match it")
+    cvpr_decoys.set_defaults(func=command_cvpr_tier_decoys)
+
+    cvpr_round = cvpr_sub.add_parser("round", help="append one candidate to rounds.jsonl")
+    cvpr_round.add_argument("--cache", required=True)
+    cvpr_round.add_argument("--round", dest="round_id", required=True)
+    cvpr_round.add_argument("--model-id", required=True)
+    cvpr_round.add_argument("--variant", choices=("A0", "A1", "A2"))
+    cvpr_round.add_argument("--set", dest="set_id")
+    cvpr_round.add_argument("--backend", choices=("command", "replay"))
+    cvpr_round.add_argument("--repeats", type=int, default=None)
+    cvpr_round.add_argument("--notes", default="")
+    cvpr_round.set_defaults(func=command_cvpr_tier_round)
+
     init = subparsers.add_parser("init", help="create a minimal local-first review project")
     init.add_argument("path")
     init.add_argument("--project-id", default="new-review")
     init.add_argument("--title", default="New manuscript review")
+    init.add_argument(
+        "--adapter",
+        choices=sorted(INIT_ADAPTERS),
+        default="deterministic",
+        help="agent: execute_review waits for a judgment drop written by a host agent",
+    )
     init.set_defaults(func=command_init)
     return parser
 
@@ -948,7 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (PipelineError, ValidationError, ValueError, FileNotFoundError, FileExistsError) as exc:
+    except (PipelineError, RuntimeError, ValidationError, ValueError, OSError, ImportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

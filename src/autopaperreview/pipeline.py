@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from . import __version__
 from .artifacts import artifact_from_path, resolve_artifact_path
+from .awaiting import AwaitingInput
 from .config import LoadedConfig, StageConfig, load_config
 from .hashing import hash_json
 from .models import Artifact, RunManifest, StageRecord, StageStatus
@@ -23,7 +27,18 @@ from .stages.visual_stage import FormatCheckStage, RenderPagesStage, VisualInspe
 
 
 class PipelineError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, stage_id: str | None = None) -> None:
+        super().__init__(message)
+        self.stage_id = stage_id
+
+
+class RunLockedError(PipelineError):
+    """Another process, or another call in this process, is running the same project."""
+
+
+LOCK_NAME = ".lock"
+# A stage that cannot run yet has no signature of its own.
+UNSIGNED = "0" * 64
 
 
 def utc_now() -> datetime:
@@ -65,6 +80,73 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def _try_lock(handle: BinaryIO) -> bool:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def run_lock(run_dir: Path) -> Iterator[None]:
+    """Hold one run directory. The operating system drops the lock if the process dies."""
+    path = run_dir / LOCK_NAME
+    handle = path.open("a+b")
+    try:
+        if not _try_lock(handle):
+            raise RunLockedError(f"another autopaperreview run holds {path}; wait for it to finish")
+        try:
+            yield
+        finally:
+            _unlock(handle)
+    finally:
+        handle.close()
+
+
+def run_is_locked(run_dir: Path) -> bool:
+    path = run_dir / LOCK_NAME
+    if not path.is_file():
+        return False
+    with path.open("a+b") as handle:
+        if not _try_lock(handle):
+            return True
+        _unlock(handle)
+        return False
+
+
+def awaiting_requests(manifest: RunManifest) -> list[dict[str, Any]]:
+    """Drop requests recorded by stages that are waiting for a host agent."""
+    return [
+        dict(stage.metadata.get("awaiting") or {"stage_id": stage.id})
+        for stage in manifest.stages
+        if stage.status == StageStatus.awaiting_input
+    ]
+
+
 def save_manifest(manifest: RunManifest, path: Path) -> None:
     content = json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(path, content)
@@ -83,14 +165,13 @@ def _source_artifact(loaded: LoadedConfig, source_path: Path) -> Artifact:
     )
 
 
-def _run_id(loaded: LoadedConfig, source: Artifact) -> str:
-    """Stable directory for one project.
+def run_directory(loaded: LoadedConfig) -> Path:
+    """Stable directory for one project: ``<run_root>/<project id>``.
 
     Source and config hashes are not part of the directory name. A stage reruns
     only when its own signature changes.
     """
-    del source
-    return loaded.config.project.id
+    return loaded.resolve(loaded.config.project.run_root) / loaded.config.project.id
 
 
 def _stage_signature(
@@ -200,6 +281,18 @@ def _promote_attempt(
     return promoted
 
 
+def adapter_waits_for_drop(spec: str) -> bool:
+    """True when a review adapter reads a drop that a host agent writes after the packets exist."""
+    module_name, separator, attribute = spec.partition(":")
+    if not separator or not attribute:
+        return False
+    try:
+        target = getattr(importlib.import_module(module_name), attribute)
+    except (ImportError, AttributeError):
+        return False
+    return bool(getattr(target, "waits_for_drop", False))
+
+
 def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None = None) -> list[str]:
     registry = registry or default_registry()
     errors: list[str] = []
@@ -233,7 +326,7 @@ def validate_config_paths(loaded: LoadedConfig, registry: StageRegistry | None =
                 errors.append(f"stage {stage.id} references unknown routes: {missing_routes}")
         if stage.type == "execute_review" and stage.params.get("fixture_path"):
             path = loaded.resolve(str(stage.params["fixture_path"]))
-            if not path.is_file():
+            if not path.is_file() and not adapter_waits_for_drop(str(stage.params.get("adapter", ""))):
                 errors.append(f"stage {stage.id} review fixture does not exist: {path}")
         if stage.type == "workspace_inspect":
             for raw in stage.params.get("paths", []):
@@ -264,7 +357,15 @@ def run_pipeline(
     *,
     force: bool = False,
     registry: StageRegistry | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunManifest:
+    """Run or resume one project.
+
+    A stage that raises ``AwaitingInput`` is recorded as ``awaiting_input``.
+    Stages downstream of it are recorded as ``pending`` with ``blocked_by``;
+    the other stages still run. ``on_event`` receives one dict per stage
+    transition and must not raise.
+    """
     loaded = load_config(config_path)
     registry = registry or default_registry()
     errors = validate_config_paths(loaded, registry)
@@ -273,10 +374,40 @@ def run_pipeline(
 
     source_path = loaded.resolve(loaded.config.project.source)
     source = _source_artifact(loaded, source_path)
-    run_root = loaded.resolve(loaded.config.project.run_root)
-    run_dir = run_root / _run_id(loaded, source)
-    manifest_path = run_dir / "run_manifest.json"
+    run_dir = run_directory(loaded)
     run_dir.mkdir(parents=True, exist_ok=True)
+    with run_lock(run_dir):
+        return _run_locked(
+            loaded,
+            registry=registry,
+            source_path=source_path,
+            source=source,
+            run_dir=run_dir,
+            force=force,
+            on_event=on_event,
+        )
+
+
+def _emit(on_event: Callable[[dict[str, Any]], None] | None, **event: Any) -> None:
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:  # noqa: BLE001 - a progress sink must not fail the run
+        pass
+
+
+def _run_locked(
+    loaded: LoadedConfig,
+    *,
+    registry: StageRegistry,
+    source_path: Path,
+    source: Artifact,
+    run_dir: Path,
+    force: bool,
+    on_event: Callable[[dict[str, Any]], None] | None,
+) -> RunManifest:
+    manifest_path = run_dir / "run_manifest.json"
     config_snapshot_path = run_dir / "config.snapshot.json"
     _atomic_write(
         config_snapshot_path,
@@ -314,13 +445,34 @@ def run_pipeline(
         )
     save_manifest(manifest, manifest_path)
 
-    for stage in loaded.config.ordered_stages():
+    ordered = loaded.config.ordered_stages()
+    total = len(ordered)
+    # Stage id -> ids of the awaiting stages it waits on, directly or through a dependency.
+    blocked: dict[str, list[str]] = {}
+    for index, stage in enumerate(ordered, start=1):
         previous = manifest.stage(stage.id)
+        waiting_on = sorted({root for dependency_id in stage.depends_on for root in blocked.get(dependency_id, [])})
+        if waiting_on:
+            pending = StageRecord(
+                id=stage.id,
+                type=stage.type,
+                status=StageStatus.pending,
+                signature=UNSIGNED,
+                attempt=previous.attempt if previous else 1,
+                metadata={"blocked_by": waiting_on},
+            )
+            _replace_stage_record(manifest, pending)
+            save_manifest(manifest, manifest_path)
+            blocked[stage.id] = waiting_on
+            _emit(on_event, stage_id=stage.id, status="pending", index=index, total=total, blocked_by=waiting_on)
+            continue
         dependencies: dict[str, StageRecord] = {}
         for dependency_id in stage.depends_on:
             dependency = manifest.stage(dependency_id)
             if dependency is None or dependency.status not in {StageStatus.success, StageStatus.skipped}:
-                raise PipelineError(f"stage {stage.id} dependency {dependency_id} has not succeeded")
+                raise PipelineError(
+                    f"stage {stage.id} dependency {dependency_id} has not succeeded", stage_id=stage.id
+                )
             dependencies[dependency_id] = dependency
 
         final_stage_dir = run_dir / "stages" / stage.id
@@ -332,6 +484,7 @@ def run_pipeline(
             source_path=source_path,
             manifest=manifest,
             dependency_records=dependencies,
+            force=force,
         )
         handler = registry.get(stage.type)
         handler_material = {
@@ -359,6 +512,7 @@ def run_pipeline(
             cached.metadata = {**cached.metadata, "cache_hit": True}
             _replace_stage_record(manifest, cached)
             save_manifest(manifest, manifest_path)
+            _emit(on_event, stage_id=stage.id, status="skipped", index=index, total=total)
             continue
 
         attempt = (previous.attempt + 1) if previous else 1
@@ -372,6 +526,7 @@ def run_pipeline(
             source_path=source_path,
             manifest=manifest,
             dependency_records=dependencies,
+            force=force,
         )
         running = StageRecord(
             id=stage.id,
@@ -383,6 +538,7 @@ def run_pipeline(
         )
         _replace_stage_record(manifest, running)
         save_manifest(manifest, manifest_path)
+        _emit(on_event, stage_id=stage.id, status="running", index=index, total=total)
 
         try:
             outcome = handler.run(context)
@@ -410,6 +566,24 @@ def run_pipeline(
             _replace_stage_record(manifest, completed)
             _note_manuscript_egress(manifest, completed.metadata)
             save_manifest(manifest, manifest_path)
+            _emit(on_event, stage_id=stage.id, status="success", index=index, total=total)
+        except AwaitingInput as exc:
+            shutil.rmtree(attempt_dir, ignore_errors=True)
+            awaiting = StageRecord(
+                id=stage.id,
+                type=stage.type,
+                status=StageStatus.awaiting_input,
+                signature=signature,
+                started_at=running.started_at,
+                ended_at=utc_now(),
+                attempt=attempt,
+                metadata={"awaiting": {"stage_id": stage.id, "stage_type": stage.type, **exc.request}},
+                error=str(exc),
+            )
+            _replace_stage_record(manifest, awaiting)
+            save_manifest(manifest, manifest_path)
+            blocked[stage.id] = [stage.id]
+            _emit(on_event, stage_id=stage.id, status="awaiting_input", index=index, total=total)
         except Exception as exc:
             extra = dict(getattr(exc, "stage_metadata", None) or {})
             extra.pop("attempt_dir", None)
@@ -429,7 +603,8 @@ def run_pipeline(
             _note_manuscript_egress(manifest, failed_metadata)
             manifest.ended_at = utc_now()
             save_manifest(manifest, manifest_path)
-            raise PipelineError(f"stage {stage.id} failed: {exc}") from exc
+            _emit(on_event, stage_id=stage.id, status="failed", index=index, total=total)
+            raise PipelineError(f"stage {stage.id} failed: {exc}", stage_id=stage.id) from exc
 
     manifest.ended_at = utc_now()
     save_manifest(manifest, manifest_path)

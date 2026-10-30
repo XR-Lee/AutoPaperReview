@@ -4,7 +4,7 @@ This policy applies to the `0.1.x` line of AutoPaperReview.
 
 ## Supported runtimes
 
-- CI tests CPython 3.11, 3.12, and 3.13.
+- CI tests CPython 3.10, 3.11, 3.12, and 3.13.
 - Python versions newer than 3.13 are best-effort until added to the CI matrix.
 - Pydantic `2.x` is the supported validation runtime.
 - Linux is the required CI platform. macOS and Windows are supported when the core tests and synthetic example pass, but optional adapters may have narrower support.
@@ -59,7 +59,7 @@ Do not include timestamps, run IDs, absolute workspace paths, or secrets in a de
 
 ## Release checklist
 
-1. Run CI on Python 3.11, 3.12, and 3.13.
+1. Run CI on Python 3.10, 3.11, 3.12, and 3.13.
 2. Compile package and synthetic check sources.
 3. Run the full unittest suite.
 4. Validate the synthetic TOML configuration.

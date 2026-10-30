@@ -1,0 +1,24 @@
+name: main-source-guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  main-source-guard:
+    name: main-source-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Allow pre-release promotions into main
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          THIS_REPO: ${{ github.repository }}
+        run: python3 scripts/main_source_guard.py
