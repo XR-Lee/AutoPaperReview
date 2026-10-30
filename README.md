@@ -516,7 +516,9 @@ autopaperreview calibrate-eval run \
   --coefficient-set apr-fusion-v1
 ```
 
-5. Build the two reports. They measure different things. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean, so its numbers don't match the holdout table. That table's Spearman and AUC use the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score`. `--resamples` defaults to 4000. The bootstrap seed is `20261021`, set inside `rank_metrics.py`, not a flag. The cache and `--output` must be gitignored paths such as `reviews/` or `workdir/`. The commands refuse a tracked path inside the checkout.
+`calibrate-eval run` defaults to `--fixed-set none` and scores the cache you fetched. Add `--fixed-set iclr-dev --model-id "your-model-id" --effort xhigh` to score the proposed 48-paper dev set. Those two flags are required for that set, and the forecast-k1 flags in the command above have to match the manifest.
+
+5. Build the two reports. They measure different things. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean, so its numbers don't match the holdout table. That table's Spearman and AUC use the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score` and, by default, scores the proposed fixed ICLR dev set in `benchmarks/fixed_eval/` (`--fixed-set iclr-dev`). That run requires `--model-id` and `--effort`. `--fixed-set none` scores the whole cache, which is how the published holdout table was computed. `--resamples` defaults to 4000. The bootstrap seed is `20261021`, set inside `rank_metrics.py`, not a flag. The cache and `--output` must be gitignored paths such as `reviews/` or `workdir/`. The commands refuse a tracked path inside the checkout. A fixed-set run whose papers do not match the manifest digest exits 2. See [docs/fixed-eval.md](docs/fixed-eval.md).
 
 ```bash
 autopaperreview calibrate-eval report \
@@ -526,10 +528,12 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
   --cache reviews/public-eval \
   --output reviews/public-eval/rank-metrics.json \
   --mode locked \
+  --model-id "your-model-id" \
+  --effort xhigh \
   --resamples 4000
 ```
 
-Don't pass `--only-ids` or `--split` to `calibrate-eval run`, and don't pass `--ids` or `--split` to `scripts/rank_eval.py`. Those flags select a private id list, and this README doesn't publish one.
+Don't pass `--only-ids` with `--fixed-set iclr-dev`. `--ids` on `scripts/rank_eval.py` has to match the dev set when `--fixed-set iclr-dev` is on. `--holdout-file` scores the private holdout and is only for a README number change. This README does not publish those ids.
 
 ## Confidentiality
 

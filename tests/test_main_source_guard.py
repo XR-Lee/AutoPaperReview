@@ -139,4 +139,5 @@ class MainSourceGuardTests(unittest.TestCase):
             self.assertIn("grok-4.7", text)
             self.assertIn("xhigh", text)
             self.assertIn("Cursor", text)
-        self.assertIn("## TODO: benchmark definition", policy)
+        self.assertIn("## Fixed benchmark", policy)
+        self.assertIn("benchmarks/fixed_eval/manifest.json", policy)
