@@ -10,9 +10,11 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from autopaperreview.cli import main
 from autopaperreview.cvpr_anonymize import anonymize
+from autopaperreview.cvpr_rounds import format_rounds_table, load_rounds
 from autopaperreview.cvpr_sets import (
     SetError,
     SetRegistry,
@@ -34,8 +36,10 @@ from autopaperreview.cvpr_tier import (
     fetch_sample,
     hidden_from_model,
     list_catalog,
+    parse_verdict,
     prepare_manuscripts,
     read_judgment_text,
+    run_directory,
     run_model,
     strip_cvpr_banner,
     write_report,
@@ -255,6 +259,261 @@ class AnonymizeTests(unittest.TestCase):
         self.assertIn("tier_phrase=", message)
         self.assertNotIn("Quill", message)
         self.assertNotIn("oral presentation of a lattice", message)
+
+
+class LeakSkipTests(unittest.TestCase):
+    def _prepare(
+        self, cache: Path, variant: str | None, *, clean: bool = False, set_id: str | None = None
+    ) -> Path:
+        material = cache if set_id is None else cache / "sets" / set_id
+        papers = [("syn-leak-skip", "poster")]
+        if clean:
+            papers.append(("syn-leak-clean", "oral"))
+        _write_manifest(material, papers)
+        if set_id:
+            save_cache_registry(
+                cache,
+                SetRegistry(sets=[SetSpec(
+                    id=set_id,
+                    role="dev",
+                    year=2024,
+                    quotas={"poster": 1, "oral": 1, "highlight": 0},
+                    seed=11,
+                    status="dev",
+                )]),
+            )
+        raw = material / "raw"
+        raw.mkdir()
+        leaky = LEAKY.replace(
+            "GridNet repeats the count.",
+            "This synthetic fixture mentions CVPR 2098 and CVPR 2099 inside a sentence solely to exercise leak counts.",
+        )
+        (raw / "syn-leak-skip.txt").write_text(leaky, encoding="utf-8")
+        if clean:
+            (raw / "syn-leak-clean.txt").write_text(MANUSCRIPT, encoding="utf-8")
+        if variant in {"A1", "A2"}:
+            with self.assertRaisesRegex(CvprTierError, "leak scan failed for 1 manuscripts"):
+                prepare_manuscripts(cache, variant=variant, set_id=set_id)
+        else:
+            prepare_manuscripts(cache, variant=variant, set_id=set_id)
+        return material
+
+    def _run(self, cache: Path, variant: str | None, **kwargs):
+        return run_model(
+            cache,
+            model_id="synthetic-runner",
+            backend="command",
+            holistic_mode="mean",
+            command_template="synthetic-reviewer {handoff_id}",
+            variant=variant,
+            **kwargs,
+        )
+
+    def _model_outcome(self):
+        return {"parsed": True, "text": _mean_json(), "verdict": parse_verdict("mean", _mean_json())}
+
+    def test_a1_a2_skip_before_prompt_or_cached_answer_and_count_progress(self) -> None:
+        for variant in ("A1", "A2"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary) / "cache"
+                self._prepare(cache, variant)
+                counts_path = cache / "manuscripts" / variant / "leak_counts.json"
+                counts = json.loads(counts_path.read_text(encoding="utf-8"))
+                self.assertEqual(counts["failed"], 1)
+                failing = {key: value for key, value in counts["papers"]["syn-leak-skip"].items() if value > 0}
+                self.assertEqual(failing, {"tier_phrase": 1, "venue_marker": 2})
+                counts["failed"] = 0
+                counts["counts"] = {key: 0 for key in counts["counts"]}
+                counts_path.write_text(json.dumps(counts), encoding="utf-8")
+                directory = run_directory(cache, "synthetic-runner", variant=variant, round_id="synthetic-round")
+                with (
+                    patch("autopaperreview.cvpr_tier._command_paper") as model,
+                    patch("autopaperreview.cvpr_tier._prompt_for") as prompt,
+                    patch("autopaperreview.cvpr_tier._stored_answer_text") as stored,
+                ):
+                    first = _guard(self, cache, lambda: self._run(cache, variant, repeats=2, round_id="synthetic-round"))
+                    handoff_id = first["skipped"][0]["handoff_id"]
+                    record_path = directory / "parsed" / f"{handoff_id}.json"
+                    record_path.write_text(json.dumps({"paper_id": "syn-leak-skip", "score": 6.5}), encoding="utf-8")
+                    (directory / "answers" / f"{handoff_id}.json").write_text(_mean_json(), encoding="utf-8")
+                    result = self._run(cache, variant, repeats=2, round_id="synthetic-round")
+                    model.assert_not_called()
+                    prompt.assert_not_called()
+                    stored.assert_not_called()
+                self.assertEqual(result, first)
+                self.assertEqual(result["parsed"], [])
+                self.assertEqual(result["errors"], [])
+                self.assertEqual(result["awaiting_judgment"], [])
+                self.assertEqual(len(result["skipped"]), 1)
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                self.assertEqual(record, result["skipped"][0])
+                self.assertEqual(record["status"], "skipped")
+                self.assertEqual(record["reason"], "leak_failed")
+                self.assertEqual(record["paper_id"], "syn-leak-skip")
+                self.assertEqual(record["variant"], variant)
+                self.assertEqual(record["leak_counts"], failing)
+                self.assertNotIn("score", record)
+                self.assertNotIn("predicted_tier", record)
+                self.assertEqual(len(list((directory / "parsed").glob("*.json"))), 1)
+                manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["packet_sha256"], {})
+                self.assertEqual(manifest["skipped"], ["syn-leak-skip"])
+                usage = json.loads((directory / "usage.json").read_text(encoding="utf-8"))
+                self.assertEqual(usage["skipped"], 1)
+                self.assertEqual(usage["papers"][0]["status"], "skipped")
+                self.assertFalse(usage["papers"][0]["parsed"])
+                for field in ("estimated_tokens", "prompt_chars", "retries"):
+                    self.assertEqual(usage["papers"][0][field], 0)
+                rounds = load_rounds(cache)
+                for row in rounds:
+                    self.assertEqual(row["calls"], 0)
+                    self.assertEqual(row["parsed"], 0)
+                    self.assertEqual(row["skipped"], 1)
+                self.assertIn("| skipped |", "\n".join(format_rounds_table(rounds)))
+                report = Path(temporary) / "report.md"
+                payload = write_report(cache, report, resamples=8, seed=1)
+                metrics = payload["models"][f"synthetic-runner/{variant}/synthetic-round"]["metrics"]
+                self.assertEqual(metrics["n"], 0)
+                self.assertEqual(metrics["skipped"], 1)
+                self.assertEqual(metrics["skipped_by_reason"], {"leak_failed": 1})
+                self.assertEqual(len(report.with_suffix(".analysis.csv").read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_clean_paper_runs_in_mixed_legacy_and_set_caches(self) -> None:
+        for variant in ("A1", "A2"):
+            for set_id in (None, "SYN-LEAK"):
+                with self.subTest(variant=variant, set_id=set_id), tempfile.TemporaryDirectory() as temporary:
+                    cache = Path(temporary) / "cache"
+                    material = self._prepare(cache, variant, clean=True, set_id=set_id)
+                    with patch("autopaperreview.cvpr_tier._command_paper", return_value=self._model_outcome()) as model:
+                        result = _guard(
+                            self, cache,
+                            lambda: self._run(cache, variant, set_id=set_id, repeats=2, round_id="synthetic-round"),
+                        )
+                    self.assertEqual(model.call_count, 2)
+                    self.assertTrue(all("oral presentation" not in call.kwargs["prompt"] for call in model.call_args_list))
+                    self.assertEqual(result["parsed"], ["syn-leak-clean"])
+                    self.assertEqual(result["errors"], [])
+                    self.assertEqual(len(result["skipped"]), 1)
+                    directory = run_directory(material, "synthetic-runner", variant=variant, round_id="synthetic-round")
+                    records = [json.loads(path.read_text(encoding="utf-8")) for path in (directory / "parsed").glob("*.json")]
+                    scored = next(row for row in records if row["paper_id"] == "syn-leak-clean")
+                    self.assertEqual(scored["score"], 6.5)
+                    self.assertEqual(scored["repeat_scores"], [6.5, 6.5])
+                    self.assertEqual(scored["predicted_tier"], "highlight")
+                    usage = json.loads((directory / "usage.json").read_text(encoding="utf-8"))
+                    self.assertEqual(sum(row["parsed"] for row in usage["papers"]), 1)
+                    self.assertEqual(usage["skipped"], 1)
+                    rounds = load_rounds(cache)
+                    self.assertEqual(rounds[0]["calls"], 2)
+                    self.assertEqual(rounds[0]["parsed"], 1)
+                    self.assertEqual(rounds[0]["skipped"], 1)
+                    report = Path(temporary) / "report.md"
+                    payload = write_report(cache, report, set_id=set_id, resamples=8, seed=1)
+                    metrics = payload["models"][f"synthetic-runner/{variant}/synthetic-round"]["metrics"]
+                    self.assertEqual(metrics["n"], 1)
+                    self.assertEqual(metrics["skipped"], 1)
+                    self.assertEqual(metrics["skipped_by_reason"], {"leak_failed": 1})
+                    self.assertEqual(metrics["confusion"]["oral"]["highlight"], 1)
+                    self.assertIn("skipped (leak_failed)", report.read_text(encoding="utf-8"))
+                    csv_text = report.with_suffix(".analysis.csv").read_text(encoding="utf-8")
+                    self.assertIn("syn-leak-clean", csv_text)
+                    self.assertNotIn("syn-leak-skip", csv_text)
+
+    def test_a0_and_no_variant_ignore_leaks_and_reuse_answers(self) -> None:
+        for variant in (None, "A0"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary) / "cache"
+                self._prepare(cache, variant)
+                if variant:
+                    path = cache / "manuscripts" / variant / "leak_counts.json"
+                    counts = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertGreater(counts["papers"]["syn-leak-skip"]["tier_phrase"], 0)
+                    path.write_text("invalid metadata is ignored for A0", encoding="utf-8")
+                with patch("autopaperreview.cvpr_tier._command_paper", return_value=self._model_outcome()) as model:
+                    first = self._run(cache, variant)
+                    second = self._run(cache, variant)
+                model.assert_called_once()
+                self.assertIn("oral presentation", model.call_args.kwargs["prompt"])
+                for result in (first, second):
+                    self.assertEqual(result["parsed"], ["syn-leak-skip"])
+                    self.assertEqual(result["skipped"], [])
+                    self.assertEqual(result["errors"], [])
+
+    def test_replay_does_not_export_or_wait_for_leak_failed_papers(self) -> None:
+        for variant in ("A1", "A2"):
+            for clean in (False, True):
+                with self.subTest(variant=variant, clean=clean), tempfile.TemporaryDirectory() as temporary:
+                    cache = Path(temporary) / "cache"
+                    self._prepare(cache, variant, clean=clean)
+                    with patch("autopaperreview.cvpr_tier._command_paper") as model:
+                        result = run_model(
+                            cache,
+                            model_id="synthetic-runner",
+                            backend="replay",
+                            holistic_mode="mean",
+                            variant=variant,
+                            handoff_dir=Path(temporary) / "handoffs",
+                        )
+                        model.assert_not_called()
+                    self.assertEqual(len(result["skipped"]), 1)
+                    self.assertEqual(len(result["awaiting_judgment"]), int(clean))
+                    self.assertEqual(result["errors"], [])
+                    handoffs = Path(result["handoff_dir"])
+                    self.assertEqual(len(list(handoffs.glob("*/prompt.txt"))), int(clean))
+                    self.assertFalse((handoffs / result["skipped"][0]["handoff_id"]).exists())
+
+    def test_missing_legacy_or_invalid_counts_fail_closed(self) -> None:
+        for variant in ("A1", "A2"):
+            for broken in ("missing", "invalid-json", "legacy", "missing-paper", "empty", "negative", "string", "variant"):
+                with self.subTest(variant=variant, broken=broken), tempfile.TemporaryDirectory() as temporary:
+                    cache = Path(temporary) / "cache"
+                    self._prepare(cache, variant)
+                    path = cache / "manuscripts" / variant / "leak_counts.json"
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    if broken == "missing":
+                        path.unlink()
+                    elif broken == "invalid-json":
+                        path.write_text("not JSON", encoding="utf-8")
+                    else:
+                        if broken == "legacy":
+                            payload.pop("papers")
+                        elif broken == "missing-paper":
+                            payload["papers"] = {}
+                        elif broken == "variant":
+                            payload["variant"] = "A0"
+                        else:
+                            payload["papers"]["syn-leak-skip"] = {
+                                "empty": {}, "negative": {"venue_marker": -1}, "string": {"venue_marker": "bad"},
+                            }[broken]
+                        path.write_text(json.dumps(payload), encoding="utf-8")
+                    with (
+                        patch("autopaperreview.cvpr_tier._command_paper") as model,
+                        patch("autopaperreview.cvpr_tier._prompt_for") as prompt,
+                    ):
+                        with self.assertRaisesRegex(CvprTierError, f"rerun prepare --variant {variant}"):
+                            self._run(cache, variant)
+                        model.assert_not_called()
+                        prompt.assert_not_called()
+
+    def test_cli_reports_skip_as_terminal_not_error_or_awaiting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cache"
+            self._prepare(cache, "A1")
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), patch("autopaperreview.cvpr_tier._command_paper") as model:
+                code = main([
+                    "calibrate-eval", "cvpr-tier", "run", "--cache", str(cache),
+                    "--model-id", "synthetic-runner", "--backend", "command",
+                    "--variant", "A1", "--command-template", "synthetic-reviewer {handoff_id}",
+                ])
+                model.assert_not_called()
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["skipped"][0]["reason"], "leak_failed")
+            self.assertEqual(result["parsed"], [])
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(result["awaiting_judgment"], [])
 
 
 class LabelGuardTests(unittest.TestCase):

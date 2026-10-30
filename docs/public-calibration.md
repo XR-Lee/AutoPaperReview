@@ -139,7 +139,7 @@ The report metrics include Kendall tau-b and a confusion table of the nearest hu
 
 `calibrate-eval cvpr-tier` asks whether a review mode's existing rank separates CVPR oral, highlight, and poster papers. The sample is accepted papers only. The loop parses the mode's own rank (`forecast_mean`, `panel_mean`, the rebuttal final-rating mean, or `predicted_mean`) and a `tier` label the model adds to that JSON (`reject`, `poster`, `highlight`, `oral`, ordered reject < poster < highlight < oral). It does not fit a cutoff, and it does not write a weight back into `rate`.
 
-The ordinal Spearman uses poster = 1, highlight = 2, oral = 3. Pairwise AUCs treat the higher tier as the positive class: oral versus poster, highlight versus poster, and oral versus highlight. The report also writes a tier confusion matrix, a score-spread diagnostic (clustered when the coarse unique values are under 3 or the sample standard deviation is under 1), and paper-level bootstrap 95% intervals (4000 resamples, seed `20261029`).
+The ordinal Spearman uses poster = 1, highlight = 2, oral = 3. Pairwise AUCs treat the higher tier as the positive class: oral versus poster, highlight versus poster, and oral versus highlight. The primary metric is macro-AUC, the unweighted mean of those three AUCs. Cpop uses the 2024 weights 0.211, 0.760, and 0.030. AUC oral-versus-rest treats oral as the positive class. Its 2024 weighted form is `(324 * AUC oral-versus-highlight + 2302 * AUC oral-versus-poster) / 2626`. Horvitz–Thompson weights are the public population of a year and tier divided by the number of sampled papers in that cell (2024 oral 90, highlight 324, poster 2302; 2025 oral 95, non-oral 2776). The report also writes quadratic-weighted kappa, DeLong tests (single and paired) with Holm and Benjamini–Hochberg adjustments on the three pairwise p-values, year-by-tier stratified bootstrap intervals, a recognised/unrecognised split when probes exist, a tier confusion matrix, per-tier precision and recall, a score-spread diagnostic (clustered when the coarse unique values are under 3 or the sample standard deviation is under 1), and paper-level bootstrap 95% intervals (4000 resamples, seed `20261029`). An analysis CSV is written beside the markdown. The 2025 oral-versus-rest number is an optional contrast and stays empty when the sample has no 2025 non-oral paper.
 
 ### What the public sources label
 
@@ -166,19 +166,25 @@ Per-paper tiers are written only to `heldout/tiers.json`. `prepare` and `run` re
 
 ### Models
 
-The model id is a free-form label of letters, digits, `.`, `_`, and `-`, up to 64 characters. `grok-4.7-cursor`, `opus-local`, and `astra-local` are ordinary labels. Each label has its own directory under `runs/<model-id>/`. The report scores every model on the papers that model parsed, and it compares models on the papers they both scored (score Spearman and tier agreement, with bootstrap intervals).
+The model id is a free-form label of letters, digits, `.`, `_`, and `-`, up to 64 characters. `grok-4.7-cursor`, `opus-local`, and `astra-local` are ordinary labels. With no `--variant` and no `--round`, each label has its own directory under `runs/<model-id>/`. Setting either flag uses `runs/<model-id>/<variant or default>/<round or r0>/`. A registered set still lives under `sets/<set-id>/`. The report scores every run on the papers that run parsed, compares runs on the papers they both scored, and pairs variants of the same model and round.
 
-Grok, Opus, and Astra run as local CLIs through `--backend command`. Grok does not use an xAI API, an adapter host, or an API key. A Grok adapter whose host is not loopback is refused. Replay remains available for a file handoff: the command writes `<handoff-id>/prompt.txt` and `packet.json` under a directory outside the cache, then waits. The directory name is 12 hex characters from HMAC-SHA256 of the catalog id. The salt stays in the cache (`handoff_salt`, mode 0600) or in `APR_CVPR_HANDOFF_SALT` and is not copied into the packet. A returned answer is checked against the packet hash and against `canaries.txt`. Exit code 3 means at least one answer is still missing.
+Grok, Opus, and Astra run as local CLIs through `--backend command`. There is no API adapter and no API key. `--backend adapter` is refused. Replay remains available for a file handoff: the command writes `<handoff-id>/prompt.txt` and `packet.json` under a directory outside the cache, then waits. The directory name is 12 hex characters from HMAC-SHA256 of the catalog id. The salt stays in the cache (`handoff_salt`, mode 0600) or in `APR_CVPR_HANDOFF_SALT` and is not copied into the packet. A returned answer is checked against the packet hash and against `canaries.txt`. Exit code 3 means at least one answer is still missing. `--repeats N` (command backend, 1 to 10) stores every parsed score and the report gives Shrout–Fleiss ICC(2,1) and ICC(3,1). `--round` appends that candidate to `rounds.jsonl`. The report lists every line in that file.
 
 The command backend passes the prompt on stdin. `{prompt_file}` still writes the prompt beside the process, outside the empty working directory. `{paper_id}` and `{handoff_id}` are the opaque id, not the catalog id. The process starts in a fresh empty temporary directory with a scrubbed environment. The run records the CLI version (`argv0 --version`), flags, prompt characters, estimated tokens (characters divided by 4), latency, and a `usage` object when the CLI JSON includes one. A timeout or a schema failure is retried once. `usage.json` and `failures.jsonl` live under that model run.
 
-`--backend adapter` calls `complete(prompt, scratch) -> str`, or `OpenAIChatCompletion` when `--base-url` and `--model` are set. The key is read from `--api-key-env` (default `APR_MODEL_API_KEY`) and is not stored. Loopback is allowed under `--network-policy deny`. A remote host also needs `--allow-remote` and `--network-policy allow`. That path is not used for Grok.
+`cvpr-tier probe` runs three contamination templates. P-A shows an abstract and asks for the title, authors, venue, year, and tier. P-T shows a title and asks for the authors, venue, year, and tier. P-D asks four questions, each with one verbatim passage and three paraphrases. When `--passages` is omitted, P-D takes one sentence from the manuscript and builds three paraphrases locally. A batch mixes sample targets, optional arXiv controls, synthetic decoys, and other-year items, then shuffles them under opaque handoff ids. The default batch size is 10. Every item is placed in some batch. Answers are written after each batch, and a later run skips a batch whose stored prompt digest and seed still match. Scoring is title token-F1, surname overlap (first, last, or at least two), venue/year, DE-COP accuracy, and a tier-QA map (oral 3, highlight or spotlight 2, poster 1, unknown 2, reject 0). A paper is recognised when the abstract probe hits the title, either metadata probe hits an author, or at least 3 of 4 verbatim choices are right. Probe output is `probes/<model>/`. It does not contain program tiers. `probe_keys/` holds the operator answer key and is hidden from the model. The report joins tiers when it builds the recognised and unrecognised tables.
+
+An abstract heading is accepted in either case, on a shared line with the other column, or inline as `Abstract.` or `Abstract—`. A layout extract is tried before a raw extract. Papers that still yield no abstract are listed by id in the probe output and in `sample_manifest.json`. The probe does not call the model when that share is above 5%.
+
+`cvpr-tier controls` fetches arXiv metadata for a category whose first version falls in a date window (default `cs.CV` from 2026-07-15). That command is for a real run. The unit tests parse a fixture feed and do not call the network. `cvpr-tier decoys` writes plausible stand-in records with no network. Titles are recombined from a caller-supplied list or drawn from a fixed lexicon, then rejected when they match a catalog title or a hash in `title_digests.json`. `list` writes that digest file and does not store the titles in it. `cvpr-tier round` appends a candidate line before or after a run.
 
 ### Sets, anonymization, and the lock
 
 `benchmarks/cvpr_tier/sets.json` registers `S24-P` (pilot 50, dev), `S24-C1` (existing 120, sealed), `S24-D2` (15/15/20, dev, excluding P and C1), and `S24-C2` (30/40/50, sealed, excluding P, C1, and D2). Membership that already exists is stored as an id-list hash. `S24-D2` and `S24-C2` are not drawn in this change, so their hashes are empty. `fetch --set` refuses a sealed or opened set. A dev fetch filters to the set's year, applies the exclusion lists, and writes `sets/<id>/`.
 
-`prepare --variant A1` writes `manuscripts/A1/`. It removes the title, authors, affiliations, emails, footnotes, acknowledgements, URLs, and the multi-line CVF watermark. `A2` also masks method names. `meta/` keeps the title and authors for anonymization checks and is not a prompt. The leak scan writes counts only. A1 and A2 fail closed when any count is above zero. Omitting `--variant` keeps the historical one-line banner strip at `manuscripts/<paper-id>.txt`.
+`prepare --variant A1` writes `manuscripts/A1/`. It removes the title, authors, affiliations, emails, footnotes, acknowledgements, URLs, and the multi-line CVF watermark. Acknowledgement and funding headings (singular or plural, numbered or inline) are removed through the references heading. Title 4-grams are masked after line breaks, hyphenation, ligatures, and case are normalized. A residual acknowledgement heading or title 4-gram is a leak count. `A2` also masks method names. `meta/` keeps the title and authors for anonymization checks and is not a prompt. The leak scan writes counts only. A1 and A2 fail closed when any count is above zero. Omitting `--variant` keeps the historical one-line banner strip at `manuscripts/<paper-id>.txt`.
+
+`prepare` also saves per-paper category counts in the `papers` mapping of `manuscripts/<variant>/leak_counts.json`, including when the scan fails. For A1/A2, `run` reads that mapping before building prompts, reusing answers, or exporting replay packets. Each failed manuscript gets a `parsed/<handoff-id>.json` record with `status: "skipped"`, `reason: "leak_failed"`, paper id, variant, and positive `leak_counts`; it has no score or predicted tier. The run result lists skipped records, usage and rounds count them separately, and reports count them outside scoring and the scored-only analysis CSV. Skips use no model calls or estimated tokens. Missing or invalid per-paper counts fail closed: rerun `prepare` with the same cache, set (if any), and variant to upgrade an older aggregate-only cache. A0 and the no-variant path do not consult these counts.
 
 `cvpr-tier lock` writes `lock.json` (protocol `cvpr-tier-lock-v1`): analysis defaults, model transports, task hashes, and set hashes. It does not contain catalog ids and it does not start a run. A sealed run requires `--confirm --lock` and checks those hashes. `report --confirm` reads labels from the custody directory once, writes `opened.json`, and appends `opened.log`.
 
@@ -207,6 +213,30 @@ PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
   --model-id opus-local \
   --backend command \
   --command-template 'opus --prompt {prompt_file} --output {answer_file} --model {model}'
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier run \
+  --cache workdir/cvpr-tier \
+  --model-id opus-local \
+  --backend command \
+  --variant A1 --round r1 --repeats 2 \
+  --command-template 'opus --prompt {prompt_file} --output {answer_file} --model {model}'
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier decoys \
+  --output workdir/cvpr-tier/decoys.json --count 4
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier controls \
+  --output workdir/cvpr-tier/controls.json --since 2026-07-15 --category cs.CV
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier probe \
+  --cache workdir/cvpr-tier \
+  --model-id grok-4.7-cursor \
+  --backend command \
+  --decoys 3 \
+  --controls workdir/cvpr-tier/controls.json \
+  --command-template 'grok --output {answer_file} --model {model}'
+
+PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier round \
+  --cache workdir/cvpr-tier --round r1 --model-id grok-4.7-cursor --variant A1
 
 PYTHONPATH=src python3 -m autopaperreview calibrate-eval cvpr-tier report \
   --cache workdir/cvpr-tier \
