@@ -2156,13 +2156,6 @@ Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 
 After the three reviews, set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating; it need not equal the mean of the three ratings above.
 """.strip()
 
-# Forecast-only reminder. The scale paragraphs stay the round 5-10 text.
-# The panel was leaving both tails on 5 and 6, so a paper the reviewers
-# would cite and a paper they would decline looked alike.
-_FORECAST_TAILS = """
-The probabilities have to reach those anchors. A reviewer who would cite the result and argue for it puts most of the mass on 8; any remainder sits on 6 or 10, and the expected rating is near 8 rather than near 6. A reviewer who sees a decisive reason to decline puts most of the mass on 3; any remainder sits on 1 or 5, and the expected rating is near 3 rather than near 5. predicted_mean uses the same anchors: near 7 or above when the reviewers would accept the paper outright, and near 4 or below when they would decline it outright. A panel that leaves every reviewer on 5 and 6 has not used the scale.
-""".strip()
-
 
 def forecast_task_text() -> str:
     """The forecast-panel instructions. The seat ids come from ``anchors.FORECAST_SEATS``.
@@ -2185,8 +2178,6 @@ def forecast_task_text() -> str:
             EXPERT_SCALE_PARAGRAPHS[2],
             "",
             EXPERT_SCALE_PARAGRAPHS[3],
-            "",
-            _FORECAST_TAILS,
             "Return only the JSON object.",
         ]
     )

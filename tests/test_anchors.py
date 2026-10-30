@@ -1020,10 +1020,6 @@ class ForecastPanelTests(unittest.TestCase):
         self.assertIn("Real panels disagree", text)
         self.assertIn("Do not pull the three toward each other", text)
         self.assertIn("need not equal the mean of the three ratings", text)
-        self.assertIn("The probabilities have to reach those anchors", text)
-        self.assertIn("most of the mass on 8", text)
-        self.assertIn("most of the mass on 3", text)
-        self.assertIn("leaves every reviewer on 5 and 6", text)
         self.assertLess(text.index("- senior:"), text.index("Each review has these fields"))
         self.assertLess(text.index("probabilities: six numbers"), text.index("predicted_mean is the mean"))
         for other in ("## Venue mean", "## Expert read", "## Review panel", "## Assigned panel", "## Review and discussion", "## Audit", "## Verified audit"):
@@ -1073,7 +1069,7 @@ class ForecastPanelTests(unittest.TestCase):
             self.assertEqual(len(older), length)
         for hint in ("panel", "matched", "rebuttal", "expert", "holistic"):
             self.assertNotIn("probabilities", _SCHEMA_HINTS[hint])
-        self.assertEqual(len(text), 7389)
+        self.assertEqual(len(text), 6780)
 
     def test_schema_hint_names_the_three_seats_and_the_six_probabilities_without_an_example_score(self) -> None:
         hint = _SCHEMA_HINTS["forecast"]
