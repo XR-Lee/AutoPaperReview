@@ -1,0 +1,984 @@
+{
+  "bootstrap": {
+    "promotion_contrast": {
+      "method": "paired-stratified-linear-percentile",
+      "percentiles": [
+        0.025,
+        0.975
+      ],
+      "resamples": 4000,
+      "seed": 20261029,
+      "source": "benchmarks/promotion/paired_bootstrap.py",
+      "strata": "the four ICLR tiers on this manifest"
+    },
+    "rank_metrics": {
+      "method": "paper-level-linear-percentile",
+      "percentiles": [
+        0.025,
+        0.975
+      ],
+      "resamples": 4000,
+      "seed": 20261021,
+      "source": "autopaperreview.rank_metrics"
+    }
+  },
+  "content_sha256": "e4411107b0ad227f35d11e02f453348fbf9490ae0ed6bac6a3a0fde79411836a",
+  "cvpr": {
+    "sealed_not_used": [
+      "S24-C1",
+      "S24-C2"
+    ],
+    "separate_from_iclr": true,
+    "sets": [
+      {
+        "id": "S24-P",
+        "id_list_sha256": "81b04fa5031fcc594d0074702c8280d855f36c40835d05969205a26cdb04d29f",
+        "id_list_source": "benchmarks/cvpr_tier/pilot_2024_50/manifest.json#pilot.paper_ids",
+        "paper_ids": [
+          "cvpr2024-070c425fd005e11aec1a90706dda66f5",
+          "cvpr2024-0852b1445f41f52e5b500896b0a1f570",
+          "cvpr2024-08d98638c6fcd194a4b1e6992063e944",
+          "cvpr2024-08f90c1a417155361a5c4b8d297e0d78",
+          "cvpr2024-0c0134e3ab253fc5f690b64d9339ba38",
+          "cvpr2024-0d46839f6371fb84f6b6c682f5fc2c77",
+          "cvpr2024-2fd78cae85017cecbfbe152b9133965f",
+          "cvpr2024-3070e6addcd702cb58de5d7897bfdae1",
+          "cvpr2024-324450bbc4885ae02b0fc2e7f589374b",
+          "cvpr2024-3faf3b08de6c7c130e63c0e38e5553a8",
+          "cvpr2024-447664a3141eb12771bd889d6d4e1bdb",
+          "cvpr2024-486fbd761bfa5400722324fdc9822adc",
+          "cvpr2024-4aaa76178f8567e05c8e8295c96171d8",
+          "cvpr2024-4b97b5ad9d466de90e5d901c0557b21a",
+          "cvpr2024-4bb236de7787ceedafdff83bb8ea4710",
+          "cvpr2024-4c32296316cec19d27f62e4e8db15430",
+          "cvpr2024-59139a91a16c9b09a388091bdfe639de",
+          "cvpr2024-5d55e7c13b0f4d7cf9d5d55d3af329c8",
+          "cvpr2024-6591d327f6f731e589b0e869adadf940",
+          "cvpr2024-697e382cfd25b07a3e62275d3ee132b3",
+          "cvpr2024-71def22ecb636394074c832abeed07a7",
+          "cvpr2024-7ec3b3cf674f4f1d23e9d30c89426cce",
+          "cvpr2024-7ecd070e606afbf07a07c32e7267051f",
+          "cvpr2024-7f018eb7b301a66658931cb8a93fd6e8",
+          "cvpr2024-84d5711e9bf5547001b765878e7b0157",
+          "cvpr2024-90862f7843af9e9747d1a54269afafbd",
+          "cvpr2024-983a33a9a86796df362c1108e00f54a6",
+          "cvpr2024-9fc36fa768a74fa93d3ee7bf57b1392c",
+          "cvpr2024-a577dad7e00eaad256c112c836f55b11",
+          "cvpr2024-a9be4c2a4041cadbf9d61ae16dd1389e",
+          "cvpr2024-b06baa5b82cb371718756e2cc21de109",
+          "cvpr2024-b28d7c6b6aec04f5525b453411ff4336",
+          "cvpr2024-bb41d7ba746e551cbae52d2aaab4f625",
+          "cvpr2024-bb836c01cdc9120a9c984c525e4b1a4a",
+          "cvpr2024-bc786a7e5492c8c5c3e3d9d1b9ba3ec0",
+          "cvpr2024-bc8741c4e92bbbca75ab9fe51f54664a",
+          "cvpr2024-be37ff14df68192d976f6ce76c6cbd15",
+          "cvpr2024-c1adc7e5ae982a010af2eb442b583640",
+          "cvpr2024-c73071b4520a9a82990741a84a2144eb",
+          "cvpr2024-c913303f392ffc643f7240b180602652",
+          "cvpr2024-d1f44e2f09dc172978a4d3151d11d63e",
+          "cvpr2024-d27b95cac4c27feb850aaa4070cc4675",
+          "cvpr2024-dcf531edc9b229acfe0f4b87e1e278dd",
+          "cvpr2024-e4a86b0d7bf4c46d7d550a92b0b2fcae",
+          "cvpr2024-e816c635cad85a60fabd6b97b03cbcc9",
+          "cvpr2024-f04b8b59e703ac3889bf1ce4ca52db81",
+          "cvpr2024-f4db8537e9d75da46c4efc36a2d70956",
+          "cvpr2024-fa1e9c965314ccd7810fb5ea838303e5",
+          "cvpr2024-fa95123aa5f89781ed4e89a55eb2edcc",
+          "cvpr2024-fcde14913c766cf307c75059e0e89af5"
+        ],
+        "quotas": {
+          "highlight": 17,
+          "oral": 13,
+          "poster": 20
+        },
+        "role": "dev",
+        "seed": 20261029,
+        "year": 2024
+      },
+      {
+        "drawn_n": 50,
+        "excluded_paper_ids": [
+          "cvpr2024-e71e5cd119bbc5797164fb0cd7fd94a4"
+        ],
+        "id": "S24-D2",
+        "id_list_sha256": null,
+        "membership": "exclusion-recorded",
+        "note": "Dev draw, seed 20261031, quotas 15 oral / 15 highlight / 20 poster, excluding S24-P and sealed S24-C1. This file does not open S24-C1 or S24-C2 and does not copy the D2 id list. One paper fails the A1/A2 body venue-marker scan and is excluded, leaving 49 valid papers. A scored run must have those 49 ids, must omit the excluded id, and must not overlap S24-P.",
+        "quotas": {
+          "highlight": 15,
+          "oral": 15,
+          "poster": 20
+        },
+        "role": "dev",
+        "seed": 20261031,
+        "valid_n": 49,
+        "year": 2024
+      }
+    ]
+  },
+  "forecast_k1": {
+    "cheap": true,
+    "coefficient_set": "apr-fusion-v1",
+    "holistic_mode": "forecast",
+    "holistic_samples": 1,
+    "rank_target": "rank_score",
+    "related_work": "off"
+  },
+  "holdout": {
+    "hmac_alg": "HMAC-SHA256",
+    "id_hmac_sha256": [
+      "00cfa17b6cb75af20e4ea0412c80935282365e23d4b4e5de9132747874f5bfcd",
+      "022cef38ce935b9b007e1f666a605a3f29a11e7622bcf27c90c7c0faabc930da",
+      "03865d98b61c5013111955a2a01b7136db39a01de907c241f7634beca445eea2",
+      "26acf339a67fa33b350c5568b226b51963689305a397a6e3031340be94bd9658",
+      "30bfadfeec8e420b8f24c1e5bfc56108a6fa8746d2f43d36fcb7568858dbf433",
+      "40987baf40fbee4e0070a6557ac260dd61684494e0484ec7f18e50f6f9ca2576",
+      "840cbbd230d77df04ac80a6c606405c3ec0aede3a48cd464c3208549a9516c8e",
+      "9c6ae5714b92a5c87f38763971bfa68abe227d47c6b44e8c2e1d659954f86813",
+      "aeb719f90aceb1a406e0dd3d0545613fc73f3f73c550d0ea7e0a62aa6dff0add",
+      "ed01b72b5b4739573e95fd418a503935c28f117aa26b9e0671613831b5ce0bf0",
+      "f8029a0ce484168948a362303c0ebdda01fa53b8b277bf16af64bbeefe017dea",
+      "fe1a698cdfc4c61ac743e3dee5cbcdf270a32fc76b48097239e092ce811342a9"
+    ],
+    "list_hmac_sha256": "b63b1465b471062054a8b253038a379be2495e7f371ba97bb6db08e53e5cb2d2",
+    "n": 12,
+    "operator_file": "workdir/fixed-eval/private-holdout.json",
+    "per_tier": {
+      "borderline_accept": 3,
+      "borderline_reject": 3,
+      "clear_accept": 3,
+      "clear_reject": 3
+    },
+    "role": "private"
+  },
+  "iclr": {
+    "papers": [
+      {
+        "decision": "reject",
+        "forum_id": "RFJGFrMvYj",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 1.5,
+        "note": "Older full-review batch flagged a fatal class. Not a forecast-k1 parse failure. Mean sits at the low end of clear reject.",
+        "primary_area": "generative models",
+        "ratings": [
+          1,
+          1,
+          1,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "TCIG: Two-Stage Controlled Image Generation with Quality Enhancement through Diffusion",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "2NwHLAffZZ",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 2.3333,
+        "primary_area": "metric learning, kernel learning, and sparse coding",
+        "ratings": [
+          3,
+          3,
+          1
+        ],
+        "tier": "clear_reject",
+        "title": "Weak Correlations as the Underlying Principle for Linearization of Gradient-Based Learning Systems",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "eRAXvtP0gA",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 2.5,
+        "primary_area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+        "ratings": [
+          5,
+          3,
+          1,
+          1
+        ],
+        "tier": "clear_reject",
+        "title": "Unsupervised Cognition",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "VyWv7GSh5i",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 2.75,
+        "note": "Older full-review run missed a dimension quote, then scored on retry. Not a forecast-k1 parse failure.",
+        "primary_area": "reinforcement learning",
+        "ratings": [
+          3,
+          6,
+          1,
+          1
+        ],
+        "tier": "clear_reject",
+        "title": "A Novel Variational Lower Bound For Inverse Reinforcement Learning",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "PoB6QGAM38",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.0,
+        "primary_area": "causal reasoning",
+        "ratings": [
+          3,
+          3,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "Neural Networks Decoded: Targeted and Robust Analysis of Neural Network Decisions via Causal Explanations and Reasoning",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "llXCyLhOY4",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.0,
+        "primary_area": "reinforcement learning",
+        "ratings": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "Bias Resilient Multi-Step Off-Policy Goal-Conditioned Reinforcement Learning",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "zhJDD85QHD",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.0,
+        "note": "Older full-review batch flagged a fatal class. The promotion forecast-k1 run scored this paper with no parse failure.",
+        "primary_area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+        "ratings": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "CEIR: Concept-based Explainable Image Representation Learning",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "4y3GDTFv70",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.25,
+        "primary_area": "probabilistic methods (Bayesian methods, variational inference, sampling, UQ, etc.)",
+        "ratings": [
+          3,
+          6,
+          1,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "A Latent Space Theory for Emergent Abilities in Large Language Models",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "MpWRCiw8g5",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.5,
+        "primary_area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+        "ratings": [
+          3,
+          5,
+          3,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "JOSENet: A Joint Stream Embedding Network for Violence Detection in Surveillance Videos",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "kaZAKvjLro",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.5,
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          3,
+          3,
+          5,
+          3
+        ],
+        "tier": "clear_reject",
+        "title": "Semi-supervised Long-tailed Recognition using Alternate Sampling",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "2Ed7b52z53",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.6667,
+        "primary_area": "representation learning for computer vision, audio, language, and other modalities",
+        "ratings": [
+          5,
+          5,
+          1
+        ],
+        "tier": "clear_reject",
+        "title": "On the Matrix Form of the Quaternion Fourier Transform and Quaternion Convolution",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "xw3fStKCwm",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 3.75,
+        "primary_area": "general machine learning (i.e., none of the above)",
+        "ratings": [
+          3,
+          3,
+          3,
+          6
+        ],
+        "tier": "clear_reject",
+        "title": "Tensor-Train Point Cloud Compression and Efficient Approximate Nearest Neighbor Search",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "Dr4qD9bzZd",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.0,
+        "primary_area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+        "ratings": [
+          3,
+          3,
+          6
+        ],
+        "tier": "borderline_reject",
+        "title": "Functional Geometry Guided Protein Sequence and Backbone Structure Co-Design",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "1SO93f7sVf",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.25,
+        "primary_area": "general machine learning (i.e., none of the above)",
+        "ratings": [
+          3,
+          5,
+          3,
+          6
+        ],
+        "tier": "borderline_reject",
+        "title": "Training Neural Networks from Scratch with Parallel Low-Rank Adapters",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "WnEnU2K3Rb",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.25,
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          5,
+          3,
+          3,
+          6
+        ],
+        "tier": "borderline_reject",
+        "title": "Beyond the Benchmark: Detecting Diverse Anomalies in Videos",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "Ng7OYC3PT8",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.6,
+        "primary_area": "reinforcement learning",
+        "ratings": [
+          3,
+          6,
+          3,
+          6,
+          5
+        ],
+        "tier": "borderline_reject",
+        "title": "ATraDiff: Accelerating Online Reinforcement Learning with Imaginary Trajectories",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "50P9TDPEsh",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.6667,
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          5,
+          3,
+          6
+        ],
+        "tier": "borderline_reject",
+        "title": "Critique Ability of Large Language Models",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "Ge0GEOvifh",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.6667,
+        "primary_area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+        "ratings": [
+          8,
+          3,
+          3
+        ],
+        "tier": "borderline_reject",
+        "title": "Better Safe than Sorry: Pre-training CLIP against Targeted Data Poisoning and Backdoor Attacks",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "SJPUmX4LXD",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.6667,
+        "primary_area": "applications to neuroscience & cognitive science",
+        "ratings": [
+          3,
+          3,
+          8
+        ],
+        "tier": "borderline_reject",
+        "title": "Brain2Music: Reconstructing Music from Human Brain Activity",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "xsts7MRLey",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 4.6667,
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          6,
+          3,
+          5
+        ],
+        "tier": "borderline_reject",
+        "title": "DEEP UNSUPERVISED DOMAIN ADAPTATION FOR TIME SERIES CLASSIFICATION: A BENCHMARK",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "QFo2wxQEW6",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.0,
+        "primary_area": "applications to robotics, autonomy, planning",
+        "ratings": [
+          5,
+          5,
+          5
+        ],
+        "tier": "borderline_reject",
+        "title": "Autonomous Catheterization with Open-source Simulator and Expert Trajectory",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "bjFJrdK0nO",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.0,
+        "primary_area": "generative models",
+        "ratings": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "tier": "borderline_reject",
+        "title": "Integrating View Conditions for Image Synthesis",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "NTWtNjlThd",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.25,
+        "primary_area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+        "ratings": [
+          5,
+          6,
+          5,
+          5
+        ],
+        "tier": "borderline_reject",
+        "title": "Explicitly Disentangled Representations in Object-Centric Learning",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "48CXLrx7K3",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.3333,
+        "primary_area": "visualization or interpretation of learned representations",
+        "ratings": [
+          3,
+          5,
+          8
+        ],
+        "tier": "borderline_reject",
+        "title": "Revealing Unintentional Information Leakage in Low-Dimensional Facial Portrait Representations",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "E6EbeJR20o",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.5,
+        "note": "Venue decision is reject. The tier is the mean-rating band, which is at or above 5.5 and below 7.",
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          5,
+          6,
+          6,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "A Large-Scale 3D Face Mesh Video Dataset via Neural Re-parameterized Optimization",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "x5txICnnjC",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 5.5,
+        "primary_area": "applications to neuroscience & cognitive science",
+        "ratings": [
+          8,
+          5,
+          1,
+          8
+        ],
+        "tier": "borderline_accept",
+        "title": "Synaptic Weight Distributions Depend on the Geometry of Plasticity",
+        "year": 2024
+      },
+      {
+        "decision": "reject",
+        "forum_id": "Aemqy6Hjdj",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 5.6667,
+        "note": "Venue decision is reject. The tier is the mean-rating band, which is at or above 5.5 and below 7.",
+        "primary_area": "transfer learning, meta learning, and lifelong learning",
+        "ratings": [
+          6,
+          6,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "Enhancing Compositional Generalization via Compositional Feature Alignment",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "itGkF993gz",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 5.6667,
+        "primary_area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+        "ratings": [
+          6,
+          8,
+          3
+        ],
+        "tier": "borderline_accept",
+        "title": "MAPE-PPI: Towards Effective and Efficient Protein-Protein Interaction Prediction via Microenvironment-Aware Protein Embedding",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "vo9t20wsmd",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 5.6667,
+        "primary_area": "generative models",
+        "ratings": [
+          8,
+          6,
+          3
+        ],
+        "tier": "borderline_accept",
+        "title": "Faster Cascades via Speculative Decoding",
+        "year": 2025
+      },
+      {
+        "decision": "reject",
+        "forum_id": "DS5qRs0tQz",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 6.0,
+        "note": "Venue decision is reject. The tier is the mean-rating band, which is at or above 5.5 and below 7.",
+        "primary_area": "representation learning for computer vision, audio, language, and other modalities",
+        "ratings": [
+          8,
+          5,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "Grounding DINO: Marrying DINO with Grounded Pre-Training for Open-Set Object Detection",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "Pujt3ADZgI",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 6.0,
+        "primary_area": "reinforcement learning",
+        "ratings": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "tier": "borderline_accept",
+        "title": "Iterative Nash Policy Optimization: Aligning LLMs with General Preferences via No-Regret Learning",
+        "year": 2025
+      },
+      {
+        "decision": "reject",
+        "forum_id": "fWk5Qx0exc",
+        "listing": "ICLR 2024 rejected",
+        "mean_rating": 6.0,
+        "note": "Venue decision is reject. The tier is the mean-rating band, which is at or above 5.5 and below 7.",
+        "primary_area": "optimization",
+        "ratings": [
+          5,
+          3,
+          8,
+          6,
+          8
+        ],
+        "tier": "borderline_accept",
+        "title": "Last-Iterate Convergence Properties of Regret-Matching Algorithms in Games",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "rUf9G9k2im",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 6.25,
+        "primary_area": "generative models",
+        "ratings": [
+          8,
+          6,
+          6,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "Image Inpainting via Iteratively Decoupled Probabilistic Modeling",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "iAYIRHOYy8",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 6.3333,
+        "primary_area": "applications to robotics, autonomy, planning",
+        "ratings": [
+          8,
+          6,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "Neural Contractive Dynamical Systems",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "yrgQdA5NkI",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 6.3333,
+        "primary_area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+        "ratings": [
+          8,
+          6,
+          5
+        ],
+        "tier": "borderline_accept",
+        "title": "Equivariant Matrix Function Neural Networks",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "pxI5IPeWgW",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 6.8,
+        "primary_area": "causal reasoning",
+        "ratings": [
+          8,
+          5,
+          8,
+          5,
+          8
+        ],
+        "tier": "borderline_accept",
+        "title": "ODE Discovery for Longitudinal Heterogeneous Treatment Effects Inference",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "UpgRVWexaD",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 7.0,
+        "primary_area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+        "ratings": [
+          8,
+          8,
+          6,
+          6
+        ],
+        "tier": "clear_accept",
+        "title": "Accelerating Data Generation for Neural Operators via Krylov Subspace Recycling",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "kGvXIlIVLM",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 7.0,
+        "primary_area": "generative models",
+        "ratings": [
+          8,
+          6,
+          8,
+          6,
+          8,
+          6
+        ],
+        "tier": "clear_accept",
+        "title": "Toward Guidance-Free AR Visual Generation via Condition Contrastive Alignment",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "wcka3bd7P4",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 7.5,
+        "primary_area": "learning on graphs and other geometries & topologies",
+        "ratings": [
+          8,
+          8,
+          6,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "Unleashing the Potential of Fractional Calculus in Graph Neural Networks with FROND",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "6s5uXNWGIh",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "datasets and benchmarks",
+        "ratings": [
+          10,
+          8,
+          8,
+          6
+        ],
+        "tier": "clear_accept",
+        "title": "MLE-bench: Evaluating Machine Learning Agents on Machine Learning Engineering",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "GRMfXcAAFh",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "learning on time series and dynamical systems",
+        "ratings": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "Oscillatory State-Space Models",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "NYN1b8GRGS",
+        "listing": "ICLR 2024 spotlight",
+        "mean_rating": 8.0,
+        "primary_area": "applications to robotics, autonomy, planning",
+        "ratings": [
+          10,
+          6,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "GIM: Learning Generalizable Image Matcher From Internet Videos",
+        "year": 2024
+      },
+      {
+        "decision": "accept",
+        "forum_id": "RuP17cJtZo",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "generative models",
+        "ratings": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "Generator Matching: Generative modeling with arbitrary Markov processes",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "esYrEndGsr",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "interpretability and explainable AI",
+        "ratings": [
+          6,
+          10,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "Influence Functions for Scalable Data Attribution in Diffusion Models",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "g3xuCtrG6H",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "applications to neuroscience & cognitive science",
+        "ratings": [
+          8,
+          6,
+          10,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "A Computational Framework for Modeling Emergence of Color Vision in the Human Brain",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "t7P5BUKcYv",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "foundation or frontier models, including LLMs",
+        "ratings": [
+          8,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "MoE++: Accelerating Mixture-of-Experts Methods with Zero-Computation Experts",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "xByvdb3DCm",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 8.0,
+        "primary_area": "causal reasoning",
+        "ratings": [
+          8,
+          8,
+          8,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "When Selection Meets Intervention: Additional Complexities in Causal Discovery",
+        "year": 2025
+      },
+      {
+        "decision": "accept",
+        "forum_id": "Ha6RTeWMd0",
+        "listing": "ICLR 2025 oral",
+        "mean_rating": 9.0,
+        "primary_area": "applications to computer vision, audio, language, and other modalities",
+        "ratings": [
+          10,
+          10,
+          8,
+          8
+        ],
+        "tier": "clear_accept",
+        "title": "SAM 2: Segment Anything in Images and Videos",
+        "year": 2025
+      }
+    ],
+    "role": "dev"
+  },
+  "id_list_sha256": "0dc37c450dfa4516a5c7cd0804647512911fb427623f1fb8a5b3b49d7d1f4153",
+  "promotion": {
+    "dependency_branch": "cursor/promotion-benchmark-v1-9a3c",
+    "dependency_pr": 40,
+    "iclr_arm": "this manifest's ICLR dev papers; do not redraw",
+    "note": "PR #40 is not merged. This branch is based on pre-release and does not copy that harness. rank_eval defaults to this dev set. calibrate-eval run --fixed-set iclr-dev scores it. After #40 lands, its ICLR id list should be read from promotion_iclr_ids()."
+  },
+  "protocol": "fixed-eval-v1",
+  "recording": {
+    "effort_required": true,
+    "model_id_required": true
+  },
+  "selection": {
+    "area_cap": 4,
+    "dev_per_tier": 12,
+    "holdout_per_tier": 3,
+    "parent_pool": "93-paper materialized ICLR sample (seed 20261021, no extend-rejected) union README holdout-15 (subset seed 20261022)",
+    "rule": "Assign the mean-rating tier. Inside a tier, sort forum ids and shuffle with Random(f'fixed-eval-v1:{seed}:{tier}'). Walk that order, taking at most area_cap papers from one primary area, then relax the cap if the quota is short. The dev quota is taken first. The private holdout continues through the same order.",
+    "seed": 20261030
+  },
+  "source": {
+    "min_ratings": 2,
+    "pool": "public OpenReview ICLR 2024 and ICLR 2025",
+    "ratings_checked": "2026-10-30",
+    "version": "fixed-eval-v1"
+  },
+  "status": "proposed",
+  "tier_definitions": [
+    {
+      "count_dev": 12,
+      "count_holdout": 3,
+      "mean_high_exclusive": 4.0,
+      "mean_high_inclusive": null,
+      "mean_low_inclusive": 0.0,
+      "tier": "clear_reject"
+    },
+    {
+      "count_dev": 12,
+      "count_holdout": 3,
+      "mean_high_exclusive": 5.5,
+      "mean_high_inclusive": null,
+      "mean_low_inclusive": 4.0,
+      "tier": "borderline_reject"
+    },
+    {
+      "count_dev": 12,
+      "count_holdout": 3,
+      "mean_high_exclusive": 7.0,
+      "mean_high_inclusive": null,
+      "mean_low_inclusive": 5.5,
+      "tier": "borderline_accept"
+    },
+    {
+      "count_dev": 12,
+      "count_holdout": 3,
+      "mean_high_exclusive": null,
+      "mean_high_inclusive": 10.0,
+      "mean_low_inclusive": 7.0,
+      "tier": "clear_accept"
+    }
+  ]
+}

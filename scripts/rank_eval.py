@@ -11,6 +11,14 @@ import json
 import sys
 from pathlib import Path
 
+from autopaperreview.fixed_eval import (
+    RANK_BOOTSTRAP,
+    FixedEvalError,
+    assert_holdout_file,
+    assert_manifest,
+    assert_model_recorded,
+    dev_ids,
+)
 from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
@@ -105,10 +113,73 @@ def main(argv: list[str] | None = None) -> int:
         help="locked reports the shipped rank (the preregistered candidate); candidates is diagnostic",
     )
     parser.add_argument("--resamples", type=int, default=4000)
+    parser.add_argument(
+        "--fixed-set",
+        choices=("iclr-dev", "none"),
+        default="iclr-dev",
+        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+    )
+    parser.add_argument("--model-id", default="", help="required when --fixed-set iclr-dev")
+    parser.add_argument("--effort", default="", help="required when --fixed-set iclr-dev")
+    parser.add_argument(
+        "--holdout-file",
+        default="",
+        help="gitignored private-holdout operator file; scores that slice instead of the dev set",
+    )
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
     output = assert_local_only(Path(args.output))
-    records = _records(cache, _load_ids(Path(args.ids) if args.ids else None, args.split))
+    fixed_meta: dict | None = None
+    try:
+        if args.fixed_set == "iclr-dev":
+            manifest = assert_manifest()
+            model_id, effort = assert_model_recorded(args.model_id, args.effort)
+            if args.resamples != RANK_BOOTSTRAP["resamples"]:
+                raise FixedEvalError(
+                    f"fixed-set rank bootstrap resamples must be {RANK_BOOTSTRAP['resamples']}"
+                )
+            if args.holdout_file:
+                if args.ids:
+                    raise FixedEvalError("do not pass --ids with --holdout-file")
+                holdout_papers = assert_holdout_file(assert_local_only(Path(args.holdout_file)), manifest)
+                wanted = {str(paper["forum_id"]) for paper in holdout_papers}
+                strata = {str(paper["forum_id"]): str(paper["tier"]) for paper in holdout_papers}
+                slice_name = "iclr-holdout"
+            else:
+                if args.ids:
+                    given = _load_ids(Path(args.ids), args.split)
+                    if given != set(dev_ids(manifest)):
+                        raise FixedEvalError("ICLR run ids do not match the fixed dev set")
+                wanted = set(dev_ids(manifest))
+                strata = {str(paper["forum_id"]): str(paper["tier"]) for paper in manifest["iclr"]["papers"]}
+                slice_name = "iclr-dev"
+            fixed_meta = {
+                "bootstrap": dict(RANK_BOOTSTRAP),
+                "content_sha256": manifest["content_sha256"],
+                "effort": effort,
+                "fixed_set": slice_name,
+                "model_id": model_id,
+                "status": manifest["status"],
+            }
+        else:
+            if args.holdout_file:
+                raise FixedEvalError("--holdout-file requires --fixed-set iclr-dev")
+            wanted = _load_ids(Path(args.ids) if args.ids else None, args.split)
+            strata = {}
+    except FixedEvalError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    records = _records(cache, wanted)
+    if fixed_meta is not None:
+        scored = {str(record["forum_id"]) for record in records}
+        if scored != wanted:
+            print(
+                f"fixed set incomplete: scored {len(scored)} of {len(wanted or ())}",
+                file=sys.stderr,
+            )
+            return 2
+        for record in records:
+            record["stratum"] = strata.get(str(record["forum_id"]))
     if len(records) < 2:
         print("not enough scored papers", file=sys.stderr)
         return 2
@@ -141,23 +212,24 @@ def main(argv: list[str] | None = None) -> int:
     chosen = None if report is None else report["chosen"]
     tied = [] if report is None else list(report["tied"])
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(
-            {
-                "preregistered": LOCKED_CANDIDATE,
-                "chosen": chosen,
-                "tied": tied,
-                "n": len(records),
-                "metrics": table,
-                "rows": records,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    body = {
+        "preregistered": LOCKED_CANDIDATE,
+        "chosen": chosen,
+        "tied": tied,
+        "n": len(records),
+        "metrics": table,
+        "rows": records,
+    }
+    if fixed_meta is not None:
+        body.update(fixed_meta)
+    output.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"preregistered={LOCKED_CANDIDATE}")
+    if fixed_meta is not None:
+        print(
+            f"fixed_set={fixed_meta['fixed_set']} status={fixed_meta['status']} "
+            f"digest={fixed_meta['content_sha256']} model={fixed_meta['model_id']} "
+            f"effort={fixed_meta['effort']}"
+        )
     print(f"n={len(records)} mode={args.mode}")
     for name in names:
         intervals = table[name]["intervals"]
