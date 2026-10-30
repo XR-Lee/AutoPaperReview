@@ -515,7 +515,9 @@ autopaperreview calibrate-eval run \
   --coefficient-set apr-fusion-v1
 ```
 
-5. 生成两份报告，它们测的东西不一样。`calibrate-eval report` 拿会议档（`our_bin`，即决策档）和人类均分比，结果对不上留出集表格；那张表里的 Spearman 和 AUC 用的是连续的 `forecast-k1`。`scripts/rank_eval.py --mode locked` 读的是 `rank_score`。`--resamples` 默认 4000。自助法种子 `20261021` 写在 `rank_metrics.py` 里，不是命令行参数。缓存和 `--output` 都必须是 Git 忽略的路径，例如 `reviews/` 或 `workdir/`。命令会拒绝检出目录里受 Git 跟踪的路径。
+`calibrate-eval run` 的 `--fixed-set` 默认是 `none`，评的是你抓下来的那份缓存。要评已提议的 48 篇开发集，加上 `--fixed-set iclr-dev --model-id "your-model-id" --effort xhigh`。这两个参数在开发集上是必填的，上面的 forecast-k1 参数也必须和清单一致。
+
+5. 生成两份报告，它们测的东西不一样。`calibrate-eval report` 拿会议档（`our_bin`，即决策档）和人类均分比，结果对不上留出集表格；那张表里的 Spearman 和 AUC 用的是连续的 `forecast-k1`。`scripts/rank_eval.py --mode locked` 读的是 `rank_score`，默认评 `benchmarks/fixed_eval/` 里已提议的固定 ICLR 开发集（`--fixed-set iclr-dev`）。这次运行必须带 `--model-id` 和 `--effort`。`--fixed-set none` 评整份缓存，已公布的留出集表格就是这样算的。`--resamples` 默认 4000。自助法种子 `20261021` 写在 `rank_metrics.py` 里，不是命令行参数。缓存和 `--output` 都必须是 Git 忽略的路径，例如 `reviews/` 或 `workdir/`。命令会拒绝检出目录里受 Git 跟踪的路径。论文集合和清单摘要对不上时，固定集运行以退出码 2 结束。见 [docs/fixed-eval.md](docs/fixed-eval.md)。
 
 ```bash
 autopaperreview calibrate-eval report \
@@ -525,10 +527,12 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
   --cache reviews/public-eval \
   --output reviews/public-eval/rank-metrics.json \
   --mode locked \
+  --model-id "your-model-id" \
+  --effort xhigh \
   --resamples 4000
 ```
 
-不要给 `calibrate-eval run` 传 `--only-ids` 或 `--split`，也不要给 `scripts/rank_eval.py` 传 `--ids` 或 `--split`。这些参数用来选一份私有 id 列表，本 README 不公布这样的列表。
+不要把 `--only-ids` 和 `--fixed-set iclr-dev` 一起用。`--fixed-set iclr-dev` 打开时，`scripts/rank_eval.py` 的 `--ids` 必须和开发集一致。`--holdout-file` 评的是私有留出集，只在要改 README 数字时使用。本 README 不公布那些 id。
 
 ## 保密
 

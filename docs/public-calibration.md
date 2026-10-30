@@ -22,6 +22,10 @@ PYTHONPATH=src python3 -m autopaperreview calibrate-eval run \
   --coefficient-set apr-fusion-v1 --cheap --holistic-mode forecast --holistic-samples 1
 ```
 
+## Fixed dev set
+
+`benchmarks/fixed_eval/manifest.json` is the proposed ICLR dev set (48 papers, 12 in each mean-rating tier) and the CVPR registration for S24-P and S24-D2. Status is `proposed`. `scripts/rank_eval.py` defaults to this ICLR set and requires `--model-id` and `--effort`. `calibrate-eval run` stays on the whole cache unless you pass `--fixed-set iclr-dev`. The private holdout is not in git. A dev-set number does not replace the published README rank. See [fixed evaluation set](fixed-eval.md).
+
 ## What is measured
 
 For each public submission the tool stores official ratings separately from the manuscript, runs prompt packets, then `execute_review` and `rate`.

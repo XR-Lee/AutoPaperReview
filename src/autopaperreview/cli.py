@@ -248,8 +248,36 @@ def _load_only_ids(path: str | None, split: str | None) -> set[str] | None:
 
 
 def command_calibrate_eval_run(args: argparse.Namespace) -> int:
-    from .public_calibration import run_cache
+    from .fixed_eval import assert_forecast_flags, assert_manifest, assert_model_recorded, dev_ids
+    from .public_calibration import assert_local_only, run_cache
 
+    only_ids = _load_only_ids(args.only_ids, args.split)
+    fixed_stamp = None
+    if args.fixed_set == "iclr-dev":
+        if args.only_ids:
+            raise ValueError("do not pass --only-ids with --fixed-set iclr-dev")
+        manifest = assert_manifest()
+        model_id, effort = assert_model_recorded(args.model_id, args.effort)
+        assert_forecast_flags(
+            cheap=args.cheap,
+            holistic_mode=args.holistic_mode,
+            holistic_samples=args.holistic_samples,
+            related_work=args.related_work,
+            coefficient_set=args.coefficient_set,
+        )
+        only_ids = set(dev_ids(manifest))
+        fixed_stamp = {
+            "cheap": bool(args.cheap),
+            "coefficient_set": args.coefficient_set,
+            "content_sha256": manifest["content_sha256"],
+            "effort": effort,
+            "fixed_set": "iclr-dev",
+            "holistic_mode": args.holistic_mode,
+            "holistic_samples": int(args.holistic_samples),
+            "model_id": model_id,
+            "related_work": args.related_work,
+            "status": manifest["status"],
+        }
     result = run_cache(
         Path(args.cache),
         mode=args.mode,
@@ -266,8 +294,13 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
         cheap=args.cheap,
         holistic_samples=args.holistic_samples,
         holistic_mode=args.holistic_mode,
-        only_ids=_load_only_ids(args.only_ids, args.split),
+        only_ids=only_ids,
     )
+    if fixed_stamp is not None:
+        cache = assert_local_only(Path(args.cache))
+        stamp = cache / "fixed-eval-run.json"
+        stamp.write_text(json.dumps(fixed_stamp, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = {**result, "fixed_eval": fixed_stamp}
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
         code = 3
@@ -331,15 +364,23 @@ def command_cvpr_tier_fetch(args: argparse.Namespace) -> int:
         set_id=args.set_id,
         exclude_sets=_cvpr_set_list(args.exclude_sets),
     )
-    _print_json(
-        {
-            "status": "success",
-            "seed": manifest.seed,
-            "n_per_tier": manifest.n_per_tier,
-            "draws": manifest.draws,
-            "paper_count": len(manifest.papers),
-        }
+    from .fixed_eval import assert_cvpr_stage
+
+    note = assert_cvpr_stage(
+        args.set_id,
+        [paper.paper_id for paper in manifest.papers],
+        stage="fetch",
     )
+    body = {
+        "status": "success",
+        "seed": manifest.seed,
+        "n_per_tier": manifest.n_per_tier,
+        "draws": manifest.draws,
+        "paper_count": len(manifest.papers),
+    }
+    if note is not None:
+        body["fixed_eval"] = note
+    _print_json(body)
     return 0
 
 
@@ -351,8 +392,30 @@ def command_cvpr_tier_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _registered_sample_ids(cache: Path, set_id: str) -> list[str] | None:
+    path = cache / "sets" / set_id / "sample_manifest.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    papers = payload.get("papers") if isinstance(payload, dict) else None
+    if not isinstance(papers, list):
+        raise ValueError(f"{set_id} sample manifest has no papers")
+    return [str(item["paper_id"]) for item in papers if isinstance(item, dict) and item.get("paper_id")]
+
+
 def command_cvpr_tier_run(args: argparse.Namespace) -> int:
     from .cvpr_tier import run_model
+    from .fixed_eval import SEALED_CVPR, assert_cvpr_stage
+    from .public_calibration import assert_local_only
+
+    if args.set_id in {"S24-P", "S24-D2", *SEALED_CVPR}:
+        cache = assert_local_only(Path(args.cache))
+        if args.set_id in SEALED_CVPR:
+            assert_cvpr_stage(args.set_id, [], stage="run")
+        else:
+            sample_ids = _registered_sample_ids(cache, args.set_id)
+            if sample_ids is not None:
+                assert_cvpr_stage(args.set_id, sample_ids, stage="run")
 
     result = run_model(
         Path(args.cache),
@@ -1061,6 +1124,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_run.add_argument("--only-ids", help="gitignored JSON list, or an object of lists")
     eval_run.add_argument("--split", help="key inside --only-ids when that file is an object")
+    eval_run.add_argument(
+        "--fixed-set",
+        choices=("none", "iclr-dev"),
+        default="none",
+        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+    )
+    eval_run.add_argument("--model-id", default="", help="required with --fixed-set iclr-dev")
+    eval_run.add_argument("--effort", default="", help="required with --fixed-set iclr-dev")
     eval_run.set_defaults(func=command_calibrate_eval_run)
 
     eval_report = eval_sub.add_parser("report", help="write Spearman, MAE, bin agreement, AUC, and spread")
