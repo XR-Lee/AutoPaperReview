@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .cvpr_json import JsonOutputError, reject_truncated_output
 from .hashing import sha256_bytes
 
 HANDOFF_ID_LENGTH = 12
@@ -168,15 +169,22 @@ def estimated_tokens(prompt_chars: int) -> int:
     return prompt_chars // 4
 
 
+def grok_json_prompt(prompt: str, model_id: str) -> str:
+    """Add transport instructions only for Grok; leave other model prompts unchanged."""
+    if "grok" not in model_id.lower():
+        return prompt
+    return (
+        "Return only one complete JSON object matching the requested schema. "
+        "Do not include Markdown fences, analysis, explanations, or text before or after the JSON. "
+        "Do not call tools. Do not search or read the workspace, filesystem, or web. "
+        "Use only the supplied input and your existing knowledge.\n\n" + prompt
+    )
+
+
 def split_usage(text: str) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
     """Pop harness fields from a JSON object. Non-JSON text is returned unchanged."""
-    stripped = text.strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end <= start:
-        return text, None, None
     try:
-        payload = json.loads(stripped[start : end + 1])
+        payload = json.loads(text)
     except json.JSONDecodeError:
         return text, None, None
     if not isinstance(payload, dict):
@@ -350,6 +358,11 @@ def run_isolated_command(
         except OSError as exc:
             raise HandoffError(f"command failed to start: {exc}") from exc
         latency = round(time.perf_counter() - started, 4)
+        try:
+            reject_truncated_output(completed.stdout.decode("utf-8", "replace"))
+            reject_truncated_output(completed.stderr.decode("utf-8", "replace"))
+        except JsonOutputError as exc:
+            raise HandoffError(str(exc)) from exc
         if answer_path.is_file() and answer_path.stat().st_size > 0:
             text = answer_path.read_text(encoding="utf-8")
         elif completed.returncode != 0:
@@ -359,6 +372,10 @@ def run_isolated_command(
             text = completed.stdout.decode("utf-8", "replace")
             if not text.strip():
                 raise HandoffError(f"command wrote no answer for {handoff_id}")
+        try:
+            reject_truncated_output(text)
+        except JsonOutputError as exc:
+            raise HandoffError(str(exc)) from exc
         body, usage, sentinel = split_usage(text)
         return {
             "text": body,

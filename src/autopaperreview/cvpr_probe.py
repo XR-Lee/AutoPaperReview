@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .cvpr_anonymize import _HEADING_PUNCT, abstract_heading_rest, extract_meta, stops_abstract, _left_column
+from .cvpr_handoff import grok_json_prompt
+from .cvpr_json import JsonOutputError, parse_json_output
 from .hashing import sha256_bytes
 
 TEMPLATES = ("P-A", "P-T", "P-D")
@@ -1005,20 +1007,17 @@ def render_batch_prompt(template: str, items: list[dict[str, Any]]) -> str:
     return "\n".join(blocks).rstrip() + "\n"
 
 
-def parse_probe_response(text: str) -> list[dict[str, Any]]:
-    stripped = text.strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end <= start:
-        start = stripped.find("[")
-        end = stripped.rfind("]")
-    if start < 0 or end <= start:
-        raise ProbeError("probe answer is not JSON")
+def parse_probe_response(
+    text: str, *, expected_handoff_ids: set[str] | None = None
+) -> list[dict[str, Any]]:
     try:
-        payload = json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise ProbeError("probe answer is not JSON") from exc
-    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return parse_json_output(text, lambda payload: _parse_probe_items(payload, expected_handoff_ids))
+    except JsonOutputError as exc:
+        raise ProbeError(f"probe answer is {exc}") from exc
+
+
+def _parse_probe_items(payload: Any, expected_handoff_ids: set[str] | None) -> list[dict[str, Any]]:
+    if isinstance(payload, dict) and "items" in payload:
         items = payload["items"]
     elif isinstance(payload, list):
         items = payload
@@ -1026,11 +1025,27 @@ def parse_probe_response(text: str) -> list[dict[str, Any]]:
         items = [payload]
     else:
         raise ProbeError("probe answer has no items")
+    if not isinstance(items, list) or not items:
+        raise ProbeError("probe items must be a non-empty list")
     parsed: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
-            continue
+            raise ProbeError("each probe item must be an object")
         handoff_id = str(item.get("handoff_id") or "").strip().lower()
+        if not _HANDOFF.fullmatch(handoff_id) or handoff_id in seen:
+            raise ProbeError("probe items need unique 12-hex handoff ids")
+        seen.add(handoff_id)
+        for field in ("title", "venue", "tier"):
+            if item.get(field) is not None and not isinstance(item[field], str):
+                raise ProbeError(f"probe {field} must be a string")
+        for field in ("authors", "choices"):
+            value = item.get(field)
+            if value is not None and not (
+                isinstance(value, str)
+                or isinstance(value, list) and all(isinstance(part, str) for part in value)
+            ):
+                raise ProbeError(f"probe {field} must be a string or a list of strings")
         parsed.append(
             {
                 "authors": _authors(item.get("authors")),
@@ -1042,6 +1057,8 @@ def parse_probe_response(text: str) -> list[dict[str, Any]]:
                 "year": _optional_year(item.get("year")),
             }
         )
+    if expected_handoff_ids is not None and seen != expected_handoff_ids:
+        raise ProbeError("probe handoff ids do not match the requested batch (missing or unexpected items)")
     return parsed
 
 
@@ -1500,7 +1517,7 @@ def run_probe(
                 batch_items.append(prepared)
             if not batch_items:
                 continue
-            prompt = render_batch_prompt(template, batch_items)
+            prompt = grok_json_prompt(render_batch_prompt(template, batch_items), label)
             for item in batch_items:
                 forbidden = str(item.get("paper_id") or "")
                 if forbidden.startswith(("decoy-", "control-")):
@@ -1540,7 +1557,7 @@ def run_probe(
                 calls += 1
                 tokens += int((usage or {}).get("estimated_tokens") or len(prompt) // 4)
                 try:
-                    answers = parse_probe_response(text)
+                    answers = parse_probe_response(text, expected_handoff_ids={item["handoff_id"] for item in batch_items})
                 except ProbeError as exc:
                     _append_jsonl(
                         failure_log,

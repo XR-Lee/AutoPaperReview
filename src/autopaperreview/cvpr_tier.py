@@ -50,12 +50,15 @@ from .cvpr_handoff import (
     assert_outside,
     estimated_tokens,
     export_replay_packet,
+    grok_json_prompt,
     handoff_id_for,
     import_replay_answer,
     load_canaries,
     load_or_create_salt,
     run_isolated_command,
+    split_usage,
 )
+from .cvpr_json import JsonOutputError, parse_json_output
 from .hashing import sha256_bytes
 from .model_exec import (
     DEFAULT_MODEL_TIMEOUT_SECONDS,
@@ -526,24 +529,6 @@ def build_prompt(manuscript: str, mode: str, *, samples: int = 1) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _json_object(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", stripped, re.DOTALL)
-    if fenced:
-        stripped = fenced.group(1)
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end <= start:
-        raise CvprTierError("model output has no JSON object")
-    try:
-        value = json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise CvprTierError(f"model output is not JSON: {exc.msg}") from exc
-    if not isinstance(value, dict):
-        raise CvprTierError("model output is not a JSON object")
-    return value
-
-
 def _pop_tier(payload: dict[str, Any]) -> str:
     if "tier" not in payload:
         raise CvprTierError("model output is missing tier")
@@ -595,7 +580,16 @@ def parse_verdict(mode: str, text: str, *, samples: int = 1) -> dict[str, Any]:
     """Parse tier and the mode's own rank. The rank is not a new cutoff."""
     if mode not in HOLISTIC_MODES:
         raise CvprTierError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
-    payload = _json_object(text)
+    try:
+        return parse_json_output(text, lambda payload: _parse_verdict_payload(mode, payload, samples=samples))
+    except JsonOutputError as exc:
+        raise CvprTierError(f"model output is {exc}") from exc
+
+
+def _parse_verdict_payload(mode: str, value: Any, *, samples: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CvprTierError("model output is not a JSON object")
+    payload = dict(value)
     tier = _pop_tier(payload)
     raw_samples = payload.pop("samples", None)
     if raw_samples is None:
@@ -1240,13 +1234,14 @@ def _prompt_for(
     *,
     variant: str | None = None,
     set_id: str | None = None,
+    model_id: str = "",
 ) -> tuple[str, str]:
     path = _manuscript_path(cache, paper_id, variant=variant, set_id=set_id)
     if not path.is_file():
         where = f"variant {variant}" if variant else "prepare"
         raise CvprTierError(f"manuscript is missing for {paper_id}; run {where} first")
     manuscript = read_judgment_text(cache, path)
-    prompt = build_prompt(manuscript, mode, samples=samples)
+    prompt = grok_json_prompt(build_prompt(manuscript, mode, samples=samples), model_id)
     return prompt, sha256_bytes(prompt.encode("utf-8"))
 
 
@@ -1388,6 +1383,11 @@ def _command_paper(
     failure_log: Path,
 ) -> dict[str, Any]:
     """One local CLI call, retried once after a timeout or a parse failure."""
+    def parse_answer(payload: Any) -> dict[str, Any]:
+        body, usage, sentinel = split_usage(json.dumps(payload, ensure_ascii=False))
+        verdict = _parse_verdict_payload(mode, json.loads(body), samples=samples)
+        return {"text": body, "usage": usage, "sentinel": sentinel, "verdict": verdict}
+
     observed: dict[str, Any] = {
         "argv0": "",
         "cli_flags": [],
@@ -1431,16 +1431,17 @@ def _command_paper(
             }
         )
         try:
-            verdict = parse_verdict(mode, result["text"], samples=samples)
-        except CvprTierError as exc:
+            answer = parse_json_output(result["raw"], parse_answer)
+        except JsonOutputError as exc:
+            message = f"model output is {exc}"
             _append_jsonl(
                 failure_log,
-                {"attempt": attempt, "error": str(exc), "handoff_id": handoff_id, "kind": "parse"},
+                {"attempt": attempt, "error": message, "handoff_id": handoff_id, "kind": "parse"},
             )
             if attempt == 2:
-                return {**observed, "error": str(exc), "parsed": False, "retries": 1, "text": result["text"]}
+                return {**observed, "error": message, "parsed": False, "retries": 1, "text": result["text"]}
             continue
-        return {**observed, "parsed": True, "retries": attempt - 1, "text": result["text"], "verdict": verdict}
+        return {**observed, **answer, "parsed": True, "retries": attempt - 1}
     raise CvprTierError(f"command failed for {handoff_id}")
 
 
@@ -1586,6 +1587,7 @@ def run_model(
             holistic_samples,
             variant=variant,
             set_id=set_id,
+            model_id=label,
         )
         prompts[paper.paper_id] = prompt
         packet_sha[paper.paper_id] = digest
