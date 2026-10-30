@@ -219,20 +219,16 @@ def _abstract_ok(value: str) -> bool:
 
 
 def _collect_abstract(lines: list[str], start: int, lead: str) -> str:
-    body: list[str] = []
-    if lead:
-        body.append(lead)
+    words = lead.split()[:400]
     for line in lines[start:]:
         if not line.strip():
-            if body:
-                break
             continue
-        if stops_abstract(line):
+        if len(words) >= 400 or stops_abstract(line):
             break
         left = _left_column(line)
         if left:
-            body.append(left)
-    return " ".join(" ".join(body).split())
+            words.extend(left.split()[: 400 - len(words)])
+    return " ".join(words)
 
 
 def _abstract_from_columns(text: str) -> str:
