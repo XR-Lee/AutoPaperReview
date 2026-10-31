@@ -438,6 +438,63 @@ def assert_model_recorded(model_id: str | None, effort: str | None) -> tuple[str
     return model, level
 
 
+def load_baseline_cache(
+    path: Path,
+    *,
+    commit: str,
+    model_id: str,
+    effort: str,
+    content_sha256: str,
+) -> dict[str, Any]:
+    """Load stored forecast-k1 scores when the cache still matches this run.
+
+    ``path`` holds ``metadata.json`` and ``papers/<forum_id>/our_score.json``.
+    The commit, model id, effort, and manifest digest must match. The number
+    of score files must match ``n`` in the metadata. A mismatch raises
+    :class:`FixedEvalError` and does not return scores.
+    """
+    root = path.expanduser().resolve()
+    try:
+        meta = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FixedEvalError(f"baseline cache metadata cannot be read: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise FixedEvalError("baseline cache metadata must be an object")
+    expected = {
+        "commit": commit.strip(),
+        "content_sha256": content_sha256.strip(),
+        "effort": effort.strip(),
+        "model_id": model_id.strip(),
+    }
+    for key, value in expected.items():
+        if str(meta.get(key) or "") != value:
+            raise FixedEvalError(f"baseline cache {key} does not match this run")
+    papers = root / "papers"
+    if not papers.is_dir():
+        raise FixedEvalError("baseline cache has no papers directory")
+    scores: dict[str, dict[str, Any]] = {}
+    for score_path in sorted(papers.glob("*/our_score.json")):
+        try:
+            score = json.loads(score_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FixedEvalError(f"baseline score cannot be read: {exc}") from exc
+        if not isinstance(score, dict) or score.get("rank_score") is None:
+            raise FixedEvalError("a baseline score is missing rank_score")
+        forum_id = str(score.get("forum_id") or score_path.parent.name)
+        if forum_id in scores:
+            raise FixedEvalError("baseline cache has a duplicate forum id")
+        scores[forum_id] = score
+    try:
+        declared = int(meta["n"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FixedEvalError("baseline cache n is not an integer") from exc
+    if declared != len(scores):
+        raise FixedEvalError(
+            f"baseline cache count {len(scores)} does not match metadata n {declared}"
+        )
+    return {"metadata": meta, "scores": scores}
+
+
 def assert_forecast_flags(
     *,
     cheap: bool,

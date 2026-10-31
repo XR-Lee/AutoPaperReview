@@ -29,6 +29,7 @@ from autopaperreview.fixed_eval import (
     dev_papers,
     holdout_record,
     id_list_digest,
+    load_baseline_cache,
     main as fixed_main,
     manifest_path,
     opus_slice,
@@ -398,6 +399,85 @@ class FixedEvalCommandTests(unittest.TestCase):
             self.assertEqual(saved["content_sha256"], assert_manifest()["content_sha256"])
             self.assertEqual(saved["n"], 192)
             self.assertEqual(len({row["stratum"] for row in saved["rows"]}), 4)
+
+    def test_baseline_cache_fills_missing_scores_and_rejects_a_mismatch(self) -> None:
+        rank_eval = _rank_eval()
+        digest = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / "cache"
+            baseline = root / "baseline"
+            output = root / "out.json"
+            held = cache / "papers" / "SynBase01" / "heldout"
+            held.mkdir(parents=True)
+            (held / "human.json").write_text(
+                json.dumps({"decision": "reject", "ratings": [1, 3]}),
+                encoding="utf-8",
+            )
+            held = cache / "papers" / "SynBase02" / "heldout"
+            held.mkdir(parents=True)
+            (held / "human.json").write_text(
+                json.dumps({"decision": "accept", "ratings": [8, 10]}),
+                encoding="utf-8",
+            )
+            for forum_id, rank in (("SynBase01", 2.0), ("SynBase02", 8.0)):
+                directory = baseline / "papers" / forum_id
+                directory.mkdir(parents=True)
+                (directory / "our_score.json").write_text(
+                    json.dumps({"forum_id": forum_id, "rank_score": rank, "our_bin": 3, "candidates": {}}),
+                    encoding="utf-8",
+                )
+            meta = {
+                "commit": "abc123",
+                "content_sha256": digest,
+                "effort": "xhigh",
+                "model_id": "grok-4.7",
+                "n": 2,
+            }
+            (baseline / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+            loaded = load_baseline_cache(
+                baseline,
+                commit="abc123",
+                model_id="grok-4.7",
+                effort="xhigh",
+                content_sha256=digest,
+            )
+            self.assertEqual(set(loaded["scores"]), {"SynBase01", "SynBase02"})
+            with self.assertRaises(FixedEvalError) as caught:
+                load_baseline_cache(
+                    baseline,
+                    commit="other",
+                    model_id="grok-4.7",
+                    effort="xhigh",
+                    content_sha256=digest,
+                )
+            self.assertIn("commit", str(caught.exception))
+            self.assertNotIn("SynBase01", str(caught.exception))
+            with redirect_stdout(io.StringIO()):
+                code = rank_eval.main(
+                    [
+                        "--cache",
+                        str(cache),
+                        "--output",
+                        str(output),
+                        "--fixed-set",
+                        "none",
+                        "--baseline-cache",
+                        str(baseline),
+                        "--baseline-commit",
+                        "abc123",
+                        "--baseline-digest",
+                        digest,
+                        "--model-id",
+                        "grok-4.7",
+                        "--effort",
+                        "xhigh",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(saved["n"], 2)
+            self.assertEqual({row["rank_score"] for row in saved["rows"]}, {2.0, 8.0})
 
     def test_rank_eval_exits_2_when_the_digest_does_not_match(self) -> None:
         rank_eval = _rank_eval()
