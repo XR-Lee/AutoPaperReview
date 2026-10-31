@@ -1,0 +1,51 @@
+{
+  "arm": "main",
+  "coefficient_set": "apr-fusion-v1",
+  "commit": "52aa2379abf7ae18c8b2f215d301b7e564b19e41",
+  "content_sha256": "3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440",
+  "effort": "mixed",
+  "holistic_mode": "forecast",
+  "holistic_samples": 1,
+  "model_id": "claude-opus-5-5",
+  "n": 72,
+  "rank_target": "rank_score",
+  "related_work": "off",
+  "role": "dev",
+  "scoring_path": "calibrate-eval run --cheap --holistic-mode forecast --holistic-samples 1 --coefficient-set apr-fusion-v1 --related-work off",
+  "slice": "opus_validation cold start, first 18 per tier",
+  "store": "fixed-eval/baseline-cache/main-52aa237-opus-mixed",
+  "task_sha256": "4374696de5c606470815b72c53ac5382afbeab79501f651c86608241fe1800b7",
+  "provenance": {
+    "mixed": true,
+    "cursor": {
+      "n": 54,
+      "call_path": "cursor",
+      "model_id": "claude-opus-5-5",
+      "effort": "xhigh",
+      "temperature": 0.7,
+      "estimated_usd_with_candidate_arm": 95.04
+    },
+    "calmabacus": {
+      "n": 18,
+      "call_path": "calmabacus",
+      "gateway": "sub2api Anthropic-compatible /v1/messages",
+      "model_id": "claude-opus-5-5",
+      "effort": "max",
+      "temperature": null,
+      "max_tokens": 64000,
+      "output_config_schema": false,
+      "temperature_omitted_because": "the model rejects temperature",
+      "schema_omitted_because": "the endpoint rejects integer minimum and maximum",
+      "validated_afterwards": true,
+      "estimated_usd": 85.16,
+      "price_assumption_usd_per_million": {
+        "input": 15,
+        "output": 75
+      },
+      "tokens_including_trials_and_placeholders": {
+        "input": 1311508,
+        "output": 873182
+      }
+    }
+  }
+}
