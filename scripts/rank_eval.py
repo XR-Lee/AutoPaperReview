@@ -117,14 +117,14 @@ def main(argv: list[str] | None = None) -> int:
         "--fixed-set",
         choices=("iclr-dev", "none"),
         default="iclr-dev",
-        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+        help="iclr-dev scores the manifest dev set (192 papers, 48 per tier); none scores the cache as given",
     )
     parser.add_argument("--model-id", default="", help="required when --fixed-set iclr-dev")
     parser.add_argument("--effort", default="", help="required when --fixed-set iclr-dev")
     parser.add_argument(
         "--holdout-file",
         default="",
-        help="gitignored private-holdout operator file; scores that slice instead of the dev set",
+        help="gitignored private-holdout operator file (24 papers, 6 per tier); scores that slice instead of the dev set",
     )
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))

@@ -97,12 +97,12 @@ def _score(cache: Path, forum_id: str, rank: float, ratings: list[int]) -> None:
 
 
 class FixedEvalManifestTests(unittest.TestCase):
-    def test_committed_manifest_is_locked_and_balanced(self) -> None:
+    def test_committed_manifest_is_a_balanced_proposal(self) -> None:
         payload = assert_manifest()
-        self.assertEqual(payload["status"], "locked")
+        self.assertEqual(payload["status"], "proposal")
         self.assertEqual(payload["content_sha256"], content_digest(payload))
         papers = dev_papers(payload)
-        self.assertEqual(len(papers), 48)
+        self.assertEqual(len(papers), 192)
         counts = {name: 0 for name in TIER_NAMES}
         for paper in papers:
             counts[paper["tier"]] += 1
@@ -117,6 +117,34 @@ class FixedEvalManifestTests(unittest.TestCase):
         for document in (text, proposal):
             self.assertNotIn("openreview.net", document.lower())
             self.assertNotIn("forum?id=", document.lower())
+        previous = {
+            "1SO93f7sVf", "2Ed7b52z53", "2NwHLAffZZ", "48CXLrx7K3", "4y3GDTFv70",
+            "50P9TDPEsh", "6s5uXNWGIh", "Aemqy6Hjdj", "DS5qRs0tQz", "Dr4qD9bzZd",
+            "E6EbeJR20o", "GRMfXcAAFh", "Ge0GEOvifh", "Ha6RTeWMd0", "MpWRCiw8g5",
+            "NTWtNjlThd", "NYN1b8GRGS", "Ng7OYC3PT8", "PoB6QGAM38", "Pujt3ADZgI",
+            "QFo2wxQEW6", "RFJGFrMvYj", "RuP17cJtZo", "SJPUmX4LXD", "UpgRVWexaD",
+            "VyWv7GSh5i", "WnEnU2K3Rb", "bjFJrdK0nO", "eRAXvtP0gA", "esYrEndGsr",
+            "fWk5Qx0exc", "g3xuCtrG6H", "iAYIRHOYy8", "itGkF993gz", "kGvXIlIVLM",
+            "kaZAKvjLro", "llXCyLhOY4", "pxI5IPeWgW", "rUf9G9k2im", "t7P5BUKcYv",
+            "vo9t20wsmd", "wcka3bd7P4", "x5txICnnjC", "xByvdb3DCm", "xsts7MRLey",
+            "xw3fStKCwm", "yrgQdA5NkI", "zhJDD85QHD",
+        }
+        self.assertTrue(previous <= set(dev_ids(payload)))
+        opus = payload["opus_validation"]
+        self.assertEqual(opus["papers_per_tier"], 36)
+        self.assertEqual(opus["cold_start_per_tier"], 18)
+        dev = set(dev_ids(payload))
+        seen = set()
+        for tier in TIER_NAMES:
+            ids = opus["paper_ids_by_tier"][tier]
+            self.assertEqual(len(ids), 36)
+            self.assertEqual(len(set(ids)), 36)
+            self.assertTrue(set(ids) <= dev)
+            self.assertTrue(seen.isdisjoint(ids))
+            seen.update(ids)
+            for paper in papers:
+                if paper["forum_id"] in ids:
+                    self.assertEqual(paper["tier"], tier)
 
     def test_tier_bounds(self) -> None:
         self.assertEqual(tier_for(0), "clear_reject")
@@ -137,7 +165,7 @@ class FixedEvalManifestTests(unittest.TestCase):
             assert_manifest(payload)
         with self.assertRaises(FixedEvalError):
             assert_run_ids(["not-the-dev-set"], kind="iclr-dev")
-        self.assertEqual(len(dev_ids(assert_run_ids(dev_ids(), kind="iclr-dev"))), 48)
+        self.assertEqual(len(dev_ids(assert_run_ids(dev_ids(), kind="iclr-dev"))), 192)
 
     def test_id_list_digest_matches_cvpr_sets(self) -> None:
         self.assertEqual(id_list_digest(["b", "a", "a"]), cvpr_id_list_digest(["a", "b"]))
@@ -155,7 +183,7 @@ class FixedEvalManifestTests(unittest.TestCase):
                 encoding="utf-8",
             )
             checked = assert_holdout_file(path, payload)
-            self.assertEqual(len(checked), 12)
+            self.assertEqual(len(checked), len(papers))
             path.write_text(
                 json.dumps({"papers": papers, "salt_hex": (b"fedcba9876543210").hex()}),
                 encoding="utf-8",
@@ -177,7 +205,7 @@ class FixedEvalManifestTests(unittest.TestCase):
         if not path.is_file():
             self.skipTest("operator file is not on this machine")
         papers = assert_holdout_file(path)
-        self.assertEqual(len(papers), 12)
+        self.assertEqual(len(papers), 24)
 
     def test_select_fixed_is_deterministic_and_disjoint(self) -> None:
         pool = []
@@ -333,11 +361,11 @@ class FixedEvalCommandTests(unittest.TestCase):
             self.assertEqual(code, 0)
             saved = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(saved["fixed_set"], "iclr-dev")
-            self.assertEqual(saved["status"], "locked")
+            self.assertEqual(saved["status"], "proposal")
             self.assertEqual(saved["model_id"], "grok-4.7")
             self.assertEqual(saved["effort"], "xhigh")
             self.assertEqual(saved["content_sha256"], assert_manifest()["content_sha256"])
-            self.assertEqual(saved["n"], 48)
+            self.assertEqual(saved["n"], 192)
             self.assertEqual(len({row["stratum"] for row in saved["rows"]}), 4)
 
     def test_calibrate_eval_fixed_set_is_opt_in(self) -> None:
@@ -395,7 +423,7 @@ class FixedEvalCommandTests(unittest.TestCase):
             stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
             self.assertEqual(stamp["model_id"], "grok-4.7")
             self.assertEqual(stamp["effort"], "xhigh")
-            self.assertEqual(stamp["status"], "locked")
+            self.assertEqual(stamp["status"], "proposal")
             self.assertEqual(stamp["content_sha256"], assert_manifest()["content_sha256"])
 
     def test_cvpr_run_refuses_sealed_and_the_excluded_paper(self) -> None:

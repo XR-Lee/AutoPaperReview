@@ -2,7 +2,7 @@
 
 One ICLR dev set and one CVPR dev registration. Rank metrics, the promotion benchmark, and regression tests use these lists. A new benchmark does not draw a fresh sample.
 
-Status is **proposed**. The paper list in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md) is open for review. Change `status` to `locked` only after that table is accepted, then recompute `content_sha256`. A run is allowed while the status is `proposed`. The output records the status. The published README rank stays the previous holdout number until a locked private-holdout run replaces it.
+Status is **proposal**. The paper list in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md) is open for review. Change `status` to `locked` only after that table is accepted, then recompute `content_sha256`. A run is allowed while the status is `proposal`. The output records the status. The published README rank stays the previous holdout number until a locked private-holdout run replaces it.
 
 ## ICLR tiers
 
@@ -10,16 +10,16 @@ The tier is the mean of the official ratings (1, 3, 5, 6, 8, 10), with at least 
 
 | Tier | Mean rating | Dev | Private holdout |
 | --- | --- | ---: | ---: |
-| clear reject | 0 ≤ mean < 4 | 12 | 3 |
-| borderline reject | 4 ≤ mean < 5.5 | 12 | 3 |
-| borderline accept | 5.5 ≤ mean < 7 | 12 | 3 |
-| clear accept | 7 ≤ mean ≤ 10 | 12 | 3 |
+| clear reject | 0 ≤ mean < 4 | 48 | 6 |
+| borderline reject | 4 ≤ mean < 5.5 | 48 | 6 |
+| borderline accept | 5.5 ≤ mean < 7 | 48 | 6 |
+| clear accept | 7 ≤ mean ≤ 10 | 48 | 6 |
 
 4.0 is the top of the historical clear-reject stratum. 5.5 sits between the official borderline-reject rating (5) and the official borderline-accept rating (6). 7.0 sits between borderline accept (6) and accept (8). The top bound is inclusive.
 
-Selection seed `20261030`. Inside a tier, forum ids are sorted and shuffled with `Random(f"fixed-eval-v1:{seed}:{tier}")`. The walk takes at most 4 papers from one primary area, then relaxes that cap if the quota is short. The dev quota is taken first. The private holdout is the next 3 papers in that same order. The parent pool is the materialized 93-paper sample (seed `20261021`) plus the README holdout-15 papers that were not already in it. That pool has 15 papers with mean below 4, so the holdout is 12 papers, not 16.
+Selection seed `20261101`. The previous 48 dev papers stay in the dev set. The previous 12-paper holdout is in the dev set and is excluded from the new holdout. Inside a tier, the remaining forum ids are sorted and shuffled with `Random(f"fixed-eval-v1:{seed}:{tier}")`. The walk takes at most 16 papers from one primary area and at most 30 from one year, then relaxes a cap if the quota is short. The private holdout is the next 6 papers, with at most 4 from one year. The parent pool is the public ICLR 2024 and ICLR 2025 listings. The rated eligible pool is 876 papers. No tier is short of 48. The per-tier pool sizes are in [PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md).
 
-The dev set has 48 papers. The manifest digest is the SHA-256 of the manifest with `content_sha256` removed (`hash_json`). The id-list digest is the SHA-256 of the sorted forum ids plus a trailing newline, the same bytes as `cvpr_sets.id_list_digest`.
+The dev set has 192 papers. The manifest digest is the SHA-256 of the manifest with `content_sha256` removed (`hash_json`). The id-list digest is the SHA-256 of the sorted forum ids plus a trailing newline, the same bytes as `cvpr_sets.id_list_digest`.
 
 ## Forecast-k1 and the rank report
 
@@ -66,7 +66,7 @@ Do not pass `--only-ids` with `--fixed-set iclr-dev`. The command writes `fixed-
 
 ## Private holdout
 
-The holdout is 12 papers, 3 in each tier, disjoint from the dev set. It is the slice for a release or a README number change. It is not the slice for an ordinary benchmark.
+The holdout is 24 papers, 6 in each tier, disjoint from the dev set and from the previous 12-paper holdout. It is the slice for a release or a README number change. It is not the slice for an ordinary benchmark.
 
 The committed manifest stores HMAC-SHA256 only:
 

@@ -1,8 +1,9 @@
 """Fixed, difficulty-stratified evaluation sets.
 
 The ICLR dev list and the CVPR dev registration live in
-``benchmarks/fixed_eval/manifest.json``. Status ``proposed`` means the
-membership is published for review and is not yet locked. A run still has to
+``benchmarks/fixed_eval/manifest.json``. Status ``proposal`` (also accepted
+as ``proposed``) means the membership is published for review and is not yet
+locked. A run still has to
 match the manifest digest. The private holdout is an HMAC list in that file.
 Its salt and forum ids stay in a gitignored operator file.
 
@@ -24,8 +25,8 @@ from .hashing import hash_json, sha256_bytes
 
 PROTOCOL = "fixed-eval-v1"
 SELECTION_SEED = 20261030
-DEV_PER_TIER = 12
-HOLDOUT_PER_TIER = 3
+DEV_PER_TIER = 48
+HOLDOUT_PER_TIER = 6
 AREA_CAP = 4
 TIER_NAMES = ("clear_reject", "borderline_reject", "borderline_accept", "clear_accept")
 
@@ -166,8 +167,8 @@ def assert_manifest(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = manifest if manifest is not None else load_manifest()
     if payload.get("protocol") != PROTOCOL:
         raise FixedEvalError(f"fixed-eval protocol must be {PROTOCOL}")
-    if payload.get("status") not in {"proposed", "locked"}:
-        raise FixedEvalError("fixed-eval status must be proposed or locked")
+    if payload.get("status") not in {"proposal", "proposed", "locked"}:
+        raise FixedEvalError("fixed-eval status must be proposal, proposed, or locked")
     stored = payload.get("content_sha256")
     if not isinstance(stored, str) or not HEX64_RE.fullmatch(stored):
         raise FixedEvalError("fixed-eval content digest is missing")

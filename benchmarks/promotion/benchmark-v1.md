@@ -24,7 +24,7 @@ Sealed sets `S24-C1` and `S24-C2` are out of this benchmark. They are not fetche
 - Interval: linear percentiles 0.025 and 0.975, the same percentile as `rank_metrics._linear_percentile`.
 - Implementation: `benchmarks/promotion/paired_bootstrap.py`.
 
-ICLR strata are the locked public-calibration rating strata (`clear_reject`, `low`, `borderline`, `high`, `strong`). CVPR strata are the program tiers (`oral`, `highlight`, `poster`). Stratum labels used for resampling stay in the gitignored cache. This file and the report do not attach a tier, a decision, or a rating to a paper id.
+For a new ICLR comparison the strata are the four fixed-eval tiers (`clear_reject`, `borderline_reject`, `borderline_accept`, `clear_accept`). The earlier 37-paper subset used the five calibration strata (`clear_reject`, `low`, `borderline`, `high`, `strong`). CVPR strata are the program tiers (`oral`, `highlight`, `poster`). Stratum labels used for resampling stay in the gitignored cache. This file and the report do not attach a tier, a decision, or a rating to a paper id.
 
 ## Primary metrics
 
@@ -85,7 +85,11 @@ Temperature in the locked chat body is 0.7. Cursor grok-4.7 xhigh does not take 
 
 Parsing and scoring compared across the refs: `ForecastJudgment` / `parse_verdict`, `rating` fusion for `forecast-k1`, `public_calibration.summarize`, `rank_metrics.agreement`, and `cvpr_tier` Spearman / pairwise AUC. The report states whether those paths match.
 
-## ICLR subset
+## ICLR arm
+
+The current ICLR arm is the fixed dev set in `benchmarks/fixed_eval/manifest.json`: **192 papers, 48 in each mean-rating tier** (`clear_reject`, `borderline_reject`, `borderline_accept`, `clear_accept`). The private confirmation set is the HMAC holdout in that same manifest: **24 papers, 6 per tier**. Do not draw a fresh subset. `promotion_iclr_ids()` returns the dev list. Status is `proposal` until that list is accepted. The paired bootstrap strata for a new ICLR comparison are these four tiers.
+
+The earlier subset below is the draw this file originally specified. It is not the arm for a new promotion.
 
 Source: the existing public ICLR 2024/2025 calibration sample from `scripts/select_public_calibration.py`.
 
