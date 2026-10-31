@@ -2,7 +2,7 @@
 
 One ICLR dev set and one CVPR dev registration. Rank metrics, the promotion benchmark, and regression tests use these lists. A new benchmark does not draw a fresh sample.
 
-Status is **proposal**. The paper list in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md) is open for review. Change `status` to `locked` only after that table is accepted, then recompute `content_sha256`. A run is allowed while the status is `proposal`. The output records the status. The published README rank stays the previous holdout number until a locked private-holdout run replaces it.
+Status is **locked**. `content_sha256` is `3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440`. The paper list is in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md). `rank_eval` and `calibrate-eval run --fixed-set iclr-dev` call `assert_manifest` before scoring and exit 2 when the content digest does not match. The output records the status and the digest. The published README rank stays the previous holdout number until a locked private-holdout run replaces it.
 
 ## ICLR tiers
 
@@ -20,6 +20,10 @@ The tier is the mean of the official ratings (1, 3, 5, 6, 8, 10), with at least 
 Selection seed `20261101`. The previous 48 dev papers stay in the dev set. The previous 12-paper holdout is in the dev set and is excluded from the new holdout. Inside a tier, the remaining forum ids are sorted and shuffled with `Random(f"fixed-eval-v1:{seed}:{tier}")`. The walk takes at most 16 papers from one primary area and at most 30 from one year, then relaxes a cap if the quota is short. The private holdout is the next 6 papers, with at most 4 from one year. The parent pool is the public ICLR 2024 and ICLR 2025 listings. The rated eligible pool is 876 papers. No tier is short of 48. The per-tier pool sizes are in [PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md).
 
 The dev set has 192 papers. The manifest digest is the SHA-256 of the manifest with `content_sha256` removed (`hash_json`). The id-list digest is the SHA-256 of the sorted forum ids plus a trailing newline, the same bytes as `cvpr_sets.id_list_digest`.
+
+## Opus validation
+
+Opus is the screen before a push to `pre-release`. The baseline arm runs once on the standing slice, 36 papers per tier (144 papers), and is cached. Each candidate check runs only the candidate arm on that slice, at about $95, under a $100 cap. If both arms must run, use the first 18 papers per tier (72 papers). Seed `20261102`. Inside each tier, sort forum ids and shuffle with `Random(f"opus-validation:20261102:{tier}")`. The baseline cache is valid only while the main commit, the model id and effort, and the scoring path match. Grok still scores the full 192-paper dev set and the 24-paper holdout. The official statement is in [benchmark-v1.md](../benchmarks/promotion/benchmark-v1.md).
 
 ## Forecast-k1 and the rank report
 

@@ -22,7 +22,7 @@
       "source": "autopaperreview.rank_metrics"
     }
   },
-  "content_sha256": "6588258602541d392e13d42d0890c85a55eb41637f6d1c1dd4fcb207acd229f6",
+  "content_sha256": "3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440",
   "cvpr": {
     "sealed_not_used": [
       "S24-C1",
@@ -3226,7 +3226,7 @@
     "dependency_branch": "cursor/promotion-benchmark-v1-9a3c",
     "dependency_pr": 40,
     "iclr_arm": "this manifest's ICLR dev papers (192); do not redraw",
-    "note": "The ICLR promotion arm is this dev list. The private confirmation set is the HMAC holdout (24 papers). rank_eval defaults to the dev list. Status stays proposal until the selection is accepted."
+    "note": "The ICLR promotion arm is this dev list. The private confirmation set is the HMAC holdout (24 papers). rank_eval defaults to the dev list. Status is locked. Grok scores the full dev set and the holdout. Opus validation uses opus_validation."
   },
   "protocol": "fixed-eval-v1",
   "recording": {
@@ -3250,7 +3250,7 @@
     "ratings_checked": "2026-10-30",
     "version": "fixed-eval-v1"
   },
-  "status": "proposal",
+  "status": "locked",
   "tier_definitions": [
     {
       "count_dev": 48,
@@ -3298,8 +3298,20 @@
     }
   ],
   "opus_validation": {
+    "cache": {
+      "baseline": "Run the baseline arm once on the standing slice and reuse it.",
+      "candidate": "Each validation runs only the candidate arm on the standing slice.",
+      "cold_start": "If both arms must run in that validation, use the cold-start prefix.",
+      "valid_while": [
+        "main commit",
+        "model id",
+        "effort",
+        "scoring path"
+      ]
+    },
     "cold_start_per_tier": 18,
     "max_validation_usd": 100,
+    "ordering": "Inside each tier, sort forum ids and shuffle with Random(f'opus-validation:{seed}:{tier}'). paper_ids_by_tier keeps that shuffle order. The standing slice is the first papers_per_tier ids. The cold start, when both arms must run in one validation, is the first cold_start_per_tier ids of the same list.",
     "paper_ids_by_tier": {
       "clear_reject": [
         "bUv5gJAAxH",

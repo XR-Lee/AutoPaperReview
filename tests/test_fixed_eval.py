@@ -15,6 +15,9 @@ from autopaperreview.cvpr_sets import id_list_digest as cvpr_id_list_digest
 from autopaperreview.fixed_eval import (
     DEV_PER_TIER,
     HOLDOUT_PER_TIER,
+    OPUS_COLD_PER_TIER,
+    OPUS_PER_TIER,
+    OPUS_SEED,
     TIER_NAMES,
     FixedEvalError,
     assert_cvpr_stage,
@@ -28,6 +31,7 @@ from autopaperreview.fixed_eval import (
     id_list_digest,
     main as fixed_main,
     manifest_path,
+    opus_slice,
     select_fixed,
     tier_for,
 )
@@ -97,10 +101,27 @@ def _score(cache: Path, forum_id: str, rank: float, ratings: list[int]) -> None:
 
 
 class FixedEvalManifestTests(unittest.TestCase):
-    def test_committed_manifest_is_a_balanced_proposal(self) -> None:
+    def test_committed_manifest_is_locked_and_balanced(self) -> None:
         payload = assert_manifest()
-        self.assertEqual(payload["status"], "proposal")
+        self.assertEqual(payload["status"], "locked")
         self.assertEqual(payload["content_sha256"], content_digest(payload))
+        digest = payload["content_sha256"]
+        proposal = (repo_root() / "benchmarks" / "fixed_eval" / "PROPOSAL.md").read_text(encoding="utf-8")
+        benchmark = (repo_root() / "benchmarks" / "promotion" / "benchmark-v1.md").read_text(encoding="utf-8")
+        self.assertIn("Status: **locked**.", proposal)
+        self.assertIn(digest, proposal)
+        self.assertIn("Status is **locked**.", benchmark)
+        self.assertIn(digest, benchmark)
+        self.assertIn("36-per-tier slice (144 papers)", benchmark)
+        self.assertIn("first 18 per tier (72 papers)", benchmark)
+        self.assertIn("about $95", benchmark)
+        self.assertIn("$100 cap", benchmark)
+        self.assertIn(
+            "The baseline cache is valid only while the main commit, the model id and effort, and the scoring path match.",
+            benchmark,
+        )
+        self.assertIn("192 dev papers", benchmark)
+        self.assertIn("24 papers, 6 per tier", benchmark)
         papers = dev_papers(payload)
         self.assertEqual(len(papers), 192)
         counts = {name: 0 for name in TIER_NAMES}
@@ -131,14 +152,24 @@ class FixedEvalManifestTests(unittest.TestCase):
         }
         self.assertTrue(previous <= set(dev_ids(payload)))
         opus = payload["opus_validation"]
-        self.assertEqual(opus["papers_per_tier"], 36)
-        self.assertEqual(opus["cold_start_per_tier"], 18)
+        self.assertEqual(opus["seed"], OPUS_SEED)
+        self.assertEqual(opus["papers_per_tier"], OPUS_PER_TIER)
+        self.assertEqual(opus["cold_start_per_tier"], OPUS_COLD_PER_TIER)
+        self.assertEqual(
+            opus["cache"]["valid_while"],
+            ["main commit", "model id", "effort", "scoring path"],
+        )
+        self.assertIn("opus-validation:{seed}:{tier}", opus["ordering"])
+        drawn = opus_slice(papers, seed=OPUS_SEED, per_tier=OPUS_PER_TIER)
+        self.assertEqual(opus["paper_ids_by_tier"], drawn)
         dev = set(dev_ids(payload))
         seen = set()
         for tier in TIER_NAMES:
             ids = opus["paper_ids_by_tier"][tier]
-            self.assertEqual(len(ids), 36)
-            self.assertEqual(len(set(ids)), 36)
+            self.assertEqual(ids, drawn[tier])
+            self.assertEqual(ids[:OPUS_COLD_PER_TIER], drawn[tier][:OPUS_COLD_PER_TIER])
+            self.assertEqual(len(ids), OPUS_PER_TIER)
+            self.assertEqual(len(set(ids)), OPUS_PER_TIER)
             self.assertTrue(set(ids) <= dev)
             self.assertTrue(seen.isdisjoint(ids))
             seen.update(ids)
@@ -361,12 +392,45 @@ class FixedEvalCommandTests(unittest.TestCase):
             self.assertEqual(code, 0)
             saved = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(saved["fixed_set"], "iclr-dev")
-            self.assertEqual(saved["status"], "proposal")
+            self.assertEqual(saved["status"], "locked")
             self.assertEqual(saved["model_id"], "grok-4.7")
             self.assertEqual(saved["effort"], "xhigh")
             self.assertEqual(saved["content_sha256"], assert_manifest()["content_sha256"])
             self.assertEqual(saved["n"], 192)
             self.assertEqual(len({row["stratum"] for row in saved["rows"]}), 4)
+
+    def test_rank_eval_exits_2_when_the_digest_does_not_match(self) -> None:
+        rank_eval = _rank_eval()
+        payload = json.loads(manifest_path().read_text(encoding="utf-8"))
+        payload["content_sha256"] = "0" * 64
+        original = rank_eval.assert_manifest
+
+        def mismatched(manifest=None):
+            return original(payload if manifest is None else manifest)
+
+        rank_eval.assert_manifest = mismatched
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary) / "cache"
+                output = Path(temporary) / "out.json"
+                stderr = io.StringIO()
+                with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                    code = rank_eval.main(
+                        [
+                            "--cache",
+                            str(cache),
+                            "--output",
+                            str(output),
+                            "--model-id",
+                            "grok-4.7",
+                            "--effort",
+                            "xhigh",
+                        ]
+                    )
+            self.assertEqual(code, 2)
+            self.assertIn("digest", stderr.getvalue())
+        finally:
+            rank_eval.assert_manifest = original
 
     def test_calibrate_eval_fixed_set_is_opt_in(self) -> None:
         parser = build_parser()
@@ -423,7 +487,7 @@ class FixedEvalCommandTests(unittest.TestCase):
             stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
             self.assertEqual(stamp["model_id"], "grok-4.7")
             self.assertEqual(stamp["effort"], "xhigh")
-            self.assertEqual(stamp["status"], "proposal")
+            self.assertEqual(stamp["status"], "locked")
             self.assertEqual(stamp["content_sha256"], assert_manifest()["content_sha256"])
 
     def test_cvpr_run_refuses_sealed_and_the_excluded_paper(self) -> None:

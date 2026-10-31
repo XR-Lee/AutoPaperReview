@@ -87,7 +87,21 @@ Parsing and scoring compared across the refs: `ForecastJudgment` / `parse_verdic
 
 ## ICLR arm
 
-The current ICLR arm is the fixed dev set in `benchmarks/fixed_eval/manifest.json`: **192 papers, 48 in each mean-rating tier** (`clear_reject`, `borderline_reject`, `borderline_accept`, `clear_accept`). The private confirmation set is the HMAC holdout in that same manifest: **24 papers, 6 per tier**. Do not draw a fresh subset. `promotion_iclr_ids()` returns the dev list. Status is `proposal` until that list is accepted. The paired bootstrap strata for a new ICLR comparison are these four tiers.
+The current ICLR arm is locked. It is the fixed dev set in `benchmarks/fixed_eval/manifest.json`. Status is **locked**. `content_sha256` is `3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440`.
+
+**Grok** is the full-set benchmark: **192 dev papers, 48 in each mean-rating tier** (`clear_reject`, `borderline_reject`, `borderline_accept`, `clear_accept`), plus the private HMAC holdout of **24 papers, 6 per tier**. Do not draw a fresh subset. `promotion_iclr_ids()` returns the dev list. The paired bootstrap strata for a new ICLR comparison are these four tiers.
+
+## Opus validation
+
+Opus is the screen before a push to `pre-release`. It is not a substitute for the Grok benchmark, and it is not the private holdout. This section is the official rule.
+
+- The baseline arm runs Opus once on the fixed 36-per-tier slice (144 papers) and is cached.
+- Each candidate check runs only the candidate arm on that slice, at about $95, under a $100 cap per validation.
+- If both arms must run, use the first 18 per tier (72 papers).
+- The slice is defined in the manifest. Seed `20261102`. Inside each tier, sort forum ids and shuffle with `Random(f"opus-validation:20261102:{tier}")`. `opus_validation.paper_ids_by_tier` keeps that shuffle order. The standing slice is the first 36 ids. The both-arms slice is the first 18 ids of the same list.
+- The baseline cache is valid only while the main commit, the model id and effort, and the scoring path match. Refresh the cache when any of those change. The scoring path is the forecast-k1 command and the code that builds the packet.
+
+Refuse a validation before any call when `papers × arms × 0.66` is over $100. The cost table is in `benchmarks/fixed_eval/OPUS_VALIDATION.md`.
 
 The earlier subset below is the draw this file originally specified. It is not the arm for a new promotion.
 

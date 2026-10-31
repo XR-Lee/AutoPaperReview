@@ -28,6 +28,9 @@ SELECTION_SEED = 20261030
 DEV_PER_TIER = 48
 HOLDOUT_PER_TIER = 6
 AREA_CAP = 4
+OPUS_SEED = 20261102
+OPUS_PER_TIER = 36
+OPUS_COLD_PER_TIER = 18
 TIER_NAMES = ("clear_reject", "borderline_reject", "borderline_accept", "clear_accept")
 
 # Official ICLR ratings are 1, 3, 5, 6, 8, and 10.
@@ -121,6 +124,36 @@ def content_digest(manifest: dict[str, Any]) -> str:
     """Digest of every field except the stored digest itself."""
     body = {key: value for key, value in manifest.items() if key != "content_sha256"}
     return hash_json(body)
+
+
+def opus_slice(
+    papers: list[dict[str, Any]],
+    *,
+    seed: int = OPUS_SEED,
+    per_tier: int = OPUS_PER_TIER,
+) -> dict[str, list[str]]:
+    """Standing Opus slice. Order is the shuffle order, not a sort.
+
+    Inside each tier, forum ids are sorted and then shuffled with
+    ``Random(f"opus-validation:{seed}:{tier}")``. The standing slice is the
+    first ``per_tier`` ids in that order. The cold-start slice is the first
+    ``OPUS_COLD_PER_TIER`` ids of the same list.
+    """
+    buckets: dict[str, list[str]] = {name: [] for name in TIER_NAMES}
+    for paper in papers:
+        tier = str(paper.get("tier") or "")
+        if tier not in buckets:
+            raise FixedEvalError(f"opus slice paper has an unknown tier {tier!r}")
+        buckets[tier].append(str(paper["forum_id"]))
+    drawn: dict[str, list[str]] = {}
+    for tier in TIER_NAMES:
+        ids = sorted(buckets[tier])
+        rng = random.Random(f"opus-validation:{seed}:{tier}")
+        rng.shuffle(ids)
+        if len(ids) < per_tier:
+            raise FixedEvalError(f"opus slice for {tier} needs {per_tier} papers, found {len(ids)}")
+        drawn[tier] = ids[:per_tier]
+    return drawn
 
 
 def _mean_from_ratings(ratings: list[int]) -> float:
@@ -223,8 +256,27 @@ def assert_manifest(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
     if len(macs) != sum(HOLDOUT_PER_TIER for _name in TIER_NAMES) or len(set(macs)) != len(macs):
         raise FixedEvalError("private holdout HMAC count does not match the tier counts")
 
+    _assert_opus_block(payload.get("opus_validation"), papers)
     _assert_cvpr_block(payload.get("cvpr"))
     return payload
+
+
+def _assert_opus_block(opus: Any, papers: list[dict[str, Any]]) -> None:
+    if not isinstance(opus, dict):
+        raise FixedEvalError("opus validation block is missing")
+    if opus.get("seed") != OPUS_SEED:
+        raise FixedEvalError(f"opus validation seed must be {OPUS_SEED}")
+    if opus.get("papers_per_tier") != OPUS_PER_TIER or opus.get("cold_start_per_tier") != OPUS_COLD_PER_TIER:
+        raise FixedEvalError(
+            f"opus validation must be {OPUS_PER_TIER} per tier, with a {OPUS_COLD_PER_TIER}-paper cold start"
+        )
+    expected = opus_slice(papers, seed=OPUS_SEED, per_tier=OPUS_PER_TIER)
+    stored = opus.get("paper_ids_by_tier")
+    if stored != expected:
+        raise FixedEvalError("opus slice does not match the seed and ordering")
+    for tier in TIER_NAMES:
+        if stored[tier][:OPUS_COLD_PER_TIER] != expected[tier][:OPUS_COLD_PER_TIER]:
+            raise FixedEvalError("opus cold-start slice is not the prefix of the standing slice")
 
 
 def _assert_cvpr_block(cvpr: Any) -> None:

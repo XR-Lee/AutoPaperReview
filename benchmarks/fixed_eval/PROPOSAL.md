@@ -1,6 +1,6 @@
-# Proposed ICLR dev set (fixed-eval-v1)
+# Locked ICLR dev set (fixed-eval-v1)
 
-Status: **proposal**. The enlarged list is open for review. It is not locked. No model evaluation was run for this enlargement. Change `status` to `locked` only after this table is accepted, then recompute `content_sha256`.
+Status: **locked**. Geek accepted this list. `content_sha256` is `3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440`. No model evaluation was run to lock it.
 
 The tier is the mean of the official ratings (1, 3, 5, 6, 8, 10), at least two ratings. The venue decision is recorded beside the tier and is not a second cut. The four boundaries are unchanged: below 4, 4 up to but not including 5.5, 5.5 up to but not including 7, and 7 through 10.
 
@@ -63,7 +63,7 @@ The previous 48 dev papers already have judgments on both arms where the commits
 
 The previous 12 holdout papers also have stored judgments on both of those commits. If a later dev run reuses them as well, the dev new-call count falls from 144 to 132 per arm ($14.52 per arm, $29.04 for both). The table above does not take that credit. It counts reuse of the previous 48 only.
 
-Opus validation before a push to pre-release is a separate screen and stays under $100. See [OPUS_VALIDATION.md](OPUS_VALIDATION.md). The recommended check is one candidate arm on a fixed 36-per-tier slice (144 papers) after a one-time baseline cache of that same slice. Each of those steps is $95.04. The minimum detectable effect on that slice is 0.115 Spearman and 0.084 AUC.
+Opus validation before a push to pre-release is the official rule in [benchmark-v1.md](../promotion/benchmark-v1.md). The baseline arm runs Opus once on the fixed 36-per-tier slice (144 papers) and is cached. Each candidate check runs only the candidate arm on that slice, at about $95, under a $100 cap per validation. If both arms must run, use the first 18 per tier (72 papers). The baseline cache is valid only while the main commit, the model id and effort, and the scoring path match. Grok stays the full-set benchmark: 192 dev papers plus the 24-paper holdout. The minimum detectable effect on the 144-paper slice is 0.115 Spearman and 0.084 AUC. The cost notes are in [OPUS_VALIDATION.md](OPUS_VALIDATION.md).
 
 ## Papers
 

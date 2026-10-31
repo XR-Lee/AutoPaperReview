@@ -1,6 +1,6 @@
 # Opus validation before a push to pre-release
 
-Opus is a check on a candidate before it is pushed to `pre-release`. One validation costs at most **$100**, counting both arms when that validation runs both. This file is the protocol for that check. It does not change the Grok promotion benchmark. No Opus call was made to write it.
+Opus is a check on a candidate before it is pushed to `pre-release`. One validation costs at most **$100**, counting both arms when that validation runs both. The official rule is locked in [benchmark-v1.md](../promotion/benchmark-v1.md). This file keeps the cost and power notes behind that rule. It does not change the Grok promotion benchmark. No Opus call was made to write it.
 
 The unit cost is the published forecast-k1 figure for APR Opus 5.5: **$0.66 per paper** (the holdout run note records $0.6645; the README rounds it to $0.66). At $0.66, 192 papers on two arms is 384 calls and **$253.44**. That does not fit.
 
@@ -26,7 +26,7 @@ The full dev set (48 per tier) is what the Grok screen was enlarged to see: abou
 
 ## (a) Cache the baseline, rerun only the candidate
 
-Main's prompt changes rarely. A candidate changes often. Run the baseline arm once, store the judgments keyed by the manifest digest, the baseline commit, `forecast-k1`, and the packet bytes, and reuse them.
+Main's prompt changes rarely. A candidate changes often. Run the baseline arm once on the standing slice and reuse it. The cache is valid only while the main commit, the model id and effort, and the scoring path match. The scoring path is the forecast-k1 command and the code that builds the packet. Refresh the cache when any of those change.
 
 | What runs | Papers | Calls | Cost |
 | --- | ---: | ---: | ---: |
@@ -61,7 +61,7 @@ The fidelity risk is high. A lower cap changes the manuscript on the long tail, 
 
 ## (d) Combinations, and the recommendation
 
-**Recommended: (a) and (b) together. Do not use (c).**
+**Locked rule: (a) and (b) together. Do not use (c).** This is the official Opus protocol in [benchmark-v1.md](../promotion/benchmark-v1.md).
 
 Standing gate, once a baseline cache exists for this manifest:
 
@@ -72,7 +72,7 @@ Standing gate, once a baseline cache exists for this manifest:
 - Minimum detectable effect: **0.115 Spearman**, **0.084 AUC**.
 - Power at a Spearman difference of 0.10 is about 0.68. Power at an AUC difference of 0.05 is about 0.38.
 
-The one-time baseline cache is the same 144 papers, one arm, **$95.04**, and it is not repeated until the baseline commit or the packet bytes change. A candidate validation does not rebuild it.
+The one-time baseline cache is the same 144 papers, one arm, **$95.04**. It is valid only while the main commit, the model id and effort, and the scoring path match. A candidate validation does not rebuild it. Refresh it when the main commit, the model id, the effort, or the scoring path changes. The scoring path is the forecast-k1 command and the code that builds the packet.
 
 Cold start, when a validation has to run both arms in that same $100 because no cache exists yet:
 
