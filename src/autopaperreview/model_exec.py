@@ -2185,11 +2185,11 @@ def forecast_task_text() -> str:
     )
 
 
-# Forecast-only. The shared scale still says a clear accept is near 7 or 8.
-# The review rating is a different field from the 1-6 decision, and an 8 on
-# that rating is the ordinary accept, not a landmark.
+# Forecast-only. Each sentence names its field. The shared scale still says a
+# clear accept is near 7 or 8, and the 1-6 decision still follows that mean
+# rule. This paragraph does not add a cutoff.
 _FORECAST_ACCEPT_CUT = """
-The review field rating is the official rating, not the 1-to-6 decision that follows predicted_mean. A paper the reviewers would accept sits near 8 on predicted_mean. The band 5.6 to 6.4 is only a borderline call. Do not score a paper you would accept as a 6.
+On the review field rating, and on the probabilities for that rating, an accept's official rating is 8. On predicted_mean, an accept sits near 7 or 8. On the 1-to-6 decision, the rating chosen after predicted_mean, apply the mean rule above: a predicted_mean near 7 or 8 is decision 5, and decision 6 stays for a rare strong accept.
 """.strip()
 
 

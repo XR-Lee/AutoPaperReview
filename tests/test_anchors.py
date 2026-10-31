@@ -1015,7 +1015,15 @@ class ForecastPanelTests(unittest.TestCase):
         self.assertIn("Put mass on 8 when", text)
         self.assertIn("mass on 3 when", text)
         self.assertIn("An 8 is not reserved for a paper the reviewer would cite as a landmark", text)
-        self.assertIn("Do not score a paper you would accept as a 6", text)
+        self.assertIn(
+            "On the review field rating, and on the probabilities for that rating, an accept's official rating is 8.",
+            text,
+        )
+        self.assertIn("On predicted_mean, an accept sits near 7 or 8.", text)
+        self.assertIn("On the 1-to-6 decision, the rating chosen after predicted_mean", text)
+        self.assertIn("a predicted_mean near 7 or 8 is decision 5", text)
+        self.assertIn("decision 6 stays for a rare strong accept", text)
+        self.assertNotIn("Do not score a paper you would accept as a 6", text)
         self.assertNotIn("expects to cite the paper", text)
         self.assertIn("a flat spread over all six ratings is almost never right", text)
         self.assertIn("The expected rating under these probabilities is this reviewer's score", text)
@@ -1072,7 +1080,7 @@ class ForecastPanelTests(unittest.TestCase):
             self.assertEqual(len(older), length)
         for hint in ("panel", "matched", "rebuttal", "expert", "holistic"):
             self.assertNotIn("probabilities", _SCHEMA_HINTS[hint])
-        self.assertEqual(len(text), 7229)
+        self.assertEqual(len(text), 7302)
 
     def test_schema_hint_names_the_three_seats_and_the_six_probabilities_without_an_example_score(self) -> None:
         hint = _SCHEMA_HINTS["forecast"]
