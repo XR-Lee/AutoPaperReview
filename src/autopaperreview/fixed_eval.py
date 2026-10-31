@@ -1,8 +1,9 @@
 """Fixed, difficulty-stratified evaluation sets.
 
 The ICLR dev list and the CVPR dev registration live in
-``benchmarks/fixed_eval/manifest.json``. Status ``proposed`` means the
-membership is published for review and is not yet locked. A run still has to
+``benchmarks/fixed_eval/manifest.json``. Status ``proposal`` (also accepted
+as ``proposed``) means the membership is published for review and is not yet
+locked. A run still has to
 match the manifest digest. The private holdout is an HMAC list in that file.
 Its salt and forum ids stay in a gitignored operator file.
 
@@ -24,9 +25,12 @@ from .hashing import hash_json, sha256_bytes
 
 PROTOCOL = "fixed-eval-v1"
 SELECTION_SEED = 20261030
-DEV_PER_TIER = 12
-HOLDOUT_PER_TIER = 3
+DEV_PER_TIER = 48
+HOLDOUT_PER_TIER = 6
 AREA_CAP = 4
+OPUS_SEED = 20261102
+OPUS_PER_TIER = 36
+OPUS_COLD_PER_TIER = 18
 TIER_NAMES = ("clear_reject", "borderline_reject", "borderline_accept", "clear_accept")
 
 # Official ICLR ratings are 1, 3, 5, 6, 8, and 10.
@@ -122,6 +126,36 @@ def content_digest(manifest: dict[str, Any]) -> str:
     return hash_json(body)
 
 
+def opus_slice(
+    papers: list[dict[str, Any]],
+    *,
+    seed: int = OPUS_SEED,
+    per_tier: int = OPUS_PER_TIER,
+) -> dict[str, list[str]]:
+    """Standing Opus slice. Order is the shuffle order, not a sort.
+
+    Inside each tier, forum ids are sorted and then shuffled with
+    ``Random(f"opus-validation:{seed}:{tier}")``. The standing slice is the
+    first ``per_tier`` ids in that order. The cold-start slice is the first
+    ``OPUS_COLD_PER_TIER`` ids of the same list.
+    """
+    buckets: dict[str, list[str]] = {name: [] for name in TIER_NAMES}
+    for paper in papers:
+        tier = str(paper.get("tier") or "")
+        if tier not in buckets:
+            raise FixedEvalError(f"opus slice paper has an unknown tier {tier!r}")
+        buckets[tier].append(str(paper["forum_id"]))
+    drawn: dict[str, list[str]] = {}
+    for tier in TIER_NAMES:
+        ids = sorted(buckets[tier])
+        rng = random.Random(f"opus-validation:{seed}:{tier}")
+        rng.shuffle(ids)
+        if len(ids) < per_tier:
+            raise FixedEvalError(f"opus slice for {tier} needs {per_tier} papers, found {len(ids)}")
+        drawn[tier] = ids[:per_tier]
+    return drawn
+
+
 def _mean_from_ratings(ratings: list[int]) -> float:
     return round(sum(ratings) / len(ratings), 4)
 
@@ -166,8 +200,8 @@ def assert_manifest(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = manifest if manifest is not None else load_manifest()
     if payload.get("protocol") != PROTOCOL:
         raise FixedEvalError(f"fixed-eval protocol must be {PROTOCOL}")
-    if payload.get("status") not in {"proposed", "locked"}:
-        raise FixedEvalError("fixed-eval status must be proposed or locked")
+    if payload.get("status") not in {"proposal", "proposed", "locked"}:
+        raise FixedEvalError("fixed-eval status must be proposal, proposed, or locked")
     stored = payload.get("content_sha256")
     if not isinstance(stored, str) or not HEX64_RE.fullmatch(stored):
         raise FixedEvalError("fixed-eval content digest is missing")
@@ -222,8 +256,27 @@ def assert_manifest(manifest: dict[str, Any] | None = None) -> dict[str, Any]:
     if len(macs) != sum(HOLDOUT_PER_TIER for _name in TIER_NAMES) or len(set(macs)) != len(macs):
         raise FixedEvalError("private holdout HMAC count does not match the tier counts")
 
+    _assert_opus_block(payload.get("opus_validation"), papers)
     _assert_cvpr_block(payload.get("cvpr"))
     return payload
+
+
+def _assert_opus_block(opus: Any, papers: list[dict[str, Any]]) -> None:
+    if not isinstance(opus, dict):
+        raise FixedEvalError("opus validation block is missing")
+    if opus.get("seed") != OPUS_SEED:
+        raise FixedEvalError(f"opus validation seed must be {OPUS_SEED}")
+    if opus.get("papers_per_tier") != OPUS_PER_TIER or opus.get("cold_start_per_tier") != OPUS_COLD_PER_TIER:
+        raise FixedEvalError(
+            f"opus validation must be {OPUS_PER_TIER} per tier, with a {OPUS_COLD_PER_TIER}-paper cold start"
+        )
+    expected = opus_slice(papers, seed=OPUS_SEED, per_tier=OPUS_PER_TIER)
+    stored = opus.get("paper_ids_by_tier")
+    if stored != expected:
+        raise FixedEvalError("opus slice does not match the seed and ordering")
+    for tier in TIER_NAMES:
+        if stored[tier][:OPUS_COLD_PER_TIER] != expected[tier][:OPUS_COLD_PER_TIER]:
+            raise FixedEvalError("opus cold-start slice is not the prefix of the standing slice")
 
 
 def _assert_cvpr_block(cvpr: Any) -> None:
@@ -383,6 +436,63 @@ def assert_model_recorded(model_id: str | None, effort: str | None) -> tuple[str
     if not EFFORT_RE.fullmatch(level):
         raise FixedEvalError("a fixed-set run must record --effort (letters, digits, ., _, -)")
     return model, level
+
+
+def load_baseline_cache(
+    path: Path,
+    *,
+    commit: str,
+    model_id: str,
+    effort: str,
+    content_sha256: str,
+) -> dict[str, Any]:
+    """Load stored forecast-k1 scores when the cache still matches this run.
+
+    ``path`` holds ``metadata.json`` and ``papers/<forum_id>/our_score.json``.
+    The commit, model id, effort, and manifest digest must match. The number
+    of score files must match ``n`` in the metadata. A mismatch raises
+    :class:`FixedEvalError` and does not return scores.
+    """
+    root = path.expanduser().resolve()
+    try:
+        meta = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FixedEvalError(f"baseline cache metadata cannot be read: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise FixedEvalError("baseline cache metadata must be an object")
+    expected = {
+        "commit": commit.strip(),
+        "content_sha256": content_sha256.strip(),
+        "effort": effort.strip(),
+        "model_id": model_id.strip(),
+    }
+    for key, value in expected.items():
+        if str(meta.get(key) or "") != value:
+            raise FixedEvalError(f"baseline cache {key} does not match this run")
+    papers = root / "papers"
+    if not papers.is_dir():
+        raise FixedEvalError("baseline cache has no papers directory")
+    scores: dict[str, dict[str, Any]] = {}
+    for score_path in sorted(papers.glob("*/our_score.json")):
+        try:
+            score = json.loads(score_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FixedEvalError(f"baseline score cannot be read: {exc}") from exc
+        if not isinstance(score, dict) or score.get("rank_score") is None:
+            raise FixedEvalError("a baseline score is missing rank_score")
+        forum_id = str(score.get("forum_id") or score_path.parent.name)
+        if forum_id in scores:
+            raise FixedEvalError("baseline cache has a duplicate forum id")
+        scores[forum_id] = score
+    try:
+        declared = int(meta["n"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FixedEvalError("baseline cache n is not an integer") from exc
+    if declared != len(scores):
+        raise FixedEvalError(
+            f"baseline cache count {len(scores)} does not match metadata n {declared}"
+        )
+    return {"metadata": meta, "scores": scores}
 
 
 def assert_forecast_flags(

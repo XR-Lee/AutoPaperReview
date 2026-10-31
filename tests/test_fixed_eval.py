@@ -15,6 +15,9 @@ from autopaperreview.cvpr_sets import id_list_digest as cvpr_id_list_digest
 from autopaperreview.fixed_eval import (
     DEV_PER_TIER,
     HOLDOUT_PER_TIER,
+    OPUS_COLD_PER_TIER,
+    OPUS_PER_TIER,
+    OPUS_SEED,
     TIER_NAMES,
     FixedEvalError,
     assert_cvpr_stage,
@@ -26,8 +29,10 @@ from autopaperreview.fixed_eval import (
     dev_papers,
     holdout_record,
     id_list_digest,
+    load_baseline_cache,
     main as fixed_main,
     manifest_path,
+    opus_slice,
     select_fixed,
     tier_for,
 )
@@ -101,8 +106,25 @@ class FixedEvalManifestTests(unittest.TestCase):
         payload = assert_manifest()
         self.assertEqual(payload["status"], "locked")
         self.assertEqual(payload["content_sha256"], content_digest(payload))
+        digest = payload["content_sha256"]
+        proposal = (repo_root() / "benchmarks" / "fixed_eval" / "PROPOSAL.md").read_text(encoding="utf-8")
+        benchmark = (repo_root() / "benchmarks" / "promotion" / "benchmark-v1.md").read_text(encoding="utf-8")
+        self.assertIn("Status: **locked**.", proposal)
+        self.assertIn(digest, proposal)
+        self.assertIn("Status is **locked**.", benchmark)
+        self.assertIn(digest, benchmark)
+        self.assertIn("36-per-tier slice (144 papers)", benchmark)
+        self.assertIn("first 18 per tier (72 papers)", benchmark)
+        self.assertIn("about $95", benchmark)
+        self.assertIn("$100 cap", benchmark)
+        self.assertIn(
+            "The baseline cache is valid only while the main commit, the model id and effort, and the scoring path match.",
+            benchmark,
+        )
+        self.assertIn("192 dev papers", benchmark)
+        self.assertIn("24 papers, 6 per tier", benchmark)
         papers = dev_papers(payload)
-        self.assertEqual(len(papers), 48)
+        self.assertEqual(len(papers), 192)
         counts = {name: 0 for name in TIER_NAMES}
         for paper in papers:
             counts[paper["tier"]] += 1
@@ -117,6 +139,44 @@ class FixedEvalManifestTests(unittest.TestCase):
         for document in (text, proposal):
             self.assertNotIn("openreview.net", document.lower())
             self.assertNotIn("forum?id=", document.lower())
+        previous = {
+            "1SO93f7sVf", "2Ed7b52z53", "2NwHLAffZZ", "48CXLrx7K3", "4y3GDTFv70",
+            "50P9TDPEsh", "6s5uXNWGIh", "Aemqy6Hjdj", "DS5qRs0tQz", "Dr4qD9bzZd",
+            "E6EbeJR20o", "GRMfXcAAFh", "Ge0GEOvifh", "Ha6RTeWMd0", "MpWRCiw8g5",
+            "NTWtNjlThd", "NYN1b8GRGS", "Ng7OYC3PT8", "PoB6QGAM38", "Pujt3ADZgI",
+            "QFo2wxQEW6", "RFJGFrMvYj", "RuP17cJtZo", "SJPUmX4LXD", "UpgRVWexaD",
+            "VyWv7GSh5i", "WnEnU2K3Rb", "bjFJrdK0nO", "eRAXvtP0gA", "esYrEndGsr",
+            "fWk5Qx0exc", "g3xuCtrG6H", "iAYIRHOYy8", "itGkF993gz", "kGvXIlIVLM",
+            "kaZAKvjLro", "llXCyLhOY4", "pxI5IPeWgW", "rUf9G9k2im", "t7P5BUKcYv",
+            "vo9t20wsmd", "wcka3bd7P4", "x5txICnnjC", "xByvdb3DCm", "xsts7MRLey",
+            "xw3fStKCwm", "yrgQdA5NkI", "zhJDD85QHD",
+        }
+        self.assertTrue(previous <= set(dev_ids(payload)))
+        opus = payload["opus_validation"]
+        self.assertEqual(opus["seed"], OPUS_SEED)
+        self.assertEqual(opus["papers_per_tier"], OPUS_PER_TIER)
+        self.assertEqual(opus["cold_start_per_tier"], OPUS_COLD_PER_TIER)
+        self.assertEqual(
+            opus["cache"]["valid_while"],
+            ["main commit", "model id", "effort", "scoring path"],
+        )
+        self.assertIn("opus-validation:{seed}:{tier}", opus["ordering"])
+        drawn = opus_slice(papers, seed=OPUS_SEED, per_tier=OPUS_PER_TIER)
+        self.assertEqual(opus["paper_ids_by_tier"], drawn)
+        dev = set(dev_ids(payload))
+        seen = set()
+        for tier in TIER_NAMES:
+            ids = opus["paper_ids_by_tier"][tier]
+            self.assertEqual(ids, drawn[tier])
+            self.assertEqual(ids[:OPUS_COLD_PER_TIER], drawn[tier][:OPUS_COLD_PER_TIER])
+            self.assertEqual(len(ids), OPUS_PER_TIER)
+            self.assertEqual(len(set(ids)), OPUS_PER_TIER)
+            self.assertTrue(set(ids) <= dev)
+            self.assertTrue(seen.isdisjoint(ids))
+            seen.update(ids)
+            for paper in papers:
+                if paper["forum_id"] in ids:
+                    self.assertEqual(paper["tier"], tier)
 
     def test_tier_bounds(self) -> None:
         self.assertEqual(tier_for(0), "clear_reject")
@@ -137,7 +197,7 @@ class FixedEvalManifestTests(unittest.TestCase):
             assert_manifest(payload)
         with self.assertRaises(FixedEvalError):
             assert_run_ids(["not-the-dev-set"], kind="iclr-dev")
-        self.assertEqual(len(dev_ids(assert_run_ids(dev_ids(), kind="iclr-dev"))), 48)
+        self.assertEqual(len(dev_ids(assert_run_ids(dev_ids(), kind="iclr-dev"))), 192)
 
     def test_id_list_digest_matches_cvpr_sets(self) -> None:
         self.assertEqual(id_list_digest(["b", "a", "a"]), cvpr_id_list_digest(["a", "b"]))
@@ -155,7 +215,7 @@ class FixedEvalManifestTests(unittest.TestCase):
                 encoding="utf-8",
             )
             checked = assert_holdout_file(path, payload)
-            self.assertEqual(len(checked), 12)
+            self.assertEqual(len(checked), len(papers))
             path.write_text(
                 json.dumps({"papers": papers, "salt_hex": (b"fedcba9876543210").hex()}),
                 encoding="utf-8",
@@ -177,7 +237,7 @@ class FixedEvalManifestTests(unittest.TestCase):
         if not path.is_file():
             self.skipTest("operator file is not on this machine")
         papers = assert_holdout_file(path)
-        self.assertEqual(len(papers), 12)
+        self.assertEqual(len(papers), 24)
 
     def test_select_fixed_is_deterministic_and_disjoint(self) -> None:
         pool = []
@@ -337,8 +397,120 @@ class FixedEvalCommandTests(unittest.TestCase):
             self.assertEqual(saved["model_id"], "grok-4.7")
             self.assertEqual(saved["effort"], "xhigh")
             self.assertEqual(saved["content_sha256"], assert_manifest()["content_sha256"])
-            self.assertEqual(saved["n"], 48)
+            self.assertEqual(saved["n"], 192)
             self.assertEqual(len({row["stratum"] for row in saved["rows"]}), 4)
+
+    def test_baseline_cache_fills_missing_scores_and_rejects_a_mismatch(self) -> None:
+        rank_eval = _rank_eval()
+        digest = "a" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / "cache"
+            baseline = root / "baseline"
+            output = root / "out.json"
+            held = cache / "papers" / "SynBase01" / "heldout"
+            held.mkdir(parents=True)
+            (held / "human.json").write_text(
+                json.dumps({"decision": "reject", "ratings": [1, 3]}),
+                encoding="utf-8",
+            )
+            held = cache / "papers" / "SynBase02" / "heldout"
+            held.mkdir(parents=True)
+            (held / "human.json").write_text(
+                json.dumps({"decision": "accept", "ratings": [8, 10]}),
+                encoding="utf-8",
+            )
+            for forum_id, rank in (("SynBase01", 2.0), ("SynBase02", 8.0)):
+                directory = baseline / "papers" / forum_id
+                directory.mkdir(parents=True)
+                (directory / "our_score.json").write_text(
+                    json.dumps({"forum_id": forum_id, "rank_score": rank, "our_bin": 3, "candidates": {}}),
+                    encoding="utf-8",
+                )
+            meta = {
+                "commit": "abc123",
+                "content_sha256": digest,
+                "effort": "xhigh",
+                "model_id": "grok-4.7",
+                "n": 2,
+            }
+            (baseline / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+            loaded = load_baseline_cache(
+                baseline,
+                commit="abc123",
+                model_id="grok-4.7",
+                effort="xhigh",
+                content_sha256=digest,
+            )
+            self.assertEqual(set(loaded["scores"]), {"SynBase01", "SynBase02"})
+            with self.assertRaises(FixedEvalError) as caught:
+                load_baseline_cache(
+                    baseline,
+                    commit="other",
+                    model_id="grok-4.7",
+                    effort="xhigh",
+                    content_sha256=digest,
+                )
+            self.assertIn("commit", str(caught.exception))
+            self.assertNotIn("SynBase01", str(caught.exception))
+            with redirect_stdout(io.StringIO()):
+                code = rank_eval.main(
+                    [
+                        "--cache",
+                        str(cache),
+                        "--output",
+                        str(output),
+                        "--fixed-set",
+                        "none",
+                        "--baseline-cache",
+                        str(baseline),
+                        "--baseline-commit",
+                        "abc123",
+                        "--baseline-digest",
+                        digest,
+                        "--model-id",
+                        "grok-4.7",
+                        "--effort",
+                        "xhigh",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(saved["n"], 2)
+            self.assertEqual({row["rank_score"] for row in saved["rows"]}, {2.0, 8.0})
+
+    def test_rank_eval_exits_2_when_the_digest_does_not_match(self) -> None:
+        rank_eval = _rank_eval()
+        payload = json.loads(manifest_path().read_text(encoding="utf-8"))
+        payload["content_sha256"] = "0" * 64
+        original = rank_eval.assert_manifest
+
+        def mismatched(manifest=None):
+            return original(payload if manifest is None else manifest)
+
+        rank_eval.assert_manifest = mismatched
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary) / "cache"
+                output = Path(temporary) / "out.json"
+                stderr = io.StringIO()
+                with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                    code = rank_eval.main(
+                        [
+                            "--cache",
+                            str(cache),
+                            "--output",
+                            str(output),
+                            "--model-id",
+                            "grok-4.7",
+                            "--effort",
+                            "xhigh",
+                        ]
+                    )
+            self.assertEqual(code, 2)
+            self.assertIn("digest", stderr.getvalue())
+        finally:
+            rank_eval.assert_manifest = original
 
     def test_calibrate_eval_fixed_set_is_opt_in(self) -> None:
         parser = build_parser()

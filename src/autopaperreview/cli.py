@@ -1128,7 +1128,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixed-set",
         choices=("none", "iclr-dev"),
         default="none",
-        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+        help="iclr-dev scores the manifest dev set (192 papers, 48 per tier); none scores the cache as given",
     )
     eval_run.add_argument("--model-id", default="", help="required with --fixed-set iclr-dev")
     eval_run.add_argument("--effort", default="", help="required with --fixed-set iclr-dev")

@@ -18,20 +18,35 @@ from autopaperreview.fixed_eval import (
     assert_manifest,
     assert_model_recorded,
     dev_ids,
+    load_baseline_cache,
 )
 from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
 
-def _records(cache: Path, ids: set[str] | None) -> list[dict]:
+def _records(
+    cache: Path,
+    ids: set[str] | None,
+    baseline_scores: dict[str, dict] | None = None,
+) -> list[dict]:
     rows = []
+    seen: set[str] = set()
+    indexed: list[tuple[str, dict, Path]] = []
     for score_path in sorted(cache.glob("papers/*/project/our_score.json")):
         score = json.loads(score_path.read_text(encoding="utf-8"))
-        forum_id = str(score.get("forum_id") or "")
+        forum_id = str(score.get("forum_id") or score_path.parents[1].name)
+        indexed.append((forum_id, score, score_path.parents[1] / "heldout" / "human.json"))
+    if baseline_scores:
+        for forum_id, score in baseline_scores.items():
+            if any(item[0] == forum_id for item in indexed):
+                continue
+            indexed.append((forum_id, score, cache / "papers" / forum_id / "heldout" / "human.json"))
+    for forum_id, score, human_path in indexed:
         if ids is not None and forum_id not in ids:
             continue
-        human_path = score_path.parents[1] / "heldout" / "human.json"
+        if forum_id in seen:
+            continue
         if not human_path.is_file():
             continue
         human = json.loads(human_path.read_text(encoding="utf-8"))
@@ -41,6 +56,7 @@ def _records(cache: Path, ids: set[str] | None) -> list[dict]:
         ratings = [float(item) for item in human.get("ratings") or []]
         if len(ratings) < 2:
             continue
+        seen.add(forum_id)
         rows.append(
             {
                 "forum_id": forum_id,
@@ -117,14 +133,25 @@ def main(argv: list[str] | None = None) -> int:
         "--fixed-set",
         choices=("iclr-dev", "none"),
         default="iclr-dev",
-        help="iclr-dev scores the proposed fixed dev set; none scores the cache as given",
+        help="iclr-dev scores the manifest dev set (192 papers, 48 per tier); none scores the cache as given",
     )
     parser.add_argument("--model-id", default="", help="required when --fixed-set iclr-dev")
     parser.add_argument("--effort", default="", help="required when --fixed-set iclr-dev")
     parser.add_argument(
         "--holdout-file",
         default="",
-        help="gitignored private-holdout operator file; scores that slice instead of the dev set",
+        help="gitignored private-holdout operator file (24 papers, 6 per tier); scores that slice instead of the dev set",
+    )
+    parser.add_argument(
+        "--baseline-cache",
+        default="",
+        help="stored forecast-k1 scores (metadata.json plus papers/*/our_score.json) used when the local cache has no score",
+    )
+    parser.add_argument("--baseline-commit", default="", help="commit the baseline cache must name")
+    parser.add_argument(
+        "--baseline-digest",
+        default="",
+        help="manifest digest the baseline cache must name when --fixed-set is none",
     )
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
@@ -169,7 +196,31 @@ def main(argv: list[str] | None = None) -> int:
     except FixedEvalError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    records = _records(cache, wanted)
+    baseline_scores = None
+    if args.baseline_cache:
+        if not args.baseline_commit.strip():
+            print("baseline cache requires --baseline-commit", file=sys.stderr)
+            return 2
+        if not args.model_id.strip() or not args.effort.strip():
+            print("baseline cache requires --model-id and --effort", file=sys.stderr)
+            return 2
+        digest = fixed_meta["content_sha256"] if fixed_meta is not None else args.baseline_digest.strip()
+        if not digest:
+            print("baseline cache requires --baseline-digest when --fixed-set is none", file=sys.stderr)
+            return 2
+        try:
+            loaded = load_baseline_cache(
+                assert_local_only(Path(args.baseline_cache)),
+                commit=args.baseline_commit.strip(),
+                model_id=args.model_id.strip(),
+                effort=args.effort.strip(),
+                content_sha256=digest,
+            )
+        except FixedEvalError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        baseline_scores = loaded["scores"]
+    records = _records(cache, wanted, baseline_scores)
     if fixed_meta is not None:
         scored = {str(record["forum_id"]) for record in records}
         if scored != wanted:

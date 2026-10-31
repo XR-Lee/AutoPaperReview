@@ -2147,11 +2147,11 @@ Each review has these fields:
 - summary: one sentence on what the paper claims, in that reviewer's words.
 - strengths: up to two clauses that reviewer would write.
 - weaknesses: up to two clauses that reviewer would write, each specific to this paper.
-- rating: the official rating that reviewer would most likely submit, one of 1, 3, 5, 6, 8, or 10. At this venue an 8 says the reviewer would argue for acceptance and expects to cite the paper. A 6 says they lean accept with reservations. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: a flaw in the evidence, a comparison that matters and is missing, or little novelty against work they know. 1 and 10 are rare.
-- probabilities: six numbers that sum to one, the probability that this reviewer's official rating is 1, 3, 5, 6, 8, and 10, in that order. This is your forecast of one reviewer, not a hedge. A reviewer whose reaction to the paper is clear puts most of the mass on one rating. A reviewer who could land on either side of a line splits it between the two ratings on each side of that line. Put mass on 8 when a reviewer with this reading would have a real chance of arguing for the paper, and mass on 3 when they would have a real chance of finding a reason to reject it. Spread the mass only as far as the reviewer's reaction is uncertain, and no further; a flat spread over all six ratings is almost never right. The expected rating under these probabilities is this reviewer's score, so the probabilities must say what the review says. rating is the rating with the most mass.
+- rating: the official rating that reviewer would most likely submit, one of 1, 3, 5, 6, 8, or 10. At this venue an 8 is an accept: a solid paper the reviewer would accept. A typical accepted paper lands on 8. An 8 is not reserved for a paper the reviewer would cite as a landmark. A 6 is only just above the acceptance line: the reviewer leans accept and the reservations could flip the decision. A 5 says the paper is competent and they do not see enough to accept it. A 3 says they see a clear reason to reject: a flaw in the evidence, a comparison that matters and is missing, or little novelty against work they know. 1 and 10 are rare. 10 is the rare paper the reviewer would champion.
+- probabilities: six numbers that sum to one, the probability that this reviewer's official rating is 1, 3, 5, 6, 8, and 10, in that order. This is your forecast of one reviewer, not a hedge. A reviewer whose reaction to the paper is clear puts most of the mass on one rating. A reviewer who could land on either side of a line splits it between the two ratings on each side of that line. Put mass on 8 when a reviewer with this reading would accept the paper, and mass on 3 when they would have a real chance of finding a reason to reject it. Spread the mass only as far as the reviewer's reaction is uncertain, and no further; a flat spread over all six ratings is almost never right. The expected rating under these probabilities is this reviewer's score, so the probabilities must say what the review says. rating is the rating with the most mass.
 - confidence: an integer from 1 to 5, how sure that reviewer is.
 
-Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating and the probabilities they would have from their own reading. Do not pull the three toward each other, and do not save 8 for a paper that changes the field. The reasons reviewers at this venue most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim. The reasons they most often give for an 8 are a result they want to use or cite and an idea that changes how they think about the problem. Most submissions are rejected.
+Real panels disagree. The same paper often draws a 3 from one reviewer and an 8 from another because they weigh different things. Give each reviewer the rating and the probabilities they would have from their own reading. Do not pull the three toward each other, and do not save 8 for a paper that changes the field. The reasons reviewers at this venue most often give for a 3 are limited novelty, a missing comparison, and evidence that does not cover the claim. The reasons they most often give for an 8 are a solid result they would accept and an idea the area can use. A landmark they would cite is a 10. Most submissions are rejected.
 
 After the three reviews, set predicted_mean and rating, in that order and last. predicted_mean is your own estimate of the mean official rating; it need not equal the mean of the three ratings above.
 """.strip()
@@ -2178,9 +2178,19 @@ def forecast_task_text() -> str:
             EXPERT_SCALE_PARAGRAPHS[2],
             "",
             EXPERT_SCALE_PARAGRAPHS[3],
+            "",
+            _FORECAST_ACCEPT_CUT,
             "Return only the JSON object.",
         ]
     )
+
+
+# Forecast-only. Each sentence names its field. The shared scale still says a
+# clear accept is near 7 or 8, and the 1-6 decision still follows that mean
+# rule. This paragraph does not add a cutoff.
+_FORECAST_ACCEPT_CUT = """
+On the review field rating, and on the probabilities for that rating, an accept's official rating is 8. On predicted_mean, an accept sits near 7 or 8. On the 1-to-6 decision, the rating chosen after predicted_mean, apply the mean rule above: a predicted_mean near 7 or 8 is decision 5, and decision 6 stays for a rare strong accept.
+""".strip()
 
 
 _SOURCE_TEXT_HEADING = "\n## Source Text\n"
