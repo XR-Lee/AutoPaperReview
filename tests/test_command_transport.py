@@ -261,6 +261,103 @@ class CommandPipelineTests(CommandTransportCase):
         self.assertEqual(len(self.calls()), 2)
 
 
+LISTED_MANUSCRIPT = (
+    "Synthetic cohort uses eight images from one specimen.\n"
+    "Our contributions are as follows.\n"
+    "(1) We propose a counting rule for the synthetic cohort and test it on held-out pairs.\n"
+    "(2) We report accuracy on the held-out pair with a synthetic protocol for every image.\n"
+    "Accuracy was reported as 95 percent on the held-out pair.\n"
+)
+AUDIT_EXCERPT = "a counting rule for the synthetic cohort"
+
+
+class LedgerConsensusTests(CommandTransportCase):
+    def test_model_audit_replaces_the_pending_placeholder_and_its_evidence(self) -> None:
+        """The deterministic ledger and the model audit both write C1 and E-C1; consensus keeps the audit."""
+        self.replies.write_text(json.dumps({"contributions": _contribution(AUDIT_EXCERPT)}), encoding="utf-8")
+        workspace = self.root / "project"
+        (workspace / "prompts").mkdir(parents=True)
+        (workspace / "manuscript.txt").write_text(LISTED_MANUSCRIPT, encoding="utf-8")
+        (workspace / "prompts" / "closed_book_v1.md").write_text("Review the synthetic manuscript.\n", encoding="utf-8")
+        config = workspace / "review.toml"
+        config.write_text(
+            textwrap.dedent(
+                f"""
+                schema_version = 1
+
+                [project]
+                id = "synthetic-ledger-consensus"
+                title = "Synthetic ledger consensus"
+                source = "manuscript.txt"
+                run_root = ".runs"
+                default_language = "en"
+                network_policy = "allow"
+
+                [[routes]]
+                id = "M0"
+                name = "Structured closed-book review"
+                kind = "prompt"
+                prompt = "prompts/closed_book_v1.md"
+                prompt_version = "1.1"
+
+                [[stages]]
+                id = "ingest"
+                type = "ingest"
+
+                [[stages]]
+                id = "ledger"
+                type = "ledger"
+                depends_on = ["ingest"]
+
+                [[stages]]
+                id = "agenda"
+                type = "agenda"
+                depends_on = ["ledger"]
+
+                [[stages]]
+                id = "prompt_packets"
+                type = "prompt_packet"
+                depends_on = ["ingest"]
+                [stages.params]
+                include_source_text = true
+
+                [[stages]]
+                id = "review"
+                type = "execute_review"
+                depends_on = ["prompt_packets", "ledger"]
+                [stages.params]
+                adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+                command = {json.dumps(self.command())}
+                model = "synthetic-cli"
+                allow_remote = true
+                requires_network = true
+                judgments = ["contributions"]
+                timeout_seconds = 30
+
+                [[stages]]
+                id = "consensus"
+                type = "consensus"
+                depends_on = ["review", "agenda"]
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest = run_pipeline(config)
+        run_dir = workspace / ".runs" / manifest.run_id
+        placeholder = json.loads((run_dir / "stages" / "ledger" / "package.json").read_text(encoding="utf-8"))
+        placeholder_evidence = {item["id"]: item["excerpt"] for item in placeholder["evidence"]}
+        self.assertNotEqual(placeholder_evidence["E-C1"], AUDIT_EXCERPT)
+        merged = json.loads((run_dir / "stages" / "consensus" / "consensus.json").read_text(encoding="utf-8"))
+        evidence = {item["id"]: item["excerpt"] for item in merged["evidence"]}
+        claims = {item["id"]: item for item in merged["ledger_claims"]}
+        self.assertEqual(evidence["E-C1"], AUDIT_EXCERPT)
+        self.assertEqual(claims["C1"]["claim"]["primary"], "The counting rule is the first listed contribution.")
+        self.assertEqual(claims["C1"]["in_paper_evidence_ids"], ["E-C1"])
+        self.assertEqual(claims["C2"]["metadata"]["audit"], "pending")
+        self.assertEqual(evidence["E-C2"], placeholder_evidence["E-C2"])
+
+
 class HelperTests(unittest.TestCase):
     def test_command_argv_accepts_a_list_or_a_quoted_string(self) -> None:
         self.assertEqual(command_argv(["claude", "-p"]), ["claude", "-p"])

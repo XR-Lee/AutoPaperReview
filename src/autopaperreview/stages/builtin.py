@@ -656,6 +656,42 @@ def _prefer_ledger_claim(left, right):
     return None
 
 
+def _kept_ledger_claims(packages: list[ReviewPackage]) -> dict[str, LedgerClaim]:
+    """The ledger claim consensus keeps for each id, by the rule of ``_prefer_ledger_claim``."""
+    kept: dict[str, LedgerClaim] = {}
+    for package in packages:
+        for claim in package.ledger_claims:
+            existing = kept.get(claim.id)
+            if existing is None:
+                kept[claim.id] = claim
+            elif existing != claim:
+                chosen = _prefer_ledger_claim(existing, claim)
+                if chosen is not None:
+                    kept[claim.id] = chosen
+    return kept
+
+
+def _evidence_of_kept_claim(
+    existing_citer: LedgerClaim | None,
+    current_citer: LedgerClaim | None,
+    kept: dict[str, LedgerClaim],
+) -> str | None:
+    """Pick between two same-id evidence records cited by two versions of one ledger claim.
+
+    A model audit of C1 and the pending C1 placeholder from the ledger stage each cite
+    their own ``E-C1``. The record cited by the claim that consensus keeps wins. Returns
+    ``"existing"``, ``"current"``, or ``None`` when the records are not related that way.
+    """
+    if existing_citer is None or current_citer is None or existing_citer.id != current_citer.id:
+        return None
+    chosen = kept.get(current_citer.id)
+    if chosen == current_citer and chosen != existing_citer:
+        return "current"
+    if chosen == existing_citer and chosen != current_citer:
+        return "existing"
+    return None
+
+
 class ConsensusStage(StageHandler):
     type_name = "consensus"
     version = "2"
@@ -744,7 +780,14 @@ class ConsensusStage(StageHandler):
         agenda_by_id: dict[str, AgendaQuestion] = {}
         integrity_by_id: dict[str, IntegrityRecord] = {}
         novelty_by_id: dict[str, NoveltyAssessment] = {}
+        kept_claims = _kept_ledger_claims(packages)
+        evidence_citers: dict[str, LedgerClaim] = {}
         for package in packages:
+            citers = {
+                evidence_id: claim
+                for claim in package.ledger_claims
+                for evidence_id in claim.in_paper_evidence_ids
+            }
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
                 ("source", package.sources, sources_by_id),
@@ -769,8 +812,20 @@ class ConsensusStage(StageHandler):
                             if chosen is not None:
                                 catalog[value.id] = chosen
                                 continue
+                        if label == "evidence":
+                            side = _evidence_of_kept_claim(
+                                evidence_citers.get(value.id), citers.get(value.id), kept_claims
+                            )
+                            if side == "existing":
+                                continue
+                            if side == "current":
+                                catalog[value.id] = value
+                                evidence_citers[value.id] = citers[value.id]
+                                continue
                         raise ValueError(f"conflicting {label} definition for ID {value.id}")
                     catalog[value.id] = value
+                    if label == "evidence" and value.id in citers:
+                        evidence_citers.setdefault(value.id, citers[value.id])
 
         strengths: dict[str, list[str]] = {}
         acceptance_gate: dict[str, list[str]] = {}
