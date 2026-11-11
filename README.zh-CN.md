@@ -107,6 +107,8 @@ pip install -e ".[pdf,visual]"
 autopaperreview init reviews/my-paper --project-id my-paper --title "My paper review"
 ```
 
+   要从 PDF 开始，就加上 `--pdf paper.pdf`。`init` 会按阅读顺序把文字写进 `manuscript.txt`，每个分页处加一行 `[Page N]`，并把 PDF 复制为 `manuscript.pdf`。页眉、页码和审稿版页边的行号会被去掉。只审主文时，见 [主 PDF 审稿](#main-pdf)。
+
 3. 把 `reviews/my-paper/manuscript.txt` 换成你的稿件。要调用模型，就照下面的例子改 `execute_review` 阶段。`OpenAICompatibleAdapter` 调用的是 OpenAI 兼容的 chat API。各阶段怎样衔接，见后面的「流程」一节。
 
    - 密钥放在环境变量里，默认是 `APR_MODEL_API_KEY`。APR 不会把它写进 TOML、请求日志或阶段签名。
@@ -141,6 +143,23 @@ bilingual = true
 ```
 
 除非要用 [评分与基准](#track-b)，否则不要在这个文件里加 `holistic` 和 `rate`。`cheap = true` 是只算排序分的捷径，会跳过贡献、证据表、维度和致命问题这几项。
+
+   要改用本地 CLI（例如 Claude Code 或 Codex CLI）跑同样的判断，就用 `command` 代替 `base_url`。`model` 是记进运行记录的标签。
+
+   - 每次调用运行一次这个命令，工作目录是一个空的临时目录，环境里不带凭据变量和 `APR_*` 变量。提示词从 stdin 传入。命令里的 `{system_file}` 会换成存放系统提示词的文件，`{model}` 换成 `model` 的值。
+   - stdout 就是回答。Claude Code `--output-format json` 的外层会被拆开，再从全文、`json` 代码块或最后一个完整对象里取出一个 JSON 对象。schema 校验失败后重试时，上一次的回答和错误信息会合成一个提示词发出。
+   - APR 看不到 CLI 把稿件发往何处。这个阶段需要 `allow_remote = true` 和 `network_policy = "allow"`，运行清单会记下稿件离开了这台机器。
+   - 命令只传文本，所以 `visual_inspect` 仍然需要 HTTP 端点。重跑时，只有命令行没变，才会复用已经完成的判断；改了 `--effort` 之类的参数，就会重新调用模型。
+
+```toml
+[stages.params]
+adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+command = ["claude", "-p", "--model", "{model}", "--effort", "high", "--tools", "", "--safe-mode", "--no-session-persistence", "--output-format", "json", "--system-prompt-file", "{system_file}"]
+model = "claude-opus-5-5"
+allow_remote = true
+requires_network = true
+timeout_seconds = 3600
+```
 
 4. （可选）加格式检查或相关工作检索。`init` 不会加这些阶段。格式检查的 `profile` 填 `iclr2027` 或 `aaai2027`。
 
@@ -195,6 +214,23 @@ autopaperreview annotate reviews/my-paper/review.toml --pdf path/to/manuscript.p
 
 如果想让高亮颜色跟着 Markdown 里的优点、不足和提问走，而不只看结果包里的主张，就加上 `--review`。`annotate` 默认写到 `<run>/annotated_manuscript.pdf`。
 
+<a id="main-pdf"></a>
+
+### 主 PDF 审稿
+
+会议审稿人读的是主文：正文和参考文献。`--main-only` 建出的项目只读这些内容。
+
+```bash
+autopaperreview init reviews/my-paper --project-id my-paper --pdf paper.pdf --main-only
+```
+
+- 主文在附录或补充材料开始的地方结束。APR 先从 PDF 目录里找这一页：标题为 Appendix 或 Supplementary Material 的条目，或者参考文献之后的第一个顶层条目。目录里找不到时，再到参考文献之后找附录标题。`--main-pages 1-10` 直接指定页码范围，并且隐含 `--main-only`。
+- `manuscript.pdf` 只保留主文页，所以图表检查和批注稿覆盖的页面与文本一致。如果附录从某一页的中间开始，这一页仍留在 PDF 里，文本在附录标题处截断。
+- 项目里只有一条闭卷路线 `M0`，没有 `artifacts/` 目录，没有完整性检查阶段，不带补充材料，也不做相关工作检索。`ledger` 和 `agenda` 阶段读的是同一份稿件文本。
+- `source_pdf.json` 记下保留了哪些页、主文结尾是怎样找到的，以及用的是哪个提取器。找不到附录时，所有页都保留，`detection` 记为 `none`。
+
+MCP 工具 `init_project` 也接受这些选项：`pdf_path`、`main_only` 和 `main_pages`。只给 `pdf_path`、不给 `manuscript_path` 时，它会从 PDF 里提取文本。
+
 ### 输出位置
 
 | 路径 | 内容 |
@@ -229,7 +265,7 @@ flowchart TD
 ### 命令
 
 ```text
-autopaperreview init            建一个本地项目（确定性或 agent 适配器）
+autopaperreview init            建一个本地项目，稿件可以是文本或 PDF（确定性或 agent 适配器）
 autopaperreview validate        检查 TOML、依赖和本地路径
 autopaperreview run             运行或接着跑；有阶段在等 drop 时退出码为 3
 autopaperreview status          以 JSON 输出运行状态、待交的 drop 和产物

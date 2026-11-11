@@ -29,6 +29,7 @@ from ..model_exec import (
 )
 from ..artifacts import artifact_from_path
 from ..awaiting import AwaitingInput
+from ..command_transport import command_argv
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
@@ -1460,6 +1461,8 @@ class ExecuteReviewParams(ParamsModel):
     requires_network: bool = False
     network_scope: str = "fulltext"
     base_url: str | None = None
+    # A local CLI that answers the chat requests instead of base_url; see autopaperreview.command_transport.
+    command: list[str] | str | None = None
     model: str | None = None
     api_key_env: str = "APR_MODEL_API_KEY"
     allow_remote: bool = False
@@ -1507,6 +1510,7 @@ class ExecuteReviewStage(StageHandler):
             material["verify_excerpts"] = True
         if (
             params.base_url
+            or params.command
             or params.model
             or params.allow_remote
             or params.judgments
@@ -1528,6 +1532,9 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
             }
+            if params.command:
+                # Added only when set, so configurations without a command keep their signatures.
+                material["model_execution"]["command"] = command_argv(params.command)
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
             for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
@@ -1581,6 +1588,7 @@ class ExecuteReviewStage(StageHandler):
                 "network_scope": params.network_scope,
                 "network_policy": context.loaded_config.config.project.network_policy.value,
                 "base_url": params.base_url,
+                "command": params.command,
                 "model": params.model,
                 "api_key_env": params.api_key_env,
                 "allow_remote": params.allow_remote,

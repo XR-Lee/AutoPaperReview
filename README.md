@@ -108,6 +108,8 @@ pip install -e ".[pdf,visual]"
 autopaperreview init reviews/my-paper --project-id my-paper --title "My paper review"
 ```
 
+   To start from a PDF, add `--pdf paper.pdf`. `init` writes the text in reading order to `manuscript.txt`, with a `[Page N]` line at each page break, and copies the PDF as `manuscript.pdf`. Running headers, page numbers, and the margin line numbers of a review copy are removed. To review the main paper alone, see [Main-PDF review](#main-pdf).
+
 3. Replace `reviews/my-paper/manuscript.txt` with your manuscript. To call a model, edit the `execute_review` stage as in the following example. `OpenAICompatibleAdapter` calls an OpenAI-compatible chat API. The Pipeline section shows how the stages connect.
 
    - The key stays in the environment, in `APR_MODEL_API_KEY` by default. APR doesn't write it into the TOML, the request log, or the stage signature.
@@ -142,6 +144,23 @@ bilingual = true
 ```
 
 Leave `holistic` and `rate` out of this file unless you want the [venue score](#track-b). `cheap = true` is a rank-only shortcut: it skips the contributions, ledger, dimension, and fatal-flaw judgments.
+
+   To run the same judgments through a local CLI, such as Claude Code or Codex CLI, set `command` in place of `base_url`. `model` is the label recorded for the run.
+
+   - Each call runs the command once, in an empty temporary directory, without credential variables or `APR_*` variables. The prompt goes on stdin. `{system_file}` in the command becomes a file that holds the system prompt, and `{model}` becomes `model`.
+   - stdout is the reply. A Claude Code `--output-format json` envelope is unwrapped, and one JSON object is recovered from the text, a `json` fence, or the last balanced object. A schema retry sends the earlier reply and the error as one prompt.
+   - APR cannot see where the CLI sends the manuscript. The stage needs `allow_remote = true` and `network_policy = "allow"`, and the run manifest records that the manuscript left the machine.
+   - The command sends text only, so `visual_inspect` still needs an HTTP endpoint. A rerun reuses a finished judgment only when the command line is unchanged; changing a flag such as `--effort` calls the model again.
+
+```toml
+[stages.params]
+adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"
+command = ["claude", "-p", "--model", "{model}", "--effort", "high", "--tools", "", "--safe-mode", "--no-session-persistence", "--output-format", "json", "--system-prompt-file", "{system_file}"]
+model = "claude-opus-5-5"
+allow_remote = true
+requires_network = true
+timeout_seconds = 3600
+```
 
 4. Optional: add a format check or related-work search. `init` doesn't add these stages. For the format check, set `profile` to `iclr2027` or `aaai2027`.
 
@@ -196,6 +215,23 @@ autopaperreview annotate reviews/my-paper/review.toml --pdf path/to/manuscript.p
 
 To color highlights by the Strengths, Weaknesses, and Questions in the Markdown, and not only by the claims on the package, pass `--review`. By default, `annotate` writes `<run>/annotated_manuscript.pdf`.
 
+<a id="main-pdf"></a>
+
+### Main-PDF review
+
+A conference reviewer reads the main paper: the body and the reference list. `--main-only` builds a project that reads that and nothing else.
+
+```bash
+autopaperreview init reviews/my-paper --project-id my-paper --pdf paper.pdf --main-only
+```
+
+- The main paper ends where the appendix or supplementary material begins. APR takes that page from the PDF outline: an entry titled Appendix or Supplementary Material, or the first top-level entry after the reference list. Without one, it looks for an appendix heading after the reference list. `--main-pages 1-10` sets the range instead and implies `--main-only`.
+- `manuscript.pdf` holds only the main pages, so figure checks and the annotated PDF cover the pages the text covers. When the appendix starts partway down a page, that page stays in the PDF and its text is cut at the heading.
+- The project has one closed-book route, `M0`. It has no `artifacts/` directory, no integrity stage, no supplement, and no related-work search. The `ledger` and `agenda` stages read the same manuscript text.
+- `source_pdf.json` records the pages kept, how the end was found, and the extractor. When no appendix is found, every page is kept and `detection` is `none`.
+
+The MCP tool `init_project` takes the same options: `pdf_path`, `main_only`, and `main_pages`. Given `pdf_path` without `manuscript_path`, it extracts the text from the PDF.
+
 ### Where the files land
 
 | Path | Contents |
@@ -230,7 +266,7 @@ The synthetic example stops at a fixture `execute_review` and a bilingual report
 ### Commands
 
 ```text
-autopaperreview init            Create a local project (deterministic or agent adapter)
+autopaperreview init            Create a local project from text or a PDF (deterministic or agent adapter)
 autopaperreview validate        Check TOML, the DAG, and local paths
 autopaperreview run             Run or resume; exit 3 while a stage awaits a drop
 autopaperreview status          Run state, awaiting drops, and outputs as JSON
