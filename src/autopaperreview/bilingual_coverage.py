@@ -47,23 +47,36 @@ def _skip_section(title: str) -> bool:
 
 
 def _paragraphs(body: str) -> list[str]:
+    """Blank-line separated blocks. Leading indentation is kept: an indented block is the
+    continuation of the list item before it."""
     blocks: list[str] = []
     buf: list[str] = []
     for line in body.splitlines():
         if not line.strip():
             if buf:
-                blocks.append("\n".join(buf).strip())
+                blocks.append("\n".join(buf).rstrip())
                 buf = []
             continue
         buf.append(line.rstrip())
     if buf:
-        blocks.append("\n".join(buf).strip())
+        blocks.append("\n".join(buf).rstrip())
     return blocks
 
 
 def _is_tagged(text: str) -> bool:
     first = text.splitlines()[0].strip()
     return bool(_LANG_HEADER.match(first) or _LANG_PREFIX.match(first))
+
+
+def _ends_in_tagged_item(text: str, state: bool = False) -> bool:
+    """True when ``text`` ends inside an ``**en:**`` / ``**zh-Hans:**`` list item: a tagged
+    line opens one, an unindented line closes it, an indented line continues it."""
+    for line in text.splitlines():
+        if _LANG_PREFIX.match(line):
+            state = True
+        elif line[:1] not in (" ", "\t"):
+            state = False
+    return state
 
 
 def _is_structural(text: str) -> bool:
@@ -120,15 +133,23 @@ def markdown_bilingual_gaps(markdown: str) -> list[str]:
         if en_marked != zh_marked:
             gaps.append(f"{title}: **en:** ({en_marked}) != **zh-Hans:** ({zh_marked})")
         lang_block: str | None = None
+        in_tagged_item = False
         for para in _paragraphs(body):
             first = para.splitlines()[0].strip()
             header = _LANG_HEADER.match(first)
             if header:
                 lang_block = header.group(1)
+                in_tagged_item = False
                 continue
             if _HEADING.match(first):
                 lang_block = None
-            if lang_block or _is_tagged(para):
+            if lang_block:
+                continue
+            # A later paragraph of a multi-paragraph **en:** / **zh-Hans:** item is indented under it.
+            if in_tagged_item and para[:1] in (" ", "\t"):
+                continue
+            in_tagged_item = _ends_in_tagged_item(para)
+            if _is_tagged(para):
                 continue
             preview = re.sub(r"\s+", " ", para)[:88]
             if _is_english_narrative(para):

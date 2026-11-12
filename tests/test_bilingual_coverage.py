@@ -115,6 +115,30 @@ class BilingualCoverageTests(unittest.TestCase):
         kinds = [kind for kind, _, _ in _tokens(markdown)]
         self.assertEqual(kinds, ["langline", "langline"])
 
+    def test_multi_paragraph_values_stay_inside_their_language_item(self) -> None:
+        from autopaperreview.reporting import _prose_items
+
+        en = "Decision-critical.\n(1) The budget is not applied.\n\nImportant.\n(2) The rule cannot decide its own predictions."
+        zh = "决定性问题。\n（1）预算没有按定义执行。\n\n重要问题。\n（2）该规则无法判定它自己的预测，区间宽度超过了声明的边界。"
+        lines = _prose_items({"en": en, "zh-Hans": zh}, ["en", "zh-Hans"], field="impact")
+        self.assertTrue(lines[0].startswith("- **en:** Decision-critical.\n  (1)"))
+        self.assertIn("\n\n  Important.\n  (2)", lines[0])
+        markdown = (
+            "# Review Report: demo\n\n- Languages: en, zh-Hans\n\n## Major Issues / 主要问题\n\n"
+            "### R01 A heading\n\n**Why this matters / 为何重要.**\n" + "\n".join(lines) + "\n"
+        )
+        self.assertEqual(markdown_bilingual_gaps(markdown), [])
+        # The same paragraph without its indentation is untagged prose again.
+        unindented = markdown.replace(
+            "\n  Important.\n  (2) The rule cannot decide its own predictions.",
+            "\nImportant.\n(2) The rule cannot decide its own predictions.\n",
+        )
+        self.assertIn("English-only prose", " ".join(markdown_bilingual_gaps(unindented)))
+        bullets = [text for kind, text, _ in _tokens(markdown) if kind == "bullet" and text.startswith("**")]
+        self.assertEqual(len(bullets), 2)
+        self.assertIn("\n\nImportant.\n(2) The rule", bullets[0])
+        self.assertTrue(bullets[1].startswith("**zh-Hans:** 决定性问题。"))
+
 
 class BilingualPdfGateTests(unittest.TestCase):
     @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")

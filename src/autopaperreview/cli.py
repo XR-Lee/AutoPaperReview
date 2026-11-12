@@ -679,6 +679,7 @@ def command_doctor(args: argparse.Namespace) -> int:
                 "Optional modules are not adapters. A stage plugin must convert their output into AutoPaperReview records.",
                 "execute_review calls a declared module:attribute adapter.",
                 "OpenAICompatibleAdapter calls an OpenAI-compatible chat endpoint. Loopback is allowed by default, including a hostname that resolves only to loopback. A remote endpoint needs allow_remote, network_policy = allow, and an env-var key. The key is not part of the stage signature. bilingual = true adds a zh-Hans pass. Fixture JSON and the deterministic adapter remain equal options.",
+                "With command in place of base_url, OpenAICompatibleAdapter runs a local CLI such as Claude Code once per judgment call, prompt on stdin. It needs allow_remote and network_policy = allow.",
             ],
         }
     )
@@ -714,14 +715,98 @@ def command_init(args: argparse.Namespace) -> int:
             project_id=args.project_id,
             title=args.title,
             adapter=args.adapter,
+            pdf=Path(args.pdf) if args.pdf else None,
+            main_only=args.main_only,
+            main_pages=args.main_pages,
         )
     )
     return 0
 
 
-def write_project(target: Path, *, project_id: str, title: str, adapter: str = "deterministic") -> dict:
-    """Create a minimal local-first review project. ``adapter`` is a key of ``INIT_ADAPTERS``."""
+def _main_pdf_review_toml(project_id: str, title: str, review_params: str) -> str:
+    """One closed-book route over the main paper. No artifacts check, supplement, or search."""
+    return f'''schema_version = 1
+
+[project]
+id = {_toml_basic_string(project_id)}
+title = {_toml_basic_string(title)}
+source = "manuscript.txt"
+run_root = ".runs"
+default_language = "en"
+network_policy = "deny"
+
+[[routes]]
+id = "M0"
+name = "Structured closed-book review"
+kind = "prompt"
+prompt = "prompts/closed_book_v1.md"
+prompt_version = "1.1"
+
+[[stages]]
+id = "ingest"
+type = "ingest"
+
+[[stages]]
+id = "ledger"
+type = "ledger"
+depends_on = ["ingest"]
+
+[[stages]]
+id = "agenda"
+type = "agenda"
+depends_on = ["ledger"]
+
+[[stages]]
+id = "prompt_packets"
+type = "prompt_packet"
+depends_on = ["ingest"]
+[stages.params]
+include_source_text = true
+
+[[stages]]
+id = "review"
+type = "execute_review"
+depends_on = ["prompt_packets", "ledger"]
+[stages.params]
+{review_params}
+[[stages]]
+id = "consensus"
+type = "consensus"
+depends_on = ["review", "agenda"]
+
+[[stages]]
+id = "report"
+type = "report"
+depends_on = ["consensus"]
+[stages.params]
+min_issues = 1
+require_ledger = true
+require_first_read_on_major = true
+require_quote_on_major = true
+'''
+
+
+def write_project(
+    target: Path,
+    *,
+    project_id: str,
+    title: str,
+    adapter: str = "deterministic",
+    pdf: Path | None = None,
+    main_only: bool = False,
+    main_pages: str | None = None,
+) -> dict:
+    """Create a minimal local-first review project. ``adapter`` is a key of ``INIT_ADAPTERS``.
+
+    With ``pdf``, ``manuscript.txt`` is the PDF's text and the PDF is copied as
+    ``manuscript.pdf``. ``main_only`` keeps the main paper (body and references)
+    and writes the single-route main-PDF template. ``main_pages`` such as
+    ``1-10`` sets the main paper's pages instead of detecting them and implies
+    ``main_only``.
+    """
     import re
+
+    from .main_pdf import read_manuscript_pdf, write_page_range
 
     if adapter not in INIT_ADAPTERS:
         raise ValueError(f"adapter must be one of {sorted(INIT_ADAPTERS)}")
@@ -729,6 +814,9 @@ def write_project(target: Path, *, project_id: str, title: str, adapter: str = "
         raise ValueError("project id must start with a letter and use letters, digits, '.', '_', or '-'")
     if not title.strip():
         raise ValueError("title must not be empty")
+    main_only = main_only or bool(main_pages)
+    if main_only and pdf is None:
+        raise ValueError("a main-only review reads the manuscript from a PDF; pass the PDF")
     if adapter == "agent":
         review_params = (
             f'adapter = "{INIT_ADAPTERS[adapter]}"\n'
@@ -740,21 +828,43 @@ def write_project(target: Path, *, project_id: str, title: str, adapter: str = "
     target = target.expanduser().resolve()
     if target.exists() and any(target.iterdir()):
         raise FileExistsError(f"target directory is not empty: {target}")
+    # Read the PDF before creating anything, so a bad PDF leaves no half-made project.
+    source = (
+        read_manuscript_pdf(Path(pdf).expanduser(), main_only=main_only, main_pages=main_pages)
+        if pdf is not None
+        else None
+    )
     target.mkdir(parents=True, exist_ok=True)
-    (target / "manuscript.txt").write_text(
-        "Synthetic manuscript placeholder. Replace this file with the document to review.\n",
-        encoding="utf-8",
-    )
-    artifacts_dir = target / "artifacts"
-    artifacts_dir.mkdir()
-    (artifacts_dir / "results.json").write_text(
-        '{\n  "accuracy": null,\n  "note": "Replace with experimental outputs bound to the manuscript."\n}\n',
-        encoding="utf-8",
-    )
+    source_record: dict | None = None
+    if source is None:
+        (target / "manuscript.txt").write_text(
+            "Synthetic manuscript placeholder. Replace this file with the document to review.\n",
+            encoding="utf-8",
+        )
+    else:
+        (target / "manuscript.txt").write_text(source.text, encoding="utf-8")
+        wrote_pdf = write_page_range(source.source, target / "manuscript.pdf", source.last_page)
+        source_record = {**source.record(), "manuscript_pdf": "manuscript.pdf" if wrote_pdf else None}
+        (target / "source_pdf.json").write_text(
+            json.dumps(source_record, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if not main_only:
+        artifacts_dir = target / "artifacts"
+        artifacts_dir.mkdir()
+        (artifacts_dir / "results.json").write_text(
+            '{\n  "accuracy": null,\n  "note": "Replace with experimental outputs bound to the manuscript."\n}\n',
+            encoding="utf-8",
+        )
     templates_dir = target / "prompts"
     template_args = argparse.Namespace(output_dir=str(templates_dir), force=True)
     with contextlib.redirect_stdout(io.StringIO()):
         command_templates(template_args)
+    if main_only:
+        (target / "review.toml").write_text(
+            _main_pdf_review_toml(project_id, title, review_params), encoding="utf-8"
+        )
+        return _project_result(target, adapter, source_record, template="main-pdf")
     (target / "review.toml").write_text(
         f'''schema_version = 1
 
@@ -886,12 +996,19 @@ require_quote_on_major = true
 ''',
         encoding="utf-8",
     )
+    return _project_result(target, adapter, source_record, template="default")
+
+
+def _project_result(target: Path, adapter: str, source_record: dict | None, *, template: str) -> dict:
     result = {
         "status": "success",
         "project_dir": str(target),
         "config": str(target / "review.toml"),
         "adapter": INIT_ADAPTERS[adapter],
+        "template": template,
     }
+    if source_record is not None:
+        result["manuscript_source"] = source_record
     if adapter == "agent":
         result["drop_path"] = str(target / "judgment.json")
     return result
@@ -1306,6 +1423,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(INIT_ADAPTERS),
         default="deterministic",
         help="agent: execute_review waits for a judgment drop written by a host agent",
+    )
+    init.add_argument(
+        "--pdf",
+        help="manuscript PDF: its text becomes manuscript.txt and the PDF is copied as manuscript.pdf",
+    )
+    init.add_argument(
+        "--main-only",
+        action="store_true",
+        help="review the main paper only: drop appendix pages and write the single-route main-PDF project",
+    )
+    init.add_argument(
+        "--main-pages",
+        help="pages of the main paper, such as 1-10, instead of detecting them; implies --main-only",
     )
     init.set_defaults(func=command_init)
     return parser

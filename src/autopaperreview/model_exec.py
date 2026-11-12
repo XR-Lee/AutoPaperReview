@@ -1206,8 +1206,20 @@ class ModelSession:
         stage_signature: str,
         transport: Transport | None = None,
         reuse_prior_exchanges: bool = False,
+        command: list[str] | None = None,
     ) -> None:
-        self.base_url = public_base_url(base_url)
+        self.command = list(command) if command else None
+        if self.command:
+            from .command_transport import make_command_transport
+
+            # A local CLI answers instead of an HTTP endpoint. APR cannot see where it sends the text.
+            self.base_url = ""
+            self.egress = "command"
+            default_transport: Transport = make_command_transport(self.command, model=model)
+        else:
+            self.base_url = public_base_url(base_url)
+            self.egress = endpoint_kind(self.base_url)
+            default_transport = _urlopen_transport
         self.model_name = model
         self.api_key_env = api_key_env or "APR_MODEL_API_KEY"
         self.allow_remote = allow_remote
@@ -1217,9 +1229,8 @@ class ModelSession:
         self.json_object = json_object
         self.scratch = scratch
         self.stage_signature = stage_signature
-        self._transport = transport or type(self).transport or _urlopen_transport
+        self._transport = transport or type(self).transport or default_transport
         self.reuse_prior_exchanges = reuse_prior_exchanges
-        self.egress = endpoint_kind(self.base_url)
         self.manuscript_left_machine = False
         self.exchanges: list[dict[str, Any]] = []
         self.rejected: list[dict[str, str]] = []
@@ -1240,6 +1251,16 @@ class ModelSession:
             return
         self._checked = True
         secret = _env_secret(self.api_key_env)
+        if self.egress == "command":
+            if not self.allow_remote:
+                raise PermissionError(
+                    "a model command may send manuscript content off this machine; "
+                    "set allow_remote = true to run it"
+                )
+            if self.network_policy != "allow":
+                raise PermissionError("a model command requires network_policy = allow")
+            self.manuscript_left_machine = True
+            return
         if self.egress == "remote":
             if not self.allow_remote:
                 raise PermissionError(
@@ -1262,7 +1283,7 @@ class ModelSession:
             return self._metadata_locked()
 
     def _metadata_locked(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "model": self.model_name,
             "base_url": self.base_url,
             "egress": self.egress,
@@ -1274,6 +1295,11 @@ class ModelSession:
             "drop_counts": _drop_counts(self.rejected),
             "usage_totals": dict(self.usage_totals),
         }
+        if self.command:
+            from .command_transport import command_label
+
+            metadata["command"] = command_label(self.command)
+        return metadata
 
     def reject(
         self,
@@ -1425,17 +1451,22 @@ class ModelSession:
         }
         if self.json_object:
             body["response_format"] = {"type": "json_object"}
+        if self.command:
+            # Prior-exchange reuse matches request bytes, so they must change with the command line.
+            # A digest keys the reuse without storing the command, which may hold paths or flags.
+            body["apr_command_sha256"] = sha256_bytes(json.dumps(self.command).encode("utf-8"))
         wire = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         wire = _redact_bytes(wire, secret)
         headers = {"Content-Type": "application/json"}
-        if secret:
+        if secret and not self.command:
             headers["Authorization"] = f"Bearer {secret}"
-        request = urllib.request.Request(
-            chat_url(self.base_url),
-            data=wire,
-            headers=headers,
-            method="POST",
-        )
+        if self.command:
+            from .command_transport import COMMAND_REQUEST_URL
+
+            url = COMMAND_REQUEST_URL
+        else:
+            url = chat_url(self.base_url)
+        request = urllib.request.Request(url, data=wire, headers=headers, method="POST")
         directory = self.scratch / "model"
         directory.mkdir(parents=True, exist_ok=True)
         if self.reuse_prior_exchanges:
@@ -1664,8 +1695,20 @@ def _localized(text: str) -> LocalizedText:
 def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
     base_url = str(metadata.get("base_url") or "").strip()
     model = str(metadata.get("model") or "").strip()
-    if not base_url or not model:
-        raise ModelExecutionError("OpenAI-compatible adapter requires base_url and model")
+    command: list[str] | None = None
+    if metadata.get("command"):
+        from .command_transport import command_argv
+
+        if base_url:
+            raise ModelExecutionError("set base_url or command, not both")
+        try:
+            command = command_argv(metadata["command"])
+        except ValueError as exc:
+            raise ModelExecutionError(str(exc)) from exc
+        if not model:
+            raise ModelExecutionError("a model command requires model, the label recorded for the run")
+    elif not base_url or not model:
+        raise ModelExecutionError("OpenAI-compatible adapter requires base_url and model, or command and model")
     judgments = list(metadata.get("judgments") or TEXT_JUDGMENTS)
     unknown = [item for item in judgments if item not in KNOWN_JUDGMENTS]
     if unknown:
@@ -1681,6 +1724,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
         "base_url": base_url,
         "model": model,
+        "command": command,
         "api_key_env": str(metadata.get("api_key_env") or "APR_MODEL_API_KEY"),
         "allow_remote": bool(metadata.get("allow_remote")),
         "network_policy": str(metadata.get("network_policy") or "deny"),
