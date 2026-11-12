@@ -701,8 +701,11 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
         table = Table(rows, colWidths=[width])
         table.setStyle(TableStyle(commands))
         table.hAlign = "LEFT"
-        table.splitByRow = 0
-        return [table, Spacer(1, 6)]
+        # KeepTogether moves a card that fits on a page to the next page whole. A card taller
+        # than a page (long bilingual text) splits between and inside its rows instead of failing.
+        table.splitByRow = 1
+        table.splitInRow = 1
+        return [KeepTogether([table]), Spacer(1, 6)]
 
     def collect_lang_body(sequence: list[tuple[str, str, int]], start: int) -> tuple[list, int]:
         cell: list = []

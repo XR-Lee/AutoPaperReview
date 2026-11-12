@@ -114,7 +114,9 @@ TOOLS = (
         "Create a review project directory with review.toml, packaged prompts, and a manuscript. With adapter "
         "\"agent\" (the default) the review stage waits for your judgment drop. manuscript_path is a UTF-8 text "
         "file copied in as manuscript.txt; pdf_path is copied as manuscript.pdf for figure checks and the "
-        "annotated PDF. The directory must be new or empty.",
+        "annotated PDF. With pdf_path and no manuscript_path, manuscript.txt is extracted from the PDF. "
+        "main_only reviews the main paper only: it drops the appendix pages, writes one closed-book route, "
+        "and leaves out the artifacts check. The directory must be new or empty.",
         _schema(
             {
                 "path": {"type": "string", "description": "New project directory, inside a server root."},
@@ -123,6 +125,15 @@ TOOLS = (
                 "adapter": {"type": "string", "enum": ["agent", "deterministic"], "default": "agent"},
                 "manuscript_path": {"type": "string", "description": "UTF-8 text of the manuscript."},
                 "pdf_path": {"type": "string", "description": "Optional manuscript PDF."},
+                "main_only": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Review the main paper of pdf_path only. Leave manuscript_path out.",
+                },
+                "main_pages": {
+                    "type": "string",
+                    "description": "Pages of the main paper, such as 1-10, instead of detecting them.",
+                },
             },
             ["path"],
         ),
@@ -399,6 +410,12 @@ class Server:
         target = self._path(arguments["path"])
         manuscript = self._path(arguments["manuscript_path"]) if arguments.get("manuscript_path") else None
         pdf = self._path(arguments["pdf_path"]) if arguments.get("pdf_path") else None
+        main_pages = str(arguments.get("main_pages") or "").strip() or None
+        main_only = bool(arguments.get("main_only")) or main_pages is not None
+        if main_only and manuscript is not None:
+            raise ToolError("main_only reads the manuscript text from pdf_path; leave manuscript_path out")
+        if main_only and pdf is None:
+            raise ToolError("main_only needs pdf_path")
         if manuscript is not None:
             if not manuscript.is_file():
                 raise ToolError(f"manuscript_path does not exist: {manuscript}")
@@ -413,18 +430,23 @@ class Server:
                 if handle.read(5) != b"%PDF-":
                     raise ToolError(f"pdf_path is not a PDF: {pdf}")
         project_id = arguments.get("project_id") or _project_id_from(target.name)
+        # Without a text manuscript, init extracts manuscript.txt from the PDF itself.
+        extract_from_pdf = pdf is not None and manuscript is None
         result = write_project(
             target,
             project_id=project_id,
             title=arguments.get("title") or "New manuscript review",
             adapter=arguments.get("adapter") or "agent",
+            pdf=pdf if extract_from_pdf else None,
+            main_only=main_only,
+            main_pages=main_pages,
         )
         if manuscript is not None:
             shutil.copyfile(manuscript, target / "manuscript.txt")
-        if pdf is not None:
+        if pdf is not None and not extract_from_pdf:
             shutil.copyfile(pdf, target / "manuscript.pdf")
         result["manuscript"] = str(target / "manuscript.txt")
-        if manuscript is None:
+        if manuscript is None and pdf is None:
             result["note"] = "manuscript.txt is a placeholder; replace it with the manuscript text before run"
         result["next"] = "Call run with this config."
         return self._result(result)
