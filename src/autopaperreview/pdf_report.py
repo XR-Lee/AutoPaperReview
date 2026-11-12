@@ -391,7 +391,8 @@ def _markup(text: str, *, bold: bool = False) -> tuple[list[str], str]:
         )
         cursor = match.end()
     pieces.append(html.escape(stripped[cursor:]))
-    escaped = "".join(pieces)
+    # Line breaks inside one item (a multi-paragraph value) are kept as breaks.
+    escaped = "".join(pieces).replace("\n", "<br/>")
 
     def code_or_bold(match: re.Match[str]) -> str:
         if match.group(1) is not None:
@@ -495,7 +496,22 @@ def _tokens(markdown: str) -> list[tuple[str, str, int]]:
         elif stripped.startswith("## "):
             tokens.append(("h2", stripped[3:].strip(), indent))
         elif stripped.startswith("- "):
-            tokens.append(("bullet", stripped[2:].strip(), indent))
+            # Lines indented under the item (later lines and paragraphs of one value) belong to it.
+            item = [stripped[2:].strip()]
+            while index + 1 < len(lines):
+                ahead = index + 1
+                while ahead < len(lines) and not lines[ahead].strip():
+                    ahead += 1
+                if ahead >= len(lines):
+                    break
+                nxt = lines[ahead].rstrip()
+                nxt_indent = len(nxt) - len(nxt.lstrip())
+                if nxt_indent <= indent or nxt.lstrip().startswith(("- ", "#")):
+                    break
+                item.extend([""] * (ahead - index - 1))
+                item.append(nxt.strip())
+                index = ahead
+            tokens.append(("bullet", "\n".join(item), indent))
         elif _LANG_LINE_RE.match(stripped):
             tokens.append(("langline", stripped, indent))
         else:
