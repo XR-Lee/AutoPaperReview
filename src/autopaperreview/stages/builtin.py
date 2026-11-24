@@ -490,7 +490,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "6"
+    version = "7"
     params_model = PromptPacketParams
     reads_source = True
 
@@ -540,11 +540,14 @@ class PromptPacketStage(StageHandler):
         artifacts: list[Artifact] = []
         routes = self._routes(context, params)
         source_text = ""
+        source_truncated = False
         if params.include_source_text and any(route.manuscript_access for route in routes):
             try:
-                source_text = context.source_path.read_text(encoding="utf-8")[: params.max_source_chars]
+                manuscript = context.source_path.read_text(encoding="utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError("include_source_text currently supports text sources only") from exc
+            source_text = manuscript[: params.max_source_chars]
+            source_truncated = len(manuscript.rstrip()) > params.max_source_chars
         literature = _package_with(context, "retrieved_snapshots") or _package_with(
             context, "related_work_queries"
         )
@@ -572,6 +575,11 @@ class PromptPacketStage(StageHandler):
             ]
             if params.input_mode == "proposal":
                 body.append("- Input mode: `proposal`")
+            if route.manuscript_access and source_truncated:
+                body.append(
+                    f"- Source coverage: packet preparation omitted text after character {params.max_source_chars}. "
+                    "The omitted text may contain evidence relevant to this review."
+                )
             body.extend(
                 [
                 "",
@@ -1308,12 +1316,12 @@ class WorkspaceInspectStage(StageHandler):
 
 
 class IntegrityParams(ParamsModel):
-    pass
+    reporting_pointer: bool = False
 
 
 class IntegrityStage(StageHandler):
     type_name = "integrity"
-    version = "3"
+    version = "4"
     params_model = IntegrityParams
     reads_source = True
 
@@ -1340,6 +1348,7 @@ class IntegrityStage(StageHandler):
             inventory=inventory,
             evidence=evidence,
             workspace=context.workspace,
+            reporting_pointer=IntegrityParams.model_validate(context.stage.params).reporting_pointer,
         )
         package = ReviewPackage(
             project_id=context.loaded_config.config.project.id,
