@@ -1558,9 +1558,15 @@ class ModelSession:
                     if isinstance(raw_tokens, int):
                         self.usage_totals[key] += raw_tokens
         try:
-            return _message_text(payload)
+            text = _message_text(payload)
         except ValueError as exc:
             return str(exc)
+        if self.command and payload["choices"][0].get("finish_reason") == "stop":
+            from .command_transport import recover_restarted_object
+
+            # Both fresh and replayed CLI envelopes pass through this point.
+            return recover_restarted_object(text)
+        return text
 
     def _record_exchange(
         self,

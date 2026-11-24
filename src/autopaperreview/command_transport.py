@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .cvpr_handoff import cli_flags, scrubbed_environ
-from .cvpr_json import JsonOutputError, parse_json_output
+from .cvpr_json import JsonOutputError, parse_json_output, reject_truncated_output
 
 # The chat request is built as usual. This URL only labels it; nothing opens it.
 COMMAND_REQUEST_URL = "http://command.invalid/chat/completions"
@@ -141,6 +141,43 @@ def recover_json(text: str) -> str:
     except JsonOutputError:
         return text
     return json.dumps(value, ensure_ascii=False)
+
+
+def recover_restarted_object(text: str) -> str:
+    """Recover a final answer when a malformed intervening copy hid its opening brace."""
+    answer = text.strip()
+    if not answer.startswith("{") or not answer.endswith("}"):
+        return text
+    decoder = json.JSONDecoder()
+    try:
+        first, end = decoder.raw_decode(answer)
+    except json.JSONDecodeError:
+        return text
+    tail = answer[end:].lstrip()
+    if not tail.startswith("{"):
+        return text
+    try:
+        decoder.raw_decode(tail)
+    except json.JSONDecodeError as exc:
+        # A restart can land at a missing comma, or its opening quote can
+        # terminate a string in the abandoned object. Try just that boundary.
+        if exc.msg != "Expecting ',' delimiter" or exc.pos == len(tail):
+            return text
+        start = tail.rfind("{", 0, exc.pos + 1)
+        if start <= 0 or tail[start + 1 : exc.pos].strip() not in ("", '"'):
+            return text
+    else:
+        return text
+    candidate = tail[start:]
+    try:
+        final = json.loads(candidate)
+        if final.keys() != first.keys():
+            return text
+        reject_truncated_output(answer)
+        reject_truncated_output(candidate)
+    except (json.JSONDecodeError, JsonOutputError):
+        return text
+    return candidate
 
 
 def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeout: float) -> tuple[str, float]:
