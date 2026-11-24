@@ -43,6 +43,13 @@ _NON_RESULT = re.compile(
 )
 _FIXTURE_ARXIV = re.compile(r"^0+\.0+$")
 _SENTENCE = re.compile(r"(?<=[.!?。？！])\s+")
+_REPORTING_TERM = re.compile(
+    r"\b(?:confidence\s+intervals?|standard\s+(?:errors?|deviations?)|error\s+bars?|"
+    r"(?:random|repeated)\s+seeds?|independent\s+runs?|single\s+run)\b",
+    re.IGNORECASE,
+)
+_BIBLIOGRAPHY = re.compile(r"(?im)^[ \t#]*(?:\d+\.?[ \t]+)?(?:references|bibliography)[ \t]*\r?$")
+_APPENDIX = re.compile(r"(?im)^[ \t#]*(?:appendix|appendices|supplementary material)\b[^\n]{0,100}$")
 
 
 def _sentences(text: str) -> list[str]:
@@ -70,6 +77,57 @@ def reporting_is_present(text: str, term: str) -> bool:
 
 def _localized(text: str) -> LocalizedText:
     return LocalizedText(primary=text, language="en")
+
+
+def _reporting_pointer(text: str) -> IntegrityRecord:
+    """Point to a manuscript passage. A keyword cannot determine scientific adequacy."""
+    references = _BIBLIOGRAPHY.search(text)
+    section_start = 0
+    end = references.start() if references else len(text)
+    match = _REPORTING_TERM.search(text, 0, end)
+    if match is None and references:
+        appendix = _APPENDIX.search(text, references.end())
+        if appendix:
+            section_start = appendix.start()
+            end = len(text)
+            match = _REPORTING_TERM.search(text, section_start)
+    if match is None:
+        return IntegrityRecord(
+            id="INT-REPRO-reporting",
+            kind=IntegrityKind.reproducibility_attestation,
+            verdict=IntegrityVerdict.unclear,
+            subject="Uncertainty reporting",
+            notes=LocalizedText(
+                primary="The automatic text check found no passage to assess.",
+                language="en",
+                translations={"zh-Hans": "自动文本检查未找到可核查的段落。"},
+            ),
+        )
+
+    # Save original character offsets. Bound the context even for unwrapped text.
+    start = max(section_start, match.start() - 100)
+    paragraph_start = text.rfind("\n\n", start, match.start())
+    if paragraph_start >= 0:
+        start = paragraph_start + 2
+    end = min(end, match.end() + 100)
+    paragraph_break = text.find("\n\n", match.end(), end)
+    if paragraph_break >= 0:
+        end = paragraph_break
+    excerpt = text[start:end]
+    term = " ".join(match.group().split())
+    return IntegrityRecord(
+        id="INT-REPRO-reporting",
+        kind=IntegrityKind.reproducibility_attestation,
+        verdict=IntegrityVerdict.unclear,
+        subject=f"“{term}” · manuscript[{start}:{end}]",
+        observed=excerpt,
+        notes=LocalizedText(
+            primary="For an empirical claim that depends on variation, check which independent units or repeated runs this passage describes.",
+            language="en",
+            translations={"zh-Hans": "若实证结论依赖样本或运行间的波动，请核对该处涉及哪些独立单位或重复运行。"},
+        ),
+        metadata={"source_start": start, "source_end": end},
+    )
 
 
 def _manuscript_accuracy(text: str) -> tuple[float | None, bool]:
@@ -161,6 +219,7 @@ def build_integrity_records(
     inventory: list[Artifact],
     evidence: list[EvidenceRecord],
     workspace: Path,
+    reporting_pointer: bool = False,
 ) -> list[IntegrityRecord]:
     evidence_ids = {item.id for item in evidence}
     records: list[IntegrityRecord] = []
@@ -251,6 +310,10 @@ def build_integrity_records(
                 metadata={"note_code": "no-results"},
             )
         )
+
+    if reporting_pointer:
+        records.append(_reporting_pointer(manuscript_text))
+        return records
 
     has_ci = reporting_is_present(manuscript_text, "confidence interval") or reporting_is_present(
         manuscript_text, "confidence intervals"
