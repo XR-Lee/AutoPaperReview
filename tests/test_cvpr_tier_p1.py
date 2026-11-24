@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from autopaperreview.cli import main
@@ -487,57 +489,66 @@ class RunLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             decoy_path = root / "decoys.json"
-            code = main(
-                [
-                    "calibrate-eval",
-                    "cvpr-tier",
-                    "decoys",
-                    "--output",
-                    str(decoy_path),
-                    "--count",
-                    "2",
-                    "--seed",
-                    "8",
-                ]
-            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(
+                    [
+                        "calibrate-eval",
+                        "cvpr-tier",
+                        "decoys",
+                        "--output",
+                        str(decoy_path),
+                        "--count",
+                        "2",
+                        "--seed",
+                        "8",
+                    ]
+                )
             self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["papers"], 2)
             payload = json.loads(decoy_path.read_text(encoding="utf-8"))
             self.assertEqual(len(payload["papers"]), 2)
             cache = root / "cache"
             cache.mkdir()
-            code = main(
-                [
-                    "calibrate-eval",
-                    "cvpr-tier",
-                    "round",
-                    "--cache",
-                    str(cache),
-                    "--round",
-                    "r9",
-                    "--model-id",
-                    "opus-local",
-                    "--notes",
-                    "synthetic candidate",
-                ]
-            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(
+                    [
+                        "calibrate-eval",
+                        "cvpr-tier",
+                        "round",
+                        "--cache",
+                        str(cache),
+                        "--round",
+                        "r9",
+                        "--model-id",
+                        "opus-local",
+                        "--notes",
+                        "synthetic candidate",
+                    ]
+                )
             self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["round"], "r9")
             self.assertEqual(load_rounds(cache)[0]["notes"], "synthetic candidate")
             append_round(cache, {"round": "r9", "model_id": "astra-local", "notes": "second"})
             self.assertEqual(len(load_rounds(cache)), 2)
-            code = main(
-                [
-                    "calibrate-eval",
-                    "cvpr-tier",
-                    "run",
-                    "--cache",
-                    str(cache),
-                    "--model-id",
-                    "opus-local",
-                    "--backend",
-                    "adapter",
-                ]
-            )
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = main(
+                    [
+                        "calibrate-eval",
+                        "cvpr-tier",
+                        "run",
+                        "--cache",
+                        str(cache),
+                        "--model-id",
+                        "opus-local",
+                        "--backend",
+                        "adapter",
+                    ]
+                )
             self.assertEqual(code, 2)
+            self.assertIn("local CLI", stderr.getvalue())
         with self.assertRaises(CvprTierError) as caught:
             run_model(Path("unused-cache"), model_id="opus-local", backend="adapter")
         self.assertIn("local CLI", str(caught.exception))

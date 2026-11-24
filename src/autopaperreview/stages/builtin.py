@@ -37,7 +37,7 @@ from ..figures import caption_inventory, sibling_pdf
 from ..hashing import digest_excerpt, hash_json, sha256_file
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
-from ..ledger import build_agenda, build_ledger_claims
+from ..ledger import build_agenda, build_ledger_claims, resolve_model_ledger_ids
 from ..literature import (
     generate_related_work_queries,
     load_retriever,
@@ -657,7 +657,7 @@ def _prefer_ledger_claim(left, right):
 
 class ConsensusStage(StageHandler):
     type_name = "consensus"
-    version = "2"
+    version = "3.1"
     params_model = ConsensusParams
 
     def _packages(self, context: StageContext) -> list[ReviewPackage]:
@@ -683,6 +683,7 @@ class ConsensusStage(StageHandler):
                 )
             if package.manuscript.sha256 != context.manifest.source.sha256:
                 raise ValueError("consensus input manuscript hash does not match the current source")
+        packages = resolve_model_ledger_ids(packages)
         groups: dict[str, list[ReviewIssue]] = {}
         for package in packages:
             for issue in package.issues:
@@ -737,6 +738,7 @@ class ConsensusStage(StageHandler):
         snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
         venues_by_id: dict[str, VenueConclusion] = {}
         ledger_by_id: dict[str, LedgerClaim] = {}
+        listed_evidence: dict[str, list[str]] = {}
         exemption_by_id = {}
         visual_by_id = {}
         format_by_id = {}
@@ -744,6 +746,9 @@ class ConsensusStage(StageHandler):
         integrity_by_id: dict[str, IntegrityRecord] = {}
         novelty_by_id: dict[str, NoveltyAssessment] = {}
         for package in packages:
+            for claim in package.ledger_claims:
+                if claim.metadata.get("kind") == "listed_contribution":
+                    listed_evidence.setdefault(claim.id, []).extend(claim.in_paper_evidence_ids)
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
                 ("source", package.sources, sources_by_id),
@@ -824,6 +829,13 @@ class ConsensusStage(StageHandler):
             raise ValueError("conflicting related_work judgments")
         if related_payloads:
             metadata["related_work"] = related_payloads[0]
+        for claim_id, evidence_ids in listed_evidence.items():
+            claim = ledger_by_id[claim_id]
+            if claim.metadata.get("kind") == "listed_contribution":
+                claim = claim.model_copy(update={
+                    "in_paper_evidence_ids": list(dict.fromkeys([*claim.in_paper_evidence_ids, *evidence_ids]))
+                })
+                ledger_by_id[claim_id] = claim
         output = ReviewPackage(
             project_id=first.project_id,
             manuscript=context.manifest.source,
@@ -1473,6 +1485,8 @@ class ExecuteReviewParams(ParamsModel):
     holistic_samples: int = Field(default=DEFAULT_HOLISTIC_SAMPLES, ge=1, le=8)
     holistic_temperature: float = Field(default=DEFAULT_HOLISTIC_TEMPERATURE, ge=0, le=2)
     holistic_mode: str = DEFAULT_HOLISTIC_MODE
+    grounded_weaknesses: bool = False
+    contribution_actions: bool = False
     verify_excerpts: bool = False
 
     @field_validator("holistic_mode")
@@ -1534,7 +1548,10 @@ class ExecuteReviewStage(StageHandler):
                 packets[path.name] = sha256_file(path)
         if packets:
             material["packet_hashes"] = packets
-        material["judgment_prompt_sha256"] = judgment_prompt_fingerprint()
+        material["judgment_prompt_sha256"] = judgment_prompt_fingerprint(
+            grounded_weaknesses=params.grounded_weaknesses,
+            contribution_actions=params.contribution_actions,
+        )
         return material
 
     def packet_files(self, context: StageContext) -> list[Path]:
@@ -1594,6 +1611,8 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
+                "grounded_weaknesses": params.grounded_weaknesses,
+                "contribution_actions": params.contribution_actions,
                 "verify_excerpts": params.verify_excerpts,
                 "reuse_prior_exchanges": not context.force,
                 "stage_signature": (
