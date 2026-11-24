@@ -1369,7 +1369,7 @@ class IntegrityParams(ParamsModel):
 
 class IntegrityStage(StageHandler):
     type_name = "integrity"
-    version = "2"
+    version = "3"
     params_model = IntegrityParams
     reads_source = True
 
