@@ -1409,6 +1409,50 @@ class DnsClassificationTests(unittest.TestCase):
 
 
 class ExcerptMatchTests(unittest.TestCase):
+    def test_partial_numbers_do_not_supply_author_evidence(self) -> None:
+        for excerpt, source in (
+            ("7 baskets", "There were 17 baskets."),
+            ("5 units", "The deviation was −5 units."),
+            ("5 units", "The deviation was .5 units."),
+            (".5 units", "The deviation was 3.5 units."),
+            ("reading of 3", "A reading of 3.75 was recorded."),
+            ("reading of 3.", "A reading of 3.75 was recorded."),
+            ("reading of 4", "A reading of 4e-2 was recorded."),
+        ):
+            with self.subTest(source=source):
+                self.assertIsNone(locate_excerpt(excerpt, manuscript=source, manuscript_sha="a" * 64, snapshots=[]))
+        source = "We set aside 17 baskets and inspected 7 baskets."
+        anchor = locate_excerpt("7 baskets", manuscript=source, manuscript_sha="a" * 64, snapshots=[])
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.start, source.rfind("7 baskets"))
+
+        for literal in (".5", "−.5", "4e-2", "1,200", "3.75"):
+            with self.subTest(literal=literal):
+                source = f"The marker measured {literal} units."
+                anchor = locate_excerpt(literal, manuscript=source, manuscript_sha="a" * 64, snapshots=[])
+                self.assertIsNotNone(anchor)
+                self.assertEqual(source[anchor.start:anchor.end], literal)
+
+    def test_fuzzy_evidence_keeps_values_comparisons_and_negation(self) -> None:
+        for written, quoted in (
+            ("0.125", "0.152"),
+            ("< 18", "> 18"),
+            ("did not move", "did move"),
+            ("−8", "8"),
+        ):
+            with self.subTest(quoted=quoted):
+                template = "The entry in the register was {} for every afternoon wagon."
+                self.assertIsNone(locate_excerpt(
+                    template.format(quoted), manuscript=template.format(written),
+                    manuscript_sha="a" * 64, snapshots=[],
+                ))
+
+    def test_word_wrap_does_not_erase_mathematical_minus_or_inline_dashes(self) -> None:
+        for source in ("cost − offset", "cost −\noffset", "cost- offset", "cost-\n\noffset"):
+            with self.subTest(source=source):
+                self.assertIsNone(locate_excerpt("costoffset", manuscript=source, manuscript_sha="a" * 64, snapshots=[]))
+                self.assertIsNone(locate_excerpt("cost offset", manuscript=source, manuscript_sha="a" * 64, snapshots=[]))
+
     def test_line_break_hyphen_ligature_and_fuzzy_window_resolve(self) -> None:
         digest = "a" * 64
         hyphenated = "The experi-\nment uses eight images from one specimen."

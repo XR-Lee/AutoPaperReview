@@ -51,6 +51,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -961,6 +962,12 @@ def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes
 EXCERPT_FUZZY_THRESHOLD = 0.90
 EXCERPT_FUZZY_MIN_CHARS = 24
 
+_NUMBER = re.compile(r"[+−-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:[eE][+−-]?\d+)?")
+_EVIDENCE_LITERALS = re.compile(
+    _NUMBER.pattern + r"|<=|>=|!=|[<>=≤≥≠±%]|(?<!\w)[+-](?!\w)|\b(?:no|not|never|without)\b|n't\b",
+    re.IGNORECASE,
+)
+
 _DASH_TRANSLATION = str.maketrans(
     {
         "\u2010": "-",
@@ -1005,11 +1012,12 @@ def _normalize_with_origins(text: str) -> tuple[str, list[int]]:
     index = 0
     while index < len(raw):
         char = raw[index]
-        if char == "-" and index + 1 < len(raw):
+        if text[index] in {"-", "\u2010"} and index > 0 and raw[index - 1].isalpha():
             cursor = index + 1
             while cursor < len(raw) and raw[cursor].isspace():
                 cursor += 1
-            if cursor > index + 1 and cursor < len(raw) and raw[cursor].isalpha():
+            gap = raw[index + 1:cursor]
+            if re.fullmatch(r"[ \t]*(?:\r\n|[\n\r\f\u2028])[ \t]*", gap) and cursor < len(raw) and raw[cursor].isalpha():
                 index = cursor
                 continue
         if char == "\u00ad":
@@ -1056,6 +1064,7 @@ def _fuzzy_normalized_span(
         words.append((part, start, start + len(part)))
         cursor = start + len(part)
     width = len(needle_words)
+    literals = _EVIDENCE_LITERALS.findall(needle.casefold())
     best: tuple[float, int, int] | None = None
     for size in range(max(4, width - 1), width + 2):
         if size > len(words):
@@ -1064,6 +1073,9 @@ def _fuzzy_normalized_span(
             window = " ".join(word for word, _start, _end in words[offset : offset + size])
             ratio = SequenceMatcher(None, needle, window).ratio()
             if ratio < EXCERPT_FUZZY_THRESHOLD:
+                continue
+            # A close spelling match cannot establish a changed quantity or negation.
+            if _EVIDENCE_LITERALS.findall(window.casefold()) != literals:
                 continue
             span = (words[offset][1], words[offset + size - 1][2])
             if best is None or ratio > best[0] or (ratio == best[0] and span[0] < best[1]):
@@ -1076,15 +1088,38 @@ def _fuzzy_normalized_span(
     return origins[start], origins[end - 1] + 1
 
 
+def _literal_excerpt_start(excerpt: str, source: str) -> int:
+    if not excerpt:
+        return -1
+    start = source.find(excerpt)
+    if start < 0:
+        return start
+    # Only boundaries touching a digit or numeric punctuation could split a
+    # value. Ordinary quotations take the existing substring fast path.
+    if not (re.match(r"[+−-]?\.?\d", excerpt) or re.search(r"\d[.,]?$", excerpt)):
+        return start
+    spans = [m.span() for m in _NUMBER.finditer(source)]
+
+    def splits_value(offset: int) -> bool:
+        index = bisect_left(spans, (offset,)) - 1
+        return index >= 0 and offset < spans[index][1]
+
+    while start >= 0:
+        if not splits_value(start) and not splits_value(start + len(excerpt)):
+            return start
+        start = source.find(excerpt, start + 1)
+    return -1
+
+
 def _resolve_span(excerpt: str, source: str) -> tuple[int, int, bool] | None:
     """Return source offsets and whether the excerpt was an exact substring."""
-    if excerpt in source:
-        start = source.find(excerpt)
+    start = _literal_excerpt_start(excerpt, source)
+    if start >= 0:
         return start, start + len(excerpt), True
     needle, _needle_origins = _normalize_with_origins(excerpt.strip())
     normalized, origins = _normalize_with_origins(source)
-    if needle and needle in normalized and origins:
-        start = normalized.find(needle)
+    start = _literal_excerpt_start(needle, normalized) if needle and origins else -1
+    if start >= 0:
         end = start + len(needle)
         return origins[start], origins[end - 1] + 1, False
     fuzzy = _fuzzy_normalized_span(needle, normalized, origins)
@@ -2410,7 +2445,7 @@ def judgment_prompt_fingerprint(
             rebuttal_task_text(),
             forecast_task_text(grounded_weaknesses=grounded_weaknesses),
             *([_system_prompt("contributions-action")] if contribution_actions else []),
-            "excerpt-normalize-fuzzy-v1",
+            "excerpt-normalize-fuzzy-v2",
             "fatal-verify-v1",
             "venue-mean-k3-v1",
             "audited-k1-v1",
