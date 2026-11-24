@@ -58,7 +58,10 @@ def indexed(rows, key):
     return by_key
 
 
-def prepare(dataset: Path, arms: dict[str, Path], out: Path, seed: int, first=1, last=None):
+def prepare(dataset: Path, arms: dict[str, Path], out: Path, seed: int, first=1, last=None,
+            *, review_word_limit: int | None = None):
+    if review_word_limit is not None and (type(review_word_limit) is not int or review_word_limit < 1):
+        raise ValueError("review_word_limit must be a positive integer")
     manifest_path = dataset / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest["format"] != "feedback-quality-v1":
@@ -96,6 +99,12 @@ def prepare(dataset: Path, arms: dict[str, Path], out: Path, seed: int, first=1,
                 review = row["review"]
                 if not isinstance(review, str) or not review.strip():
                     raise ValueError(f"Empty review for {item}; use an explicit error for failed output")
+                if review_word_limit is not None:
+                    words = list(re.finditer(r"\S+", review))
+                    identity["submitted_words"] = len(words)
+                    identity["submitted_review_sha256"] = hashlib.sha256(review.encode("utf-8")).hexdigest()
+                    if len(words) > review_word_limit:
+                        review = review[:words[review_word_limit - 1].end()]
                 packet = {"manuscript": body.decode(), "review": review, "target": case["diagnosis"],
                           "decisive_evidence": case["evidence"], "acceptable_repair": case["repair"]}
                 material.append((identity, packet))
@@ -103,8 +112,16 @@ def prepare(dataset: Path, arms: dict[str, Path], out: Path, seed: int, first=1,
     packets = []
     keys = []
     labels = []
+    # A full review and a shorter prefix may support different judgments even
+    # when both contain the same quoted witness. Bind limited labels to the
+    # actual blinded reading material, without encoding any arm identifiers.
+    packet_tag = ""
+    if review_word_limit is not None:
+        visible = [packet for _, packet in material]
+        signature = json.dumps([review_word_limit, visible], ensure_ascii=False, sort_keys=True)
+        packet_tag = "-" + hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
     for number, (identity, packet) in enumerate(material, 1):
-        grade_id = f"G{number:04d}"
+        grade_id = f"G{number:04d}{packet_tag}"
         packets.append({"grade_id": grade_id, **packet})
         keys.append({"grade_id": grade_id, **identity})
         labels.append({"grade_id": grade_id, "target_raised": None,
@@ -116,10 +133,15 @@ def prepare(dataset: Path, arms: dict[str, Path], out: Path, seed: int, first=1,
             raise ValueError(f"{out / name} already exists; choose a fresh packet directory")
     write_jsonl(out / "packet.jsonl", packets)
     write_jsonl(out / "labels.jsonl", labels)
-    (out / "rubric.txt").write_text(RUBRIC + "\n", encoding="utf-8")
+    rubric = RUBRIC
+    if review_word_limit is not None:
+        rubric += " Reviews may end mid-sentence at the reading limit. Grade only the visible words."
+    (out / "rubric.txt").write_text(rubric + "\n", encoding="utf-8")
     key = {"format": "feedback-grading-v1", "packet_sha256": digest(out / "packet.jsonl"),
            "manifest_sha256": digest(manifest_path), "seed": seed, "arms": list(arms),
            "scenarios": [case["scenario"] for case in cases], "missing": missing, "reviews": keys}
+    if review_word_limit is not None:
+        key["review_word_limit"] = review_word_limit
     (out / "key.json").write_text(json.dumps(key, indent=2) + "\n", encoding="utf-8")
 
 
@@ -237,7 +259,7 @@ def summarize(packet_dir: Path, labels_path: Path, baseline: str | None):
     rates = {arm: {name: rate(values) for name, values in columns.items()} for arm, columns in vectors.items()}
     deltas = {arm: {name: paired_delta(vectors[baseline][name], vectors[arm][name]) for name in metrics}
               for arm in arms if arm != baseline}
-    return {
+    result = {
         "format": "feedback-scores-v1", "manifest_sha256": key["manifest_sha256"],
         "packet_sha256": key["packet_sha256"], "labels_sha256": digest(labels_path),
         "n_scenarios": len(scenarios), "variants_per_scenario": 2, "baseline": baseline,
@@ -247,3 +269,11 @@ def summarize(packet_dir: Path, labels_path: Path, baseline: str | None):
         "rates": rates, "paired_difference_from_baseline": deltas, "missing": key["missing"],
         "scenario_measures": {arm: dict(zip(scenarios, arm_rows)) for arm, arm_rows in rows.items()},
     }
+    if "review_word_limit" in key:
+        limit = key["review_word_limit"]
+        result["review_word_limit"] = limit
+        result["truncated_reviews_by_arm"] = {
+            arm: sum(row["submitted_words"] > limit for row in identities.values() if row["arm"] == arm)
+            for arm in arms
+        }
+    return result

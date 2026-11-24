@@ -22,6 +22,8 @@ python3 -m benchmarks.feedback_quality packet --dataset "$WORK/dataset" \
 
 Give the adjudicator `packet.jsonl`, `rubric.txt` and the `labels.jsonl` template. Keep `key.json` with the experiment operator. Every shuffled packet has the vignette, review and case-specific answer key. Adjudicators can see the evidence needed to check the allegation, while arm names, variant labels and item identifiers are withheld. Stylistic differences between review arms may remain recognizable. The assessor should record independent judgments before unblinding.
 
+To measure what an author can read within a fixed word budget, add `--review-word-limit N` to the packet command. Choose the budget before grading. The adjudicator sees the original formatting through the last included word and grades that prefix independently. Whitespace separates words, so list markers and quotations also use part of the budget. Limited packets use grading IDs specific to their reading budget and blinded texts. The private key records each complete review's word count and digest. The score file records the limit and how many reviews it shortened in each arm.
+
 In the template, mark `target_raised`, `localized` and `actionable` as booleans. For a target allegation, put the decisive review excerpts in `support`. If several comments raise the same mechanism, choose one comment that satisfies the most criteria, preferring a located comment when tied. A lone section number earns no location credit. A recommendation to add more experiments earns no repair credit unless it specifies how to resolve this target defect. On a repaired input, a positive grade for raising the target records a false alarm. Acknowledging the existing safeguard does not raise the target.
 
 ```sh
