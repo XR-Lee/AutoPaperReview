@@ -10,9 +10,9 @@ if TYPE_CHECKING:
     from .model_exec import ForecastJudgment
 
 
-GROUNDED_WEAKNESSES = """For each reviewer's weaknesses, trace a consequential claim to the method, comparison, or result that would establish it. Check the rest of the supplied manuscript for a qualification, control, or other evidence that resolves the concern. Keep up to two distinct concerns per reviewer. If none survives that check, give an empty list.
+GROUNDED_WEAKNESSES = """Keep the original diagnosis, then add one short fix. Each reviewer writes up to two weaknesses. The first sentence of every weakness is only that diagnosis: the specific flaw, with no remedy and no quotation in the sentence. Keep a second distinct concern when the reviewer has one. Do not drop it to lengthen the first, and do not drop a concern because the manuscript mentions a partial mitigation. State the gap that remains.
 
-Write each weakness as a short comment addressed to the authors. Identify the passage by its actual heading, table, or other printed label when available. State the specific gap and which inference it affects. Ask for the smallest change or check that would resolve it, or suggest narrowing the claim. If the text leaves a detail unclear, say what is unclear. End the same string with <quote>one short distinctive passage copied exactly from the manuscript</quote> so the author can find the evidence. Use a continuous excerpt, including the relevant numbers or qualifiers, with no ellipses. Each weakness is still a single JSON string."""
+After both diagnoses are written, add one short fix to the last weakness only. That sentence asks for the smallest change, check, or narrowed claim that would resolve the gap, and it names the heading, table, or other printed label when one is available. End that same last string with <quote>one short distinctive passage copied exactly from the manuscript, at most 20 words, no ellipses</quote>. Earlier weaknesses are the diagnosis alone: no fix and no quote. Each weakness is still a single JSON string."""
 
 
 def locate_weakness(weakness: str, manuscript: str, shown_source: str) -> tuple[str, int, int] | None:
@@ -34,23 +34,43 @@ def locate_weakness(weakness: str, manuscript: str, shown_source: str) -> tuple[
     return " ".join(comment.split()), match.start(), match.end()
 
 
+def _quoted(weakness: str) -> bool:
+    return "<quote>" in weakness or "</quote>" in weakness
+
+
 def write_forecast_feedback(
     path: Path, panels: list["ForecastJudgment"], manuscript: str, shown_source: str
 ) -> list[str]:
-    """Write located comments in panel order; return the ids of unlocated comments."""
+    """Write diagnoses and located quotes; return the ids of quotes that do not resolve.
+
+    A weakness with no quote tags is kept as a diagnosis. A quote is a fact check:
+    it is kept only when it is one continuous passage visible to the reviewer and
+    unique in the manuscript. Assessing whether the quote supports the criticism
+    stays with the reader.
+    """
     lines = ["Forecast review feedback", ""]
     dropped = []
     total = 0
+    located_count = 0
     for panel_no, panel in enumerate(panels, 1):
         for seat_no, review in enumerate(panel.reviews, 1):
             role = normalize_forecast_seat(review.reviewer) or f"reviewer {seat_no}"
             for point_no, weakness in enumerate(review.weaknesses, 1):
                 total += 1
+                item_id = f"P{panel_no}-R{seat_no}-W{point_no}"
+                if not _quoted(weakness):
+                    comment = " ".join(weakness.split())
+                    if not comment:
+                        dropped.append(item_id)
+                        continue
+                    lines.extend([f"Panel {panel_no}, {role} (diagnosis)", comment, ""])
+                    continue
                 located = locate_weakness(weakness, manuscript, shown_source)
                 if located is None:
-                    dropped.append(f"P{panel_no}-R{seat_no}-W{point_no}")
+                    dropped.append(item_id)
                     continue
                 comment, start, end = located
+                located_count += 1
                 first_line = manuscript.count("\n", 0, start) + 1
                 last_line = first_line + manuscript.count("\n", start, end)
                 location = f"line {first_line}" if first_line == last_line else f"lines {first_line}–{last_line}"
@@ -61,6 +81,6 @@ def write_forecast_feedback(
                     f"Manuscript: {excerpt}",
                     "",
                 ])
-    lines.append(f"Located {total - len(dropped)} of {total} submitted comments in the manuscript.")
+    lines.append(f"Located {located_count} of {total} submitted comments in the manuscript.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return dropped

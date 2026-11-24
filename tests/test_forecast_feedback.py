@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from autopaperreview.cli import build_parser
-from autopaperreview.forecast_feedback import GROUNDED_WEAKNESSES, locate_weakness
-from autopaperreview.model_exec import OpenAICompatibleAdapter
+from autopaperreview.forecast_feedback import GROUNDED_WEAKNESSES, locate_weakness, write_forecast_feedback
+from autopaperreview.model_exec import ForecastJudgment, OpenAICompatibleAdapter
 from autopaperreview.public_calibration import MODEL_ADAPTER
 from tests.test_model_exec import _chat, _forecast_content
 
@@ -27,6 +27,38 @@ class ForecastFeedbackTests(unittest.TestCase):
             with self.subTest(excerpt=excerpt):
                 self.assertIsNone(locate_weakness(f"{comment} <quote>{excerpt}</quote>", source, shown))
         self.assertIsNone(locate_weakness(comment, source, shown))
+
+    def test_a_diagnosis_without_a_quote_is_kept_and_a_bad_quote_is_not(self):
+        source = "Setup.\n18 clay markers are counted.\n"
+        shown = source
+        payload = json.loads(_forecast_content(
+            ratings=(5, 5, 5),
+            probabilities=([0, 0, 1, 0, 0, 0],) * 3,
+            predicted_mean=5,
+            rating=3,
+        ))
+        payload["reviews"][0]["weaknesses"] = [
+            "The count is not defined.",
+            "Name the counting rule. <quote>18 clay markers are counted</quote>",
+        ]
+        payload["reviews"][1]["weaknesses"] = [
+            "This quote is not in the manuscript. <quote>a second tray is red</quote>",
+        ]
+        payload["reviews"][2]["weaknesses"] = ["The batch is a single tray."]
+        panel = ForecastJudgment.model_validate(payload)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "forecast-feedback.txt"
+            dropped = write_forecast_feedback(path, [panel], source, shown)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("The count is not defined.", text)
+        self.assertIn("The batch is a single tray.", text)
+        self.assertIn("Name the counting rule.", text)
+        self.assertIn("18 clay markers are counted", text)
+        self.assertNotIn("a second tray is red", text)
+        self.assertEqual(dropped, ["P1-R2-W1"])
+        self.assertIn("Located 1 of 4 submitted comments in the manuscript.", text)
+        self.assertIn("last weakness only", GROUNDED_WEAKNESSES)
+        self.assertNotIn("End the same string with <quote>one short distinctive passage copied exactly from the manuscript</quote> so the author", GROUNDED_WEAKNESSES)
 
     def test_cli_publishes_located_comments_in_one_call_and_keeps_text_out_of_scores(self):
         calls = []
