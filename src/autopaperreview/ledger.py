@@ -239,3 +239,115 @@ def build_agenda(claims: list[LedgerClaim]) -> list[AgendaQuestion]:
             )
         )
     return questions
+
+
+def _rewrite_ledger_references(package: ReviewPackage, definitions: dict[str, dict[str, str]]) -> ReviewPackage:
+    """Rewrite typed references in a package, leaving free-form metadata and text untouched."""
+    data = package.model_dump()
+    claim_ids = definitions["ledger_claims"]
+    evidence_ids = definitions["evidence"]
+    references = {
+        "claim_ids": claim_ids,
+        "in_paper_evidence_ids": evidence_ids,
+        "evidence_ids": evidence_ids,
+        "excluded_evidence_ids": evidence_ids,
+        "decision_basis_evidence_ids": evidence_ids,
+    }
+    for field, records in data.items():
+        if field == "overall_score" and records:
+            records = [records]
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if field in definitions and record["id"] in definitions[field]:
+                old = record["id"]
+                record["id"] = definitions[field][old]
+                record["metadata"]["consensus_model_local_id"] = old
+            if field == "novelty_assessments":
+                record["claim_id"] = claim_ids.get(record["claim_id"], record["claim_id"])
+            for key, mapping in references.items():
+                if key in record:
+                    record[key] = [mapping.get(value, value) for value in record[key]]
+    return ReviewPackage.model_validate(data)
+
+
+def resolve_model_ledger_ids(packages: list[ReviewPackage]) -> list[ReviewPackage]:
+    """Give colliding, independently produced model ledger records distinct consensus IDs."""
+    fields = ("ledger_claims", "evidence", "agenda")
+    occupied = {field: set() for field in fields}
+    prior = {field: {} for field in fields}
+    extracted_claims = set()
+    extracted_evidence = set()
+    extracted_agenda = set()
+    listed_contributions = set()
+    for package in packages:
+        for field in fields:
+            for row in getattr(package, field):
+                occupied[field].add(row.id)
+                local = row.metadata.get("consensus_model_local_id")
+                if isinstance(local, str) and prior[field].setdefault(local, row.id) != row.id:
+                    raise ValueError(f"inconsistent prior consensus IDs for {field} record {local}")
+        manuscript_ids = {row.id for row in package.evidence if row.source_id == "S-manuscript"}
+        for claim in package.ledger_claims:
+            bound = manuscript_ids.intersection(claim.in_paper_evidence_ids)
+            if bound and not claim.metadata.get("judgment"):
+                extracted_claims.add(claim.id)
+                extracted_evidence.update(bound)
+                if claim.metadata.get("kind") == "listed_contribution":
+                    listed_contributions.add(claim.id)
+        for question in package.agenda:
+            if not question.metadata.get("judgment") and (
+                "source_claim" in question.metadata or "contribution_id" in question.metadata
+                or question.metadata.get("fallback")
+            ):
+                extracted_agenda.add(question.id)
+
+    collisions = []
+    for package in packages:
+        claims = [
+            row for row in package.ledger_claims if row.metadata.get("judgment") in {"contributions", "ledger"}
+        ]
+        bound = {eid for claim in claims for eid in claim.in_paper_evidence_ids}
+        collisions.append({
+            # The model's contribution audit intentionally fills the extracted numbered contribution.
+            "ledger_claims": {
+                row.id for row in claims if row.id in prior["ledger_claims"] or (
+                    row.id in extracted_claims and not (
+                        row.metadata.get("judgment") == "contributions" and row.id in listed_contributions
+                    )
+                )
+            },
+            "evidence": {
+                row.id for row in package.evidence
+                if row.id in bound and row.source_id != "S-manuscript"
+                and (row.id in extracted_evidence or row.id in prior["evidence"])
+            },
+            "agenda": {
+                row.id for row in package.agenda if row.metadata.get("judgment") == "ledger"
+                and (row.id in extracted_agenda or row.id in prior["agenda"])
+            },
+        })
+
+    aliases = {}
+    for field in fields:
+        # Reuse a previous consensus ID when combining it with its original input.
+        mapping = prior[field].copy()
+        for old in sorted({identifier for ids in collisions for identifier in ids[field]}):
+            if old in mapping:
+                continue
+            new = f"model-{old}"
+            while new in occupied[field]:
+                new = f"model-{new}"
+            mapping[old] = new
+            occupied[field].add(new)
+        aliases[field] = mapping
+
+    resolved = []
+    for package, ids in zip(packages, collisions):
+        if any(ids.values()):
+            definitions = {field: {key: aliases[field][key] for key in keys} for field, keys in ids.items()}
+            package = _rewrite_ledger_references(package, definitions)
+        resolved.append(package)
+    return resolved

@@ -19,6 +19,7 @@ from unittest import mock
 from autopaperreview.adapters import FixtureReviewAdapter, ReviewRequest
 from autopaperreview.anchors import AUDIT_CHECK_IDS, LOCKED_HOLISTIC_SAMPLES, checks_score
 from autopaperreview.bilingual_coverage import package_bilingual_gaps
+from autopaperreview.cli import INIT_ADAPTERS, write_project
 from autopaperreview.hashing import sha256_file
 from autopaperreview.model_exec import (
     ModelExecutionError,
@@ -368,6 +369,35 @@ def _exchange_hashes_match(stage_dir: Path, exchanges: list[dict[str, Any]]) -> 
 
 
 class ClosedLoopTests(unittest.TestCase):
+    def test_contribution_action_reaches_the_issue_and_preserves_its_comparator(self) -> None:
+        action = "Repeat the measurement on a separately drawn tray."
+        original = json.loads(_contribution())["items"][0]
+
+        def reply(payload: dict[str, Any], attempt: int) -> bytes:
+            del attempt
+            item = dict(original)
+            if len(payload["messages"]) > 2:
+                self.assertIn("judgment=contributions-action\n", payload["messages"][0]["content"])
+                item["required_action"] = action
+            return _chat(json.dumps({"items": [item]}))
+
+        with ChatServer(reply) as server, tempfile_dir() as workspace:
+            config = _write_project(workspace, base_url=server.base_url, judgments=["contributions"])
+            baseline = run_pipeline(config)
+            relative = Path("stages/review/package.json")
+            original_package = json.loads((workspace / ".runs" / baseline.run_id / relative).read_text())
+            self.assertEqual(original_package["issues"][0]["required_action"]["primary"], original["comparator"])
+            config.write_text(config.read_text().replace(
+                'judgments = ["contributions"]',
+                'judgments = ["contributions"]\ncontribution_actions = true',
+            ))
+            candidate = run_pipeline(config)
+            self.assertNotEqual(baseline.stage("review").signature, candidate.stage("review").signature)
+            package = json.loads((workspace / ".runs" / candidate.run_id / relative).read_text())
+            self.assertEqual(package["issues"][0]["required_action"]["primary"], action)
+            self.assertEqual(package["ledger_claims"][0]["metadata"]["comparator"], original["comparator"])
+            self.assertEqual(len(server.bodies), 3)
+
     def test_judgments_store_hashes_and_reuse_the_stage_signature(self) -> None:
         with ChatServer(_closed_loop_reply) as server, tempfile_dir() as workspace:
             config = _write_project(
@@ -409,6 +439,86 @@ class ClosedLoopTests(unittest.TestCase):
             self.assertTrue(second.stage("review").metadata["cache_hit"])
             self.assertEqual(second.stage("review").signature, review.signature)
             self.assertEqual(len(server.bodies), calls)
+
+    def test_init_report_keeps_both_ledger_producers_and_their_agenda_links(self) -> None:
+        abstract = "The painted dial achieves 3% on a pretend ruler."
+        listed = (
+            "Contributions. Our work makes three contributions. "
+            "(1) We count the blue blocks in a toy tray. "
+            "(2) We arrange the red blocks by size. (3) We weigh the tray twice."
+        )
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit), tempfile_dir() as workspace:
+                question_id = "A-C1-evidence" if explicit else "A-L1"
+                def reply(payload: dict[str, Any], attempt: int) -> bytes:
+                    if _judgment_name(payload) != "ledger":
+                        return _closed_loop_reply(payload, attempt)
+                    data = json.loads(_ledger())
+                    data["agenda"][0]["id"] = question_id
+                    data["ledger"].append({**data["ledger"][0], "id": "model-L1", "claim": "A second model claim."})
+                    return _chat(json.dumps(data))
+
+                with ChatServer(reply) as server:
+                    write_project(workspace, project_id="ledger-test", title="Synthetic ledger test")
+                    config = workspace / "review.toml"
+                    config.write_text(config.read_text().replace(
+                        f'adapter = "{INIT_ADAPTERS["deterministic"]}"',
+                        'adapter = "autopaperreview.model_exec:OpenAICompatibleAdapter"\n'
+                        f'model = "synthetic-reviewer"\nbase_url = "{server.base_url}"',
+                    ))
+                    (workspace / "manuscript.txt").write_text(
+                        f"Title: A toy ledger\n\nAbstract\n{abstract}\n\n"
+                        + (listed + "\n\nMethods\n" if explicit else "") + MANUSCRIPT
+                    )
+                    manifest = run_pipeline(config)
+                stages = workspace / ".runs" / manifest.run_id / "stages"
+                package = json.loads((stages / "consensus" / "consensus.json").read_text())
+                questions = {row["id"]: row for row in package["agenda"]}
+                evidence = {row["id"]: row for row in package["evidence"]}
+                claims = {row["id"]: row for row in package["ledger_claims"]}
+                model_id = "L1" if explicit else "model-model-L1"
+                self.assertEqual(questions[f"model-{question_id}"]["claim_ids"], ["C1", model_id])
+                self.assertEqual(questions[question_id]["claim_ids"], ["C1" if explicit else "L1"])
+                self.assertEqual(claims["model-L1"]["claim"]["primary"], "A second model claim.")
+                model_evidence = claims[model_id]["in_paper_evidence_ids"][0]
+                self.assertEqual(evidence[model_evidence]["excerpt"], ACCURACY)
+                source_id = "E-C1" if explicit else "E-L1"
+                self.assertEqual(evidence[source_id]["source_id"], "S-manuscript")
+                if explicit:
+                    self.assertEqual(claims["C1"]["metadata"]["audit"], "checked")
+                    self.assertEqual(
+                        {evidence[eid]["source_id"] for eid in claims["C1"]["in_paper_evidence_ids"]},
+                        {"S1", "S-manuscript"},
+                    )
+                    issue = next(row for row in package["issues"] if row["id"] == "I-C1")
+                    self.assertEqual(evidence[issue["evidence_ids"][0]]["source_id"], "S1")
+                else:
+                    self.assertEqual(evidence["E-L1"]["excerpt"], abstract)
+                self.assertTrue((workspace / "review_report.md").is_file())
+
+                config.write_text(config.read_text() + (
+                    '\n[[stages]]\nid = "repeat"\ntype = "consensus"\ndepends_on = ["consensus", "review"]\n'
+                ))
+                repeated = run_pipeline(config)
+                self.assertTrue(repeated.stage("review").metadata["cache_hit"])
+                reread = json.loads((stages / "repeat" / "consensus.json").read_text())
+                for field in ("ledger_claims", "evidence", "agenda"):
+                    self.assertEqual(
+                        {row["id"]: row for row in reread[field]},
+                        {row["id"]: row for row in package[field]},
+                    )
+
+                if not explicit:
+                    other = json.loads((stages / "review" / "package.json").read_text())
+                    row = next(item for item in other["evidence"] if item["id"] == "E-L1")
+                    row["claim"] = "A conflicting definition from the same producer."
+                    (workspace / "other.json").write_text(json.dumps(other))
+                    config.write_text(config.read_text().replace(
+                        'depends_on = ["review", "integrity", "agenda"]',
+                        'depends_on = ["review", "integrity", "agenda", "other"]',
+                    ) + '\n[[stages]]\nid = "other"\ntype = "import_issues"\n[stages.params]\npath = "other.json"\n')
+                    with self.assertRaisesRegex(PipelineError, "conflicting evidence definition for ID model-E-L1"):
+                        run_pipeline(config)
 
     def test_schema_failure_retries_once_then_fails_the_stage(self) -> None:
         def reply(payload: dict[str, Any], attempt: int) -> bytes:
