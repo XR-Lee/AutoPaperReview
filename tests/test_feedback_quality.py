@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -51,6 +52,49 @@ class FeedbackQualityTest(unittest.TestCase):
             Grade.from_label({**row, "target_raised": False}, "sample review")
         with self.assertRaisesRegex(ValueError, "Unfinished"):
             Grade.from_label({**row, "localized": None}, "sample review")
+
+    def test_word_budget_limits_the_blind_text_and_scored_witness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build(root / "data", 1)
+            info = json.loads((root / "data/manifest.json").read_text())["scenarios"][0]["variants"]
+            review = "  One\tpoint.\n\nExtra evidence."
+            short = "  Short response.\n"
+            rows = [{"item_id": info["defect"]["item_id"], "review": review},
+                    {"item_id": info["clean"]["item_id"], "review": short}]
+            write_jsonl(root / "raw.jsonl", rows)
+            arms = {"sample": root / "raw.jsonl"}
+            packet = root / "limited"
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                prepare(root / "data", arms, packet, 1, review_word_limit=0)
+            prepare(root / "data", arms, packet, 1, review_word_limit=2)
+            visible = read_jsonl(packet / "packet.jsonl")
+            self.assertCountEqual([item["review"] for item in visible], ["  One\tpoint.", short])
+            self.assertTrue(all("submitted_words" not in item for item in visible))
+            key = json.loads((packet / "key.json").read_text())
+            defect = next(row for row in key["reviews"] if row["variant"] == "defect")
+            self.assertEqual(defect["submitted_words"], 4)
+            self.assertEqual(defect["submitted_review_sha256"], hashlib.sha256(review.encode()).hexdigest())
+            labels = [{"grade_id": item["grade_id"], "target_raised": False, "localized": False,
+                       "actionable": False, "support": []} for item in visible]
+            labels_path = root / "decisions.jsonl"
+            write_jsonl(labels_path, labels)
+            score = summarize(packet, labels_path, "sample")
+            self.assertEqual(score["review_word_limit"], 2)
+            self.assertEqual(score["truncated_reviews_by_arm"], {"sample": 1})
+            full = root / "full"
+            prepare(root / "data", arms, full, 1)
+            with self.assertRaisesRegex(ValueError, "exactly one label"):
+                summarize(full, labels_path, "sample")
+            other_limit = root / "other-limit"
+            prepare(root / "data", arms, other_limit, 1, review_word_limit=3)
+            with self.assertRaisesRegex(ValueError, "exactly one label"):
+                summarize(other_limit, labels_path, "sample")
+            positive = next(row for row in labels if row["grade_id"] == defect["grade_id"])
+            positive.update(target_raised=True, support=["Extra evidence."])
+            write_jsonl(labels_path, labels)
+            with self.assertRaisesRegex(ValueError, "Unmatched support"):
+                summarize(packet, labels_path, "sample")
 
     def test_cli_round_trip_missing_output_counts_against_scheduled_quality(self):
         with tempfile.TemporaryDirectory() as tmp:

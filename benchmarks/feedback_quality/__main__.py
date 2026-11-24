@@ -54,6 +54,8 @@ def main():
     packet.add_argument("--seed", default=74819, type=int)
     packet.add_argument("--first", default=1, type=int, help="First included scenario ordinal, inclusive")
     packet.add_argument("--last", type=int, help="Last included scenario ordinal, inclusive")
+    packet.add_argument("--review-word-limit", type=int,
+                        help="Show at most this many whitespace-delimited words from each review")
     score = commands.add_parser("score", help="Score completed blinded labels against their packet")
     score.add_argument("--packet", required=True, type=Path)
     score.add_argument("--labels", required=True, type=Path)
@@ -69,7 +71,8 @@ def main():
             if not sep or not name or not path or name in arms:
                 parser.error("Each --arm needs a unique nonempty NAME and a JSONL file")
             arms[name] = Path(path)
-        prepare(args.dataset, arms, args.out, args.seed, args.first, args.last)
+        prepare(args.dataset, arms, args.out, args.seed, args.first, args.last,
+                review_word_limit=args.review_word_limit)
     elif args.command == "score":
         result = summarize(args.packet, args.labels, args.baseline)
         args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
