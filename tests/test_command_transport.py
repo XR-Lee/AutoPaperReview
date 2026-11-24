@@ -17,6 +17,7 @@ from autopaperreview.command_transport import (
     command_argv,
     flatten_messages,
     recover_json,
+    recover_restarted_object,
     reply_text,
 )
 from autopaperreview.model_exec import ModelExecutionError, OpenAICompatibleAdapter
@@ -116,6 +117,26 @@ class CommandTransportCase(unittest.TestCase):
 
 
 class CommandAdapterTests(CommandTransportCase):
+    def test_schema_retry_uses_the_final_complete_judgment_after_a_restart(self) -> None:
+        final = _contribution()
+        first = final.replace("C1", "C9")
+        broken = '{"items":[{"id":"abandoned'
+        self.replies.write_text(
+            json.dumps({"contributions": ["invalid", first + broken + final]}), encoding="utf-8"
+        )
+        result = self.execute()
+        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(result.package.issues[0].id, "I-C1")
+        stored = self.root / "scratch" / result.metadata["model_exchanges"][1]["response_path"]
+        self.assertEqual(json.loads(stored.read_bytes())["choices"][0]["message"]["content"], first + broken + final)
+
+    def test_a_recovered_command_reply_must_still_pass_the_schema(self) -> None:
+        reply = _contribution() + '{"items":"abandoned' + '{"items":[]}'
+        self.replies.write_text(json.dumps({"contributions": ["invalid", reply]}), encoding="utf-8")
+        with self.assertRaisesRegex(ModelExecutionError, "after one retry"):
+            self.execute()
+        self.assertEqual(len(self.calls()), 2)
+
     def test_each_judgment_runs_the_cli_in_an_empty_directory(self) -> None:
         result = self.execute()
         self.assertEqual(result.metadata["egress"], "command")
@@ -388,6 +409,36 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(recover_json('note\n```json\n{"a": 1}\n```'), '{"a": 1}')
         self.assertEqual(recover_json("no object here"), "no object here")
         self.assertEqual(recover_json('{"a": '), '{"a": ')
+
+    def test_restart_recovery_requires_complete_matching_outer_objects(self) -> None:
+        first = '{"x":"old"}'
+        broken = '{"x":"abandoned'
+        final = '{"x":"new"}'
+        for reply in (
+            first, final, first + final, '{"outer":' + final + "}",
+            "Preamble " + first + broken + final,
+            "[]" + broken + final,
+            first + "[" + broken + final,
+            first + '{"container":' + final,
+            first + '{"x":invalid' + final,
+            first + broken + '{"different":"answer"}',
+            first + broken + final[:-1],
+            first + broken + final + " trailing text",
+            first + broken + final + " another ending }",
+            first + broken + final + ' {"unclosed":',
+            '{"stop_reason":"max_tokens"}' + broken + '{"stop_reason":"done"}',
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(recover_restarted_object(reply), reply)
+
+    def test_restart_recovery_does_not_search_each_brace(self) -> None:
+        first = json.dumps({"x": '{"x": "' * 12000})
+        final = json.dumps({"x": 'other } { " \\ end'})
+        reply = first + '{"x":"abandoned' + final
+        decode = json.JSONDecoder.raw_decode
+        with mock.patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=decode) as calls:
+            self.assertEqual(recover_restarted_object(reply), final)
+        self.assertLessEqual(calls.call_count, 8)
 
 
 if __name__ == "__main__":
