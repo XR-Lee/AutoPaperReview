@@ -3308,19 +3308,23 @@ def _guard_prior_hits(
     *,
     cutoff: date | None,
     blocked: set[str],
+    blocked_titles: set[str] | None = None,
 ) -> tuple[list[RawHit], list[str], list[RetrievalLogEntry]]:
     """Drop the target paper and anything dated on or after the cutoff.
 
     ``cutoff`` is exclusive, matching a pool built with publication dates
     strictly before that day. A retrieved target is logged and removed.
+    Title matches use the normalized title and do not copy the title into the log.
     """
     kept: list[RawHit] = []
     leakage: list[str] = []
     logs: list[RetrievalLogEntry] = []
+    titles = {item for item in (blocked_titles or set()) if item}
     deadline = cutoff - timedelta(days=1) if cutoff is not None else None
     for hit in hits:
         keys = work_id_keys(hit.external_id(), hit.arxiv_id, hit.doi, hit.s2_id, hit.openalex_id)
         external = hit.external_id()
+        title_key = _normalize_title(hit.title)
         if blocked and keys & blocked:
             leakage.append(external)
             logs.append(
@@ -3328,6 +3332,17 @@ def _guard_prior_hits(
                     hit.provider or "pool",
                     "dropped",
                     f"target paper retrieved and excluded: {external}",
+                    hit.query_ids[0] if hit.query_ids else None,
+                )
+            )
+            continue
+        if titles and title_key and title_key in titles:
+            leakage.append(external or "title-match")
+            logs.append(
+                _log(
+                    hit.provider or "pool",
+                    "dropped",
+                    f"target paper retrieved and excluded by title: {external or 'untitled'}",
                     hit.query_ids[0] if hit.query_ids else None,
                 )
             )
@@ -3373,6 +3388,7 @@ def run_related_work_search(
     pool_path: Path | None = None,
     cutoff_date: date | None = None,
     blocked_ids: Sequence[str] | None = None,
+    blocked_titles: Sequence[str] | None = None,
     pool_summary_chars: int = 2000,
 ) -> RelatedWorkJudgment:
     if mode not in {"agent", "live", "off", "pool"}:
@@ -3488,8 +3504,10 @@ def run_related_work_search(
     blocked: set[str] = set()
     for item in blocked_ids or []:
         blocked |= work_id_keys(item)
+    blocked_title_keys = {_normalize_title(item) for item in (blocked_titles or [])}
+    blocked_title_keys.discard("")
     deduped, target_leakage, guard_logs = _guard_prior_hits(
-        deduped, cutoff=cutoff_date, blocked=blocked
+        deduped, cutoff=cutoff_date, blocked=blocked, blocked_titles=blocked_title_keys
     )
     logs.extend(guard_logs)
 

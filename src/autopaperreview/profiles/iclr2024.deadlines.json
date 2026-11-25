@@ -1,0 +1,12 @@
+{
+  "id": "iclr-2024-submission",
+  "venue": "ICLR",
+  "year": 2024,
+  "profile_key": "iclr2024",
+  "source": "https://iclr.cc/Conferences/2024/Dates",
+  "abstract_deadline": "2023-09-23",
+  "submission_deadline": "2023-09-28",
+  "deadline_timezone": "Anywhere on Earth",
+  "pinned": "2026-11-25",
+  "notes": "Abstract deadline 2023-09-23 AOE and paper deadline 2023-09-28 AOE, from the ICLR 2024 dates page. Concurrent-work checks use submission_deadline."
+}
