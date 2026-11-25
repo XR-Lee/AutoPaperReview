@@ -609,9 +609,9 @@ A title and a short description can be reviewed without a PDF (`prompt_packet` w
 
 ### Idea score against the final review
 
-A proposal-review harness on branch `feat/proposal-review-harness` scores ICLR 2024 public OpenReview submissions after they are compressed to an early proposal: the title plus a short description, with no results and no PDF. APR scores idea dimensions on 1–5. The comparison is the official final mean reviewer score. That harness is not merged. It is not part of the code in this release.
+`autopaperreview proposal-review` compresses an ICLR submission abstract into an early proposal and scores idea dimensions on 1–5. There is no results section and no PDF on that path. The comparison is the official final mean reviewer score, parsed with the per-year scale in `profiles/rating_scales.json`. The abstract is anonymized before it is split into source units. How to run it is in [docs/proposal-review.md](docs/proposal-review.md).
 
-The cohorts are stratified by the final score, so the correlation is a within-sample association. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace. These proposals were scored after the conference, not before the work was done.
+The table below is the previously reported evaluation of that harness. It was not recomputed for this change, and the unit tests do not call a model. The cohorts are stratified by the final score, so the correlation is a within-sample association. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace. These proposals were scored after the conference, not before the work was done.
 
 ![Higher proposal scores sit next to higher final review scores. Fixed test n=100, Spearman 0.677. Independent confirm n=100, Spearman 0.597. Two replications n=199, Spearman 0.522. Dots are unlabeled. Each cohort is stratified by the final score.](docs/assets/proposal_score_vs_final_review.png)
 

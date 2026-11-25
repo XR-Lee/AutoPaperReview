@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 
 from ..public_calibration import assert_local_only
-from .data import digest, read, write
+from .data import digest, read, require_official_mean, scale_for_reference, write
 from .overall_rank import evaluate
 from .priority import add_screen_provider, load_profile, rank, screen_rank_inputs, text_packet
 from .stages import invoke
@@ -51,11 +51,10 @@ def evaluate_fixed(manifest, predictions, references, bootstrap=2000):
         if (
             type(target) not in (float, int)
             or not 1 <= target <= 5
-            or type(rating) not in (float, int)
-            or not 1 <= rating <= 10
             or accept not in (0, 1)
         ):
             raise ValueError("incomplete reference")
+        require_official_mean(rating, scale_for_reference(g))
         rows.append(
             {
                 "key": fid,

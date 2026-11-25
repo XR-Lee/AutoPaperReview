@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
+from statistics import mean
 from typing import Any
 
+from ..iclr_anonymize import anonymize_iclr_submission
 from ..pipeline import _atomic_write
-from ..public_calibration import content_value, latest_official_reviews
+from ..public_calibration import content_value, latest_official_reviews, parse_rating
+from ..rating_scales import RatingScale, classic_scale, scale_for_key, scale_for_year
 
 
 def read(path: Path) -> Any:
@@ -54,6 +58,107 @@ REPORTED_FINDING = re.compile(
 
 def reported_result(text: str) -> bool:
     return bool(OUTCOME.search(text) or REPORTED_FINDING.search(text))
+
+
+_GROUP_YEAR = re.compile(r"ICLR\.cc/(20\d{2})/")
+_ABSTRACT_LINE = re.compile(r"(?i)^abstract\b[ \t]*[:.]?[ \t]*(.*)$")
+
+
+def venue_year(group: str) -> int | None:
+    match = _GROUP_YEAR.search(group or "")
+    return int(match.group(1)) if match else None
+
+
+def anonymized_submission_text(text: Any) -> str:
+    """Anonymize one submission field before it becomes proposal source units.
+
+    The field is framed under an Abstract heading so the shared ICLR anonymizer
+    can drop a camera-ready banner, an email, or a named GitHub link without
+    deleting a scientific sentence that mentions a university. The frame is not
+    returned.
+    """
+    if not isinstance(text, str):
+        return ""
+    body = text.strip()
+    if not body:
+        return ""
+    framed = "Submission\n\nAbstract\n" + body + "\n"
+    cleaned, _removed = anonymize_iclr_submission(framed)
+    kept: list[str] = []
+    seen = False
+    for line in cleaned.splitlines():
+        if not seen:
+            match = _ABSTRACT_LINE.match(line.strip())
+            if match:
+                seen = True
+                rest = match.group(1).strip()
+                if rest:
+                    kept.append(rest)
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip() if seen else ""
+
+
+def scale_for_reference(row: dict) -> RatingScale:
+    """Scale for an already-averaged official mean on a reference record."""
+    key = row.get("rating_scale")
+    if isinstance(key, str) and key:
+        try:
+            return scale_for_key(key)
+        except KeyError as exc:
+            raise ValueError(f"unknown rating scale {key!r}") from exc
+    year = row.get("year")
+    if year is None:
+        return classic_scale()
+    if type(year) is not int:
+        raise ValueError("year must be an integer venue year")
+    return scale_for_year(year)
+
+
+def require_official_mean(value: Any, scale: RatingScale) -> None:
+    """Keep a finite official mean inside the scale's inclusive range.
+
+    ``parse_rating`` checks one reviewer's discrete score. A mean of those
+    scores is not itself a scale point, so 7 is allowed on the 2024 scale and
+    0 is allowed on the 2026 scale.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        raise ValueError("final_rating must be a finite number")
+    if not scale.minimum <= float(value) <= scale.maximum:
+        raise ValueError(f"final_rating {value} is outside {scale.label()}")
+
+
+def official_rating_summary(reviews: list[dict], year: int | None) -> dict[str, Any]:
+    """Parse official ratings with the venue scale. Raw rating text is not stored.
+
+    One off-scale rating leaves ``final_mean`` unset. Dropping it would change
+    the mean the harness compares with APR scores.
+    """
+    scale = scale_for_year(year) if year is not None else classic_scale()
+    parsed: list[int] = []
+    unparsed = 0
+    missing = 0
+    for note in reviews:
+        raw = content_value(note, "rating")
+        if raw is None or raw == "":
+            missing += 1
+            continue
+        value = parse_rating(raw, scale=scale)
+        if value is None:
+            unparsed += 1
+            continue
+        parsed.append(value)
+    return {
+        "final_mean": mean(parsed) if parsed and unparsed == 0 else None,
+        "rating_scale": scale.key,
+        "ratings_parsed": len(parsed),
+        "ratings_unparsed": unparsed,
+        "ratings_missing": missing,
+    }
 
 
 def sentences(text: str) -> list[str]:
@@ -104,7 +209,10 @@ def iclr_case(
     early = bool(stamp and first and stamp < first)
     if not early and not allow_late:
         return None
-    packet = units({"abstract": content_value(sub, "abstract")})
+    year = venue_year(group)
+    packet = units(
+        {"abstract": anonymized_submission_text(content_value(sub, "abstract"))}
+    )
     if not packet:
         return None
     sources, comments = {}, {}
@@ -133,6 +241,8 @@ def iclr_case(
             "pre_review": early,
             "area": content_value(sub, "primary_area"),
             "review_ids": sources,
+            "year": year,
+            **official_rating_summary(reviews, year),
         },
     }
 

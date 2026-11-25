@@ -76,9 +76,9 @@ Both arms wrote 72 seats and 144 weaknesses. On this release, resolved last-weak
 
 ## Proposal review
 
-The figure and the table below are not a result of the code in this release.
+The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The figure and the table below were reported from an earlier run. They were not recomputed for this change, and the unit tests do not call a model.
 
-The harness is on branch `feat/proposal-review-harness` at `3a1fd15` (a patch on `406ef6c`). It is not merged. It scores ICLR 2024 public OpenReview submissions after they are compressed to an early proposal: the title plus a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score.
+The harness scores ICLR public OpenReview submissions after they are compressed to an early proposal: a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score. Intake parses that mean with `parse_rating` and the per-year scale, and anonymizes the abstract before the compressor sees it. The numbers below predate that wiring.
 
 Cohorts are stratified by that final score. The correlation is a within-sample association, not a sample drawn without regard to the outcome. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace: the proposals were scored after the conference decisions, not before the work was done.
 

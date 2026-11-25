@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Optional `proposal-review` scores a compressed ICLR abstract on idea dimensions 1–5. Official final means use `parse_rating` and `profiles/rating_scales.json` (ICLR 2024/2025 bins, ICLR 2026 even bins, otherwise the inclusive range 0–10). One off-scale rating leaves the mean unset. Submission text goes through the ICLR anonymizer before source units are built. API intake waits between OpenReview calls and stops on HTTP 403. The fixed-test, confirm, and replication correlations in [docs/metrics.md](docs/metrics.md) were not recomputed. No paid API call is added.
+
 ## 0.1.11 - 2026-11-25
 
 - Version `0.1.11`. The review code and the prompts match the promoted tree `c82aeeb` (#66) except `__version__` in `src/autopaperreview/__init__.py`. Gate 1 and Gate 2 already passed on that review code. This release publishes the metrics below. It does not retune a prompt, a coefficient, or a scoring path. `feat/proposal-review-harness` (`3a1fd15`, a patch on `406ef6c`) is not merged.

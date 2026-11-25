@@ -9,7 +9,7 @@ from statistics import mean
 
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
-from .data import digest, read, write
+from .data import digest, read, require_official_mean, scale_for_reference, write
 from .merit import reference_packet
 from .stages import PROMPTS, claude_argv, invoke
 
@@ -52,10 +52,8 @@ def validate_cases(rows):
             ):
                 raise ValueError("expected numbered review units containing text")
         rating = row.get("final_rating")
-        if rating is not None and (
-            type(rating) not in (int, float) or not 1 <= rating <= 10
-        ):
-            raise ValueError("final_rating must be on the 1–10 scale")
+        if rating is not None:
+            require_official_mean(rating, scale_for_reference(row))
         if "accept" in row and (
             type(row["accept"]) not in (int, bool) or row["accept"] not in (0, 1)
         ):

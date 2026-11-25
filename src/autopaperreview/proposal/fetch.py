@@ -1,4 +1,8 @@
-"""Verified public October/November OpenReview snapshots, plus an API v2 intake."""
+"""Verified public October/November OpenReview snapshots, plus an API v2 intake.
+
+The live client is the shared OpenReview client: it waits between calls. HTTP 403
+stops this intake. It does not fall through to search.
+"""
 
 from __future__ import annotations
 
@@ -48,6 +52,20 @@ def download(folder: Path):
     return paths
 
 
+def _notes(client, path, params):
+    try:
+        payload = client.get_json(path, params)
+    except ChallengeRequired as exc:
+        raise ChallengeRequired(
+            "OpenReview returned HTTP 403 or a browser check. "
+            "Proposal intake stopped. No further requests."
+        ) from exc
+    notes = payload.get("notes") if isinstance(payload, dict) else None
+    if not isinstance(notes, list):
+        raise ValueError("OpenReview notes payload did not contain a notes array")
+    return notes
+
+
 def live_cases(year, pages, areas, allow_late):
     client = HttpOpenReviewClient(sleeper=time.sleep)
     group = f"ICLR.cc/{year}/Conference"
@@ -55,28 +73,14 @@ def live_cases(year, pages, areas, allow_late):
     seen = set()
     for page in range(pages):
         params = {"invitation": invitation, "limit": 50, "offset": 50 * page}
-        try:
-            notes = client.get_json("/notes", params)["notes"]
-        except ChallengeRequired:
-            notes = client.get_json(
-                "/notes/search", {**params, "group": group, "term": "the"}
-            )["notes"]
+        notes = _notes(client, "/notes", params)
         for sub in notes:
             if sub["id"] in seen or (
                 areas and content_value(sub, "primary_area") not in areas
             ):
                 continue
             seen.add(sub["id"])
-            try:
-                replies = client.get_json(
-                    "/notes", {"forum": sub["id"], "limit": 1000}
-                )["notes"]
-            except ChallengeRequired:
-                invitation_id = f"{group}/Submission{sub['number']}/-/Official_Review"
-                replies = client.get_json(
-                    "/notes/search",
-                    {"term": "the", "invitation": invitation_id, "limit": 100},
-                )["notes"]
+            replies = _notes(client, "/notes", {"forum": sub["id"], "limit": 1000})
             case = iclr_case(sub, replies, group, allow_late=allow_late)
             if case:
                 yield case

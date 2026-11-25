@@ -87,6 +87,10 @@ class TestProposalReview(unittest.TestCase):
         packet = json.dumps(case)
         for text in ("outperform", "HIDDEN", "foreign", "Outdated"):
             self.assertNotIn(text, packet)
+        self.assertIn("dictionary of archive symbols", packet)
+        self.assertIsNone(case["provenance"]["final_mean"])
+        self.assertEqual(case["provenance"]["rating_scale"], "iclr2024")
+        self.assertEqual(case["provenance"]["ratings_unparsed"], 1)
         self.assertEqual(len(case["comments"]), 1)
         self.assertNotIn("archivists", str(case["candidate"]))
         sub["tmdate"] = 2
