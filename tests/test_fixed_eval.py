@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from autopaperreview.cli import build_parser, main
 from autopaperreview.cvpr_sets import id_list_digest as cvpr_id_list_digest
@@ -306,6 +307,113 @@ class FixedEvalCvprTests(unittest.TestCase):
 
 
 class FixedEvalCommandTests(unittest.TestCase):
+    def test_rank_report_counts_records_from_the_grounded_feedback_prompt(self) -> None:
+        rank_eval = _rank_eval()
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cache"
+            output = Path(temporary) / "metrics.json"
+            _score(cache, "synthetic-regular", 4.0, [1, 3])
+            _score(cache, "synthetic-grounded", 7.0, [6, 8])
+            path = cache / "papers" / "synthetic-grounded" / "project" / "our_score.json"
+            score = json.loads(path.read_text(encoding="utf-8"))
+            path.write_text(json.dumps({**score, "grounded_weaknesses": True}), encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                code = rank_eval.main([
+                    "--cache", str(cache), "--output", str(output), "--fixed-set", "none",
+                    "--resamples", "10",
+                ])
+            self.assertEqual(code, 0)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["grounded_weaknesses_records"], 1)
+            self.assertEqual(result["forecast_prompt"], "mixed")
+            self.assertEqual(result["n"], 2)
+
+    def test_fixed_confirmation_checks_prompt_and_stamp(self) -> None:
+        rank = _rank_eval()
+        ids = ["synthetic-circle", "synthetic-square"]
+        manifest = {"status": "locked", "content_sha256": "a" * 64,
+                    "iclr": {"papers": [{"forum_id": i, "tier": "toy"} for i in ids]}}
+        stamp = {"fixed_set": "iclr-dev", "model_id": "toy", "effort": "high",
+                 "status": "locked", "content_sha256": manifest["content_sha256"],
+                 "cheap": True, "holistic_samples": 1, "holistic_mode": "forecast",
+                 "coefficient_set": "apr-fusion-v1", "related_work": "off"}
+        with tempfile.TemporaryDirectory() as temp, patch.object(rank, "assert_manifest", return_value=manifest), \
+             patch.object(rank, "dev_ids", return_value=ids), patch.object(rank, "RANK_BOOTSTRAP", {"resamples": 10}):
+            cache = Path(temp) / "cache"
+            output = Path(temp) / "result.json"
+            for item, score, votes in zip(ids, [2.0, 8.0], [[1, 3], [6, 8]]):
+                _score(cache, item, score, votes)
+            args = ["--cache", str(cache), "--output", str(output), "--fixed-set", "iclr-dev",
+                    "--model-id", "toy", "--effort", "high", "--resamples", "10"]
+            def run():
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    return rank.main(args)
+            def score_flag(item, value):
+                path = cache / "papers" / item / "project" / "our_score.json"
+                score = json.loads(path.read_text())
+                path.write_text(json.dumps({**score, "grounded_weaknesses": value}))
+            file = cache / "fixed-eval-run.json"
+            self.assertEqual(run(), 0)  # Historical baseline without a stamp.
+            file.write_text(json.dumps(stamp))
+            self.assertEqual(run(), 0)  # Historical baseline with the original stamp.
+            score_flag(ids[0], True)
+            self.assertEqual(run(), 2)  # Mixed arms.
+            score_flag(ids[1], True)
+            self.assertEqual(run(), 2)  # All experimental, previous baseline stamp.
+            file.unlink()
+            self.assertEqual(run(), 0)  # Homogeneous rows assembled across workers without a stamp.
+            self.assertEqual(json.loads(output.read_text())["forecast_prompt"], "grounded-weaknesses")
+            file.write_text(json.dumps({**stamp, "grounded_weaknesses": True}))
+            self.assertEqual(run(), 0)  # Matching legacy stamp without a run-state field.
+            complete = {**stamp, "grounded_weaknesses": True, "run_state": "complete", "run_id": "b" * 32}
+            for invalid in ("{", "[]", "{}", json.dumps({**complete, "run_state": "incomplete"}),
+                            json.dumps({**complete, "effort": "other"}), json.dumps({**complete, "grounded_weaknesses": 1}),
+                            json.dumps({**complete, "run_id": ""}), json.dumps({**complete, "holistic_samples": True})):
+                with self.subTest(invalid=invalid):
+                    file.write_text(invalid)
+                    self.assertEqual(run(), 2)
+            file.write_text(json.dumps(complete))
+            self.assertEqual(run(), 0)
+            reported = json.loads(output.read_text())
+            self.assertEqual(reported["grounded_weaknesses_records"], 2)
+            self.assertEqual(reported["fixed_run_id"], complete["run_id"])
+            self.assertEqual(reported["forecast_prompt"], "grounded-weaknesses")
+            score_flag(ids[1], "false")
+            self.assertEqual(run(), 2)
+
+    def test_fixed_run_marks_interruption_and_replaces_stale_stamp_only_on_completion(self) -> None:
+        ids = ["synthetic-red", "synthetic-blue"]
+        manifest = {"status": "locked", "content_sha256": "c" * 64}
+        with tempfile.TemporaryDirectory() as temp, patch("autopaperreview.fixed_eval.assert_manifest", return_value=manifest), \
+             patch("autopaperreview.fixed_eval.dev_ids", return_value=ids):
+            cache = Path(temp)
+            file = cache / "fixed-eval-run.json"
+            args = ["calibrate-eval", "run", "--cache", temp, "--fixed-set", "iclr-dev", "--cheap",
+                    "--coefficient-set", "apr-fusion-v1", "--model-id", "toy", "--effort", "high",
+                    "--grounded-weaknesses"]
+            complete_ids = [{"forum_id": i} for i in ids]
+            outcomes = [
+                ({"scored": complete_ids, "awaiting_judgment": [], "errors": []}, 0, "complete"),
+                ({"scored": [], "awaiting_judgment": [], "errors": [{"error": "toy"}]}, 2, "incomplete"),
+                ({"scored": complete_ids[:1], "awaiting_judgment": [], "errors": []}, 2, "incomplete"),
+                ({"scored": [], "awaiting_judgment": [{"awaiting": True}], "errors": []}, 3, "incomplete"),
+                (RuntimeError("synthetic interrupted run"), 2, "incomplete"),
+            ]
+            previous = None
+            for result, code, state in outcomes:
+                def run(*args, **kwargs):
+                    self.assertEqual(json.loads(file.read_text())["run_state"], "incomplete")
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+                with patch("autopaperreview.public_calibration.run_cache", side_effect=run), \
+                     redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(main(args), code)
+                stored = json.loads(file.read_text())
+                self.assertEqual(stored["run_state"], state)
+                self.assertNotEqual(stored["run_id"], previous)
+                previous = stored["run_id"]
+
     def test_rank_eval_requires_model_and_refuses_an_incomplete_cache(self) -> None:
         rank_eval = _rank_eval()
         with tempfile.TemporaryDirectory() as temporary:
@@ -516,7 +624,9 @@ class FixedEvalCommandTests(unittest.TestCase):
         parser = build_parser()
         defaults = parser.parse_args(["calibrate-eval", "run", "--cache", "workdir/cache"])
         self.assertEqual(defaults.fixed_set, "none")
-        with tempfile.TemporaryDirectory() as temporary:
+        synthetic = {"content_sha256": "b" * 64, "status": "locked"}
+        with tempfile.TemporaryDirectory() as temporary, patch("autopaperreview.fixed_eval.assert_manifest", return_value=synthetic), \
+             patch("autopaperreview.fixed_eval.dev_ids", return_value=["synthetic-missing"]):
             cache = Path(temporary) / "cache"
             cache.mkdir()
             ids = cache / "ids.json"
@@ -563,12 +673,13 @@ class FixedEvalCommandTests(unittest.TestCase):
                         "apr-fusion-v1",
                     ]
                 )
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 2)
             stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
             self.assertEqual(stamp["model_id"], "grok-4.7")
             self.assertEqual(stamp["effort"], "xhigh")
             self.assertEqual(stamp["status"], "locked")
-            self.assertEqual(stamp["content_sha256"], assert_manifest()["content_sha256"])
+            self.assertEqual(stamp["content_sha256"], synthetic["content_sha256"])
+            self.assertEqual(stamp["run_state"], "incomplete")
 
     def test_cvpr_run_refuses_sealed_and_the_excluded_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

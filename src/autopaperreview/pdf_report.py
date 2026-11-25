@@ -391,7 +391,8 @@ def _markup(text: str, *, bold: bool = False) -> tuple[list[str], str]:
         )
         cursor = match.end()
     pieces.append(html.escape(stripped[cursor:]))
-    escaped = "".join(pieces)
+    # Line breaks inside one item (a multi-paragraph value) are kept as breaks.
+    escaped = "".join(pieces).replace("\n", "<br/>")
 
     def code_or_bold(match: re.Match[str]) -> str:
         if match.group(1) is not None:
@@ -495,7 +496,22 @@ def _tokens(markdown: str) -> list[tuple[str, str, int]]:
         elif stripped.startswith("## "):
             tokens.append(("h2", stripped[3:].strip(), indent))
         elif stripped.startswith("- "):
-            tokens.append(("bullet", stripped[2:].strip(), indent))
+            # Lines indented under the item (later lines and paragraphs of one value) belong to it.
+            item = [stripped[2:].strip()]
+            while index + 1 < len(lines):
+                ahead = index + 1
+                while ahead < len(lines) and not lines[ahead].strip():
+                    ahead += 1
+                if ahead >= len(lines):
+                    break
+                nxt = lines[ahead].rstrip()
+                nxt_indent = len(nxt) - len(nxt.lstrip())
+                if nxt_indent <= indent or nxt.lstrip().startswith(("- ", "#")):
+                    break
+                item.extend([""] * (ahead - index - 1))
+                item.append(nxt.strip())
+                index = ahead
+            tokens.append(("bullet", "\n".join(item), indent))
         elif _LANG_LINE_RE.match(stripped):
             tokens.append(("langline", stripped, indent))
         else:
@@ -701,8 +717,11 @@ def write_report_pdf(markdown: str, path: Path, *, title: str, footer_note: str 
         table = Table(rows, colWidths=[width])
         table.setStyle(TableStyle(commands))
         table.hAlign = "LEFT"
-        table.splitByRow = 0
-        return [table, Spacer(1, 6)]
+        # KeepTogether moves a card that fits on a page to the next page whole. A card taller
+        # than a page (long bilingual text) splits between and inside its rows instead of failing.
+        table.splitByRow = 1
+        table.splitInRow = 1
+        return [KeepTogether([table]), Spacer(1, 6)]
 
     def collect_lang_body(sequence: list[tuple[str, str, int]], start: int) -> tuple[list, int]:
         cell: list = []

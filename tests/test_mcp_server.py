@@ -168,6 +168,52 @@ class ReviewLoopTests(unittest.TestCase):
             self.assertTrue(any(item["path"].endswith("review_package.json") for item in report["structuredContent"]["outputs"]))
 
 
+class MainPdfToolTests(unittest.TestCase):
+    def test_init_project_reviews_the_main_paper_of_a_pdf(self) -> None:
+        try:
+            import pymupdf
+        except ImportError:  # pragma: no cover - the pdf extra is installed in CI
+            self.skipTest("PyMuPDF is needed to write a synthetic PDF")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = pymupdf.open()
+            pages = (
+                "1. Introduction\nWe count synthetic beads.",
+                "References\n[1] Synthetic Author. A synthetic reference. 2020.",
+                "Appendix\nThe window size follows from the bead radius.",
+            )
+            for text in pages:
+                document.new_page().insert_text((72, 90), text, fontsize=10)
+            document.save(str(root / "paper.pdf"))
+            document.close()
+            (root / "paper.txt").write_text("Synthetic text.\n", encoding="utf-8")
+            client = Client(root)
+            both = client.call(
+                "init_project",
+                {"path": "both", "pdf_path": "paper.pdf", "manuscript_path": "paper.txt", "main_only": True},
+            )
+            self.assertTrue(both["isError"])
+            self.assertFalse((root / "both").exists())
+            self.assertTrue(client.call("init_project", {"path": "nopdf", "main_only": True})["isError"])
+
+            created = client.call("init_project", {"path": "paper", "pdf_path": "paper.pdf", "main_only": True})
+            self.assertFalse(created["isError"])
+            summary = created["structuredContent"]
+            self.assertEqual(summary["template"], "main-pdf")
+            self.assertEqual(summary["manuscript_source"]["pages_kept"], [1, 2])
+            self.assertNotIn("note", summary)
+            text = (root / "paper" / "manuscript.txt").read_text(encoding="utf-8")
+            self.assertIn("synthetic beads", text)
+            self.assertNotIn("bead radius", text)
+            validated = client.call("validate", {"config": "paper/review.toml"})["structuredContent"]
+            self.assertEqual(validated["status"], "pass")
+
+            extracted = client.call("init_project", {"path": "full", "pdf_path": "paper.pdf"})
+            self.assertFalse(extracted["isError"])
+            self.assertEqual(extracted["structuredContent"]["template"], "default")
+            self.assertIn("bead radius", (root / "full" / "manuscript.txt").read_text(encoding="utf-8"))
+
+
 class StdioTests(unittest.TestCase):
     def test_stdout_carries_only_protocol_messages(self) -> None:
         script = textwrap.dedent(

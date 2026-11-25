@@ -29,6 +29,7 @@ from ..model_exec import (
 )
 from ..artifacts import artifact_from_path
 from ..awaiting import AwaitingInput
+from ..command_transport import command_argv
 from ..contributions import extract_listed_contributions
 from ..ledger import PENDING_CONTRIBUTION_RISK_EN, apply_contribution_audits
 from ..export_gate import ExportGateParams, export_gate_errors
@@ -37,7 +38,7 @@ from ..figures import caption_inventory, sibling_pdf
 from ..hashing import digest_excerpt, hash_json, sha256_file
 from ..i18n import ensure_package_languages, normalize_languages
 from ..integrity import build_integrity_records, collect_inventory
-from ..ledger import build_agenda, build_ledger_claims
+from ..ledger import build_agenda, build_ledger_claims, resolve_model_ledger_ids
 from ..literature import (
     generate_related_work_queries,
     load_retriever,
@@ -490,7 +491,7 @@ class PromptPacketParams(ParamsModel):
 
 class PromptPacketStage(StageHandler):
     type_name = "prompt_packet"
-    version = "6"
+    version = "7"
     params_model = PromptPacketParams
     reads_source = True
 
@@ -540,11 +541,14 @@ class PromptPacketStage(StageHandler):
         artifacts: list[Artifact] = []
         routes = self._routes(context, params)
         source_text = ""
+        source_truncated = False
         if params.include_source_text and any(route.manuscript_access for route in routes):
             try:
-                source_text = context.source_path.read_text(encoding="utf-8")[: params.max_source_chars]
+                manuscript = context.source_path.read_text(encoding="utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError("include_source_text currently supports text sources only") from exc
+            source_text = manuscript[: params.max_source_chars]
+            source_truncated = len(manuscript.rstrip()) > params.max_source_chars
         literature = _package_with(context, "retrieved_snapshots") or _package_with(
             context, "related_work_queries"
         )
@@ -572,6 +576,11 @@ class PromptPacketStage(StageHandler):
             ]
             if params.input_mode == "proposal":
                 body.append("- Input mode: `proposal`")
+            if route.manuscript_access and source_truncated:
+                body.append(
+                    f"- Source coverage: packet preparation omitted text after character {params.max_source_chars}. "
+                    "The omitted text may contain evidence relevant to this review."
+                )
             body.extend(
                 [
                 "",
@@ -655,9 +664,45 @@ def _prefer_ledger_claim(left, right):
     return None
 
 
+def _kept_ledger_claims(packages: list[ReviewPackage]) -> dict[str, LedgerClaim]:
+    """The ledger claim consensus keeps for each id, by the rule of ``_prefer_ledger_claim``."""
+    kept: dict[str, LedgerClaim] = {}
+    for package in packages:
+        for claim in package.ledger_claims:
+            existing = kept.get(claim.id)
+            if existing is None:
+                kept[claim.id] = claim
+            elif existing != claim:
+                chosen = _prefer_ledger_claim(existing, claim)
+                if chosen is not None:
+                    kept[claim.id] = chosen
+    return kept
+
+
+def _evidence_of_kept_claim(
+    existing_citer: LedgerClaim | None,
+    current_citer: LedgerClaim | None,
+    kept: dict[str, LedgerClaim],
+) -> str | None:
+    """Pick between two same-id evidence records cited by two versions of one ledger claim.
+
+    A model audit of C1 and the pending C1 placeholder from the ledger stage each cite
+    their own ``E-C1``. The record cited by the claim that consensus keeps wins. Returns
+    ``"existing"``, ``"current"``, or ``None`` when the records are not related that way.
+    """
+    if existing_citer is None or current_citer is None or existing_citer.id != current_citer.id:
+        return None
+    chosen = kept.get(current_citer.id)
+    if chosen == current_citer and chosen != existing_citer:
+        return "current"
+    if chosen == existing_citer and chosen != current_citer:
+        return "existing"
+    return None
+
+
 class ConsensusStage(StageHandler):
     type_name = "consensus"
-    version = "2"
+    version = "3.1"
     params_model = ConsensusParams
 
     def _packages(self, context: StageContext) -> list[ReviewPackage]:
@@ -683,6 +728,7 @@ class ConsensusStage(StageHandler):
                 )
             if package.manuscript.sha256 != context.manifest.source.sha256:
                 raise ValueError("consensus input manuscript hash does not match the current source")
+        packages = resolve_model_ledger_ids(packages)
         groups: dict[str, list[ReviewIssue]] = {}
         for package in packages:
             for issue in package.issues:
@@ -737,13 +783,24 @@ class ConsensusStage(StageHandler):
         snapshots_by_id: dict[str, RetrievedSourceSnapshot] = {}
         venues_by_id: dict[str, VenueConclusion] = {}
         ledger_by_id: dict[str, LedgerClaim] = {}
+        listed_evidence: dict[str, list[str]] = {}
         exemption_by_id = {}
         visual_by_id = {}
         format_by_id = {}
         agenda_by_id: dict[str, AgendaQuestion] = {}
         integrity_by_id: dict[str, IntegrityRecord] = {}
         novelty_by_id: dict[str, NoveltyAssessment] = {}
+        kept_claims = _kept_ledger_claims(packages)
+        evidence_citers: dict[str, LedgerClaim] = {}
         for package in packages:
+            citers = {
+                evidence_id: claim
+                for claim in package.ledger_claims
+                for evidence_id in claim.in_paper_evidence_ids
+            }
+            for claim in package.ledger_claims:
+                if claim.metadata.get("kind") == "listed_contribution":
+                    listed_evidence.setdefault(claim.id, []).extend(claim.in_paper_evidence_ids)
             for label, values, catalog in (
                 ("route", package.routes, routes_by_id),
                 ("source", package.sources, sources_by_id),
@@ -768,8 +825,20 @@ class ConsensusStage(StageHandler):
                             if chosen is not None:
                                 catalog[value.id] = chosen
                                 continue
+                        if label == "evidence":
+                            side = _evidence_of_kept_claim(
+                                evidence_citers.get(value.id), citers.get(value.id), kept_claims
+                            )
+                            if side == "existing":
+                                continue
+                            if side == "current":
+                                catalog[value.id] = value
+                                evidence_citers[value.id] = citers[value.id]
+                                continue
                         raise ValueError(f"conflicting {label} definition for ID {value.id}")
                     catalog[value.id] = value
+                    if label == "evidence" and value.id in citers:
+                        evidence_citers.setdefault(value.id, citers[value.id])
 
         strengths: dict[str, list[str]] = {}
         acceptance_gate: dict[str, list[str]] = {}
@@ -824,6 +893,13 @@ class ConsensusStage(StageHandler):
             raise ValueError("conflicting related_work judgments")
         if related_payloads:
             metadata["related_work"] = related_payloads[0]
+        for claim_id, evidence_ids in listed_evidence.items():
+            claim = ledger_by_id[claim_id]
+            if claim.metadata.get("kind") == "listed_contribution":
+                claim = claim.model_copy(update={
+                    "in_paper_evidence_ids": list(dict.fromkeys([*claim.in_paper_evidence_ids, *evidence_ids]))
+                })
+                ledger_by_id[claim_id] = claim
         output = ReviewPackage(
             project_id=first.project_id,
             manuscript=context.manifest.source,
@@ -1296,12 +1372,12 @@ class WorkspaceInspectStage(StageHandler):
 
 
 class IntegrityParams(ParamsModel):
-    pass
+    reporting_pointer: bool = False
 
 
 class IntegrityStage(StageHandler):
     type_name = "integrity"
-    version = "2"
+    version = "4"
     params_model = IntegrityParams
     reads_source = True
 
@@ -1328,6 +1404,7 @@ class IntegrityStage(StageHandler):
             inventory=inventory,
             evidence=evidence,
             workspace=context.workspace,
+            reporting_pointer=IntegrityParams.model_validate(context.stage.params).reporting_pointer,
         )
         package = ReviewPackage(
             project_id=context.loaded_config.config.project.id,
@@ -1460,6 +1537,8 @@ class ExecuteReviewParams(ParamsModel):
     requires_network: bool = False
     network_scope: str = "fulltext"
     base_url: str | None = None
+    # A local CLI that answers the chat requests instead of base_url; see autopaperreview.command_transport.
+    command: list[str] | str | None = None
     model: str | None = None
     api_key_env: str = "APR_MODEL_API_KEY"
     allow_remote: bool = False
@@ -1473,6 +1552,8 @@ class ExecuteReviewParams(ParamsModel):
     holistic_samples: int = Field(default=DEFAULT_HOLISTIC_SAMPLES, ge=1, le=8)
     holistic_temperature: float = Field(default=DEFAULT_HOLISTIC_TEMPERATURE, ge=0, le=2)
     holistic_mode: str = DEFAULT_HOLISTIC_MODE
+    grounded_weaknesses: bool = False
+    contribution_actions: bool = False
     verify_excerpts: bool = False
 
     @field_validator("holistic_mode")
@@ -1507,6 +1588,7 @@ class ExecuteReviewStage(StageHandler):
             material["verify_excerpts"] = True
         if (
             params.base_url
+            or params.command
             or params.model
             or params.allow_remote
             or params.judgments
@@ -1528,13 +1610,19 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
             }
+            if params.command:
+                # Added only when set, so configurations without a command keep their signatures.
+                material["model_execution"]["command"] = command_argv(params.command)
         packets: dict[str, str] = {}
         for stage_id in context.stage.depends_on:
             for path in sorted(context.dependency_dir(stage_id).glob("*.md")):
                 packets[path.name] = sha256_file(path)
         if packets:
             material["packet_hashes"] = packets
-        material["judgment_prompt_sha256"] = judgment_prompt_fingerprint()
+        material["judgment_prompt_sha256"] = judgment_prompt_fingerprint(
+            grounded_weaknesses=params.grounded_weaknesses,
+            contribution_actions=params.contribution_actions,
+        )
         return material
 
     def packet_files(self, context: StageContext) -> list[Path]:
@@ -1581,6 +1669,7 @@ class ExecuteReviewStage(StageHandler):
                 "network_scope": params.network_scope,
                 "network_policy": context.loaded_config.config.project.network_policy.value,
                 "base_url": params.base_url,
+                "command": params.command,
                 "model": params.model,
                 "api_key_env": params.api_key_env,
                 "allow_remote": params.allow_remote,
@@ -1594,6 +1683,8 @@ class ExecuteReviewStage(StageHandler):
                 "holistic_samples": params.holistic_samples,
                 "holistic_temperature": params.holistic_temperature,
                 "holistic_mode": params.holistic_mode,
+                "grounded_weaknesses": params.grounded_weaknesses,
+                "contribution_actions": params.contribution_actions,
                 "verify_excerpts": params.verify_excerpts,
                 "reuse_prior_exchanges": not context.force,
                 "stage_signature": (

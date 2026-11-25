@@ -22,6 +22,16 @@ PYTHONPATH=src python3 -m autopaperreview calibrate-eval run \
   --coefficient-set apr-fusion-v1 --cheap --holistic-mode forecast --holistic-samples 1
 ```
 
+## Experimental forecast feedback
+
+For an exploratory forecast run, add `--grounded-weaknesses` to `calibrate-eval run --mode adapter --cheap` with the bundled model adapter and its endpoint and model arguments. In an `execute_review` configuration set `grounded_weaknesses = true` alongside a `holistic` judgment in `forecast` mode. With one sample, the same panel call supplies the ratings and comments. The extra instructions keep each reviewer's original diagnosis. Up to two weaknesses stay, and the first sentence of each is only that diagnosis. One short fix, grounded in a single quoted passage, is added to the last weakness. A partial mitigation in the manuscript does not remove the concern.
+
+Read `model/forecast-feedback.txt` in the run's review stage directory. A weakness with no quote is kept as a diagnosis. A quoted weakness includes its reviewer, the manuscript line and character offsets, and an excerpt when the locator matches one continuous passage visible to the reviewer and unique in the manuscript, allowing whitespace differences. A quote that does not match is omitted and counted. The footer counts located and submitted comments. This checks where the quoted words occur. Assessing whether they support the criticism requires reading the passage in context. The local feedback file contains manuscript and review text and belongs with the private run artifacts.
+
+For a fixed-dev confirmation, use a separate cache for each prompt. The fixed-run stamp records its run ID, model, effort, settings and prompt. It marks the run complete after all required papers are scored. The fixed-dev rank command checks the stamp against the scores and reports the run ID when available. Caches assembled across workers can omit the stamp. The fixed rank command then requires one prompt across all rows, treating legacy rows without a prompt flag as the default. Both prompts use the `forecast-k1` rank formula.
+
+Use `--fixed-set none` for an exploratory report on a mixed cache. Its `forecast_prompt` field identifies mixed results and `grounded_weaknesses_records` counts the experimental scores.
+
 ## Fixed dev set
 
 `benchmarks/fixed_eval/manifest.json` is the locked ICLR dev set (192 papers, 48 in each mean-rating tier) and the CVPR registration for S24-P and S24-D2. Status is `locked`. `scripts/rank_eval.py` defaults to this ICLR set and requires `--model-id` and `--effort`. `calibrate-eval run` stays on the whole cache unless you pass `--fixed-set iclr-dev`. The private holdout is not in git. A dev-set number does not replace the published README rank. See [fixed evaluation set](fixed-eval.md).

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 from autopaperreview.fixed_eval import (
+    FORECAST_K1,
     RANK_BOOTSTRAP,
     FixedEvalError,
     assert_holdout_file,
@@ -94,6 +96,7 @@ def _records(
                 "forecast": score.get("forecast") or [],
                 "main_text": score.get("main_text") or {},
                 "holistic_mode": score.get("holistic_mode"),
+                **({"grounded_weaknesses": score["grounded_weaknesses"]} if "grounded_weaknesses" in score else {}),
                 "placements": score.get("placements") or [],
                 "poles": score.get("poles") or [],
                 "caps": score.get("caps") or [],
@@ -101,6 +104,42 @@ def _records(
             }
         )
     return rows
+
+
+def _dev_stamp(cache: Path) -> dict | None:
+    try:
+        stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise FixedEvalError("fixed-run stamp cannot be read") from exc
+    if not isinstance(stamp, dict):
+        raise FixedEvalError("invalid fixed-run stamp")
+    if stamp.get("run_state", "complete") != "complete":
+        raise FixedEvalError("fixed-run stamp records an incomplete run")
+    if "run_state" in stamp or "run_id" in stamp:
+        if stamp.get("run_state") != "complete" or not re.fullmatch(r"[0-9a-f]{32}", str(stamp.get("run_id"))):
+            raise FixedEvalError("invalid fixed-run identity")
+    return stamp
+
+
+def _check_fixed_prompt(records: list[dict], meta: dict, stamp: dict | None) -> None:
+    flags = [row.get("grounded_weaknesses", False) for row in records]
+    if any(type(flag) is not bool for flag in flags):
+        raise FixedEvalError("invalid fixed-set forecast prompt flag")
+    if len(set(flags)) > 1:
+        raise FixedEvalError("fixed set mixes different forecast prompts")
+    if meta["fixed_set"] != "iclr-dev" or stamp is None:
+        return
+    if any(stamp.get(k) != meta[k] for k in ("fixed_set", "content_sha256", "model_id", "effort", "status")):
+        raise FixedEvalError("fixed-run stamp does not match this confirmation")
+    for field in ("cheap", "coefficient_set", "holistic_mode", "holistic_samples", "related_work"):
+        value = stamp.get(field)
+        if type(value) is not type(FORECAST_K1[field]) or value != FORECAST_K1[field]:
+            raise FixedEvalError("invalid forecast settings in fixed-run stamp")
+    grounded = stamp.get("grounded_weaknesses", False)
+    if type(grounded) is not bool or grounded != any(flags):
+        raise FixedEvalError("fixed-run stamp does not match the scored forecast prompt")
 
 
 def _load_ids(path: Path | None, split: str | None) -> set[str] | None:
@@ -220,7 +259,17 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
         baseline_scores = loaded["scores"]
-    records = _records(cache, wanted, baseline_scores)
+    dev_confirmation = fixed_meta is not None and fixed_meta["fixed_set"] == "iclr-dev"
+    try:
+        stamp = _dev_stamp(cache) if dev_confirmation else None
+        records = _records(cache, wanted, baseline_scores)
+        if dev_confirmation and stamp != _dev_stamp(cache):
+            raise FixedEvalError("fixed-run stamp changed while reading scores")
+        if fixed_meta is not None:
+            _check_fixed_prompt(records, fixed_meta, stamp)
+    except FixedEvalError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if fixed_meta is not None:
         scored = {str(record["forum_id"]) for record in records}
         if scored != wanted:
@@ -273,6 +322,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     if fixed_meta is not None:
         body.update(fixed_meta)
+    grounded_count = sum(bool(row.get("grounded_weaknesses")) for row in records)
+    if dev_confirmation and stamp and "run_id" in stamp:
+        body["fixed_run_id"] = stamp["run_id"]
+    if grounded_count:
+        body["grounded_weaknesses_records"] = grounded_count
+        body["forecast_prompt"] = "grounded-weaknesses" if grounded_count == len(records) else "mixed"
     output.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"preregistered={LOCKED_CANDIDATE}")
     if fixed_meta is not None:
@@ -282,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
             f"effort={fixed_meta['effort']}"
         )
     print(f"n={len(records)} mode={args.mode}")
+    if grounded_count:
+        print(f"grounded_weaknesses_records={grounded_count}/{len(records)}")
     for name in names:
         intervals = table[name]["intervals"]
         print(

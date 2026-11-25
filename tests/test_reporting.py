@@ -414,6 +414,27 @@ class EvidenceLinkTests(unittest.TestCase):
 
 
 
+class LongBilingualCardTests(unittest.TestCase):
+    @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
+    def test_card_taller_than_a_page_splits_instead_of_failing(self) -> None:
+        package = load_review_input(
+            Path("examples/synthetic/review_input.json"),
+            manuscript=make_artifact(),
+            project_id="synthetic-tracking-review",
+        )
+        long_text = LocalizedText(
+            primary="The synthetic window count is reported for every generated scene. " * 160,
+            language="en",
+            translations={"zh-Hans": "合成窗口计数在每个生成场景中都有报告。" * 160},
+        )
+        package.issues[0].evidence = long_text
+        markdown = render_markdown(package, bilingual=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.pdf"
+            write_report_pdf(markdown, path, title="Synthetic review")
+            self.assertTrue(path.read_bytes().startswith(b"%PDF-"))
+
+
 class StatusNoteRenderTests(unittest.TestCase):
     def test_fixture_sentence_is_a_status_code(self) -> None:
         note = classify_status_note(

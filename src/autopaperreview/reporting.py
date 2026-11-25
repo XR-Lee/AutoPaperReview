@@ -446,10 +446,18 @@ def _classify_note(text: LocalizedText | None, metadata: dict) -> ClassifiedNote
     return classify_status_note(primary, metadata)
 
 
+def _language_item(indent: str, language: str, value: str, suffix: str = "") -> str:
+    """One ``- **lang:** value`` list item. Later lines and paragraphs of a multi-paragraph
+    value are indented under the item, so they stay part of it."""
+    first, *rest = (value + suffix).split("\n")
+    pad = indent + "  "
+    return "\n".join([f"{indent}- **{language}:** {first}", *((pad + line) if line.strip() else "" for line in rest)])
+
+
 def _prose_note_lines(text: LocalizedText, languages: Sequence[str], *, indent: str = "  ") -> list[str]:
     if len(languages) == 1:
         return [f"{indent}- {text.resolve(languages[0])}"]
-    return [f"{indent}- **{language}:** {text.resolve(language)}" for language in languages]
+    return [_language_item(indent, language, text.resolve(language)) for language in languages]
 
 
 def _ordered_groups(items: Sequence, key_fn):
@@ -494,7 +502,7 @@ def _render_ledger_records(
             else:
                 lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
                 for language in languages:
-                    lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                    lines.append(_language_item("  ", language, item.claim.resolve(language)))
         return lines
     for item, note in zip(records, classified):
         if quote_once:
@@ -509,7 +517,7 @@ def _render_ledger_records(
         else:
             lines.append(f"- `{item.id}`{_evidence_suffix(item.in_paper_evidence_ids)}")
             for language in languages:
-                lines.append(f"  - **{language}:** {item.claim.resolve(language)}")
+                lines.append(_language_item("  ", language, item.claim.resolve(language)))
         if note.status is not None:
             lines.append(f"  - {_legend_line(note.status, languages, note.params)}")
         elif item.risk:
@@ -779,7 +787,7 @@ def _prose_items(
     field: str,
     suffix: str = "",
 ) -> list[str]:
-    return [f"- **{language}:** {require_language(text, language, field=field)}{suffix}" for language in languages]
+    return [_language_item("", language, require_language(text, language, field=field), suffix) for language in languages]
 
 
 def render_markdown(
@@ -1028,7 +1036,7 @@ def _render_multilingual(package: ReviewPackage, languages: Sequence[str]) -> st
                     rationale = require_language(
                         score.rationale, language, field=f"{score.dimension.value}.rationale"
                     )
-                    lines.append(f"  - **{language}:** {rationale}")
+                    lines.append(_language_item("  ", language, rationale))
         lines.append("")
 
     lines.extend(_render_venue_block_bilingual(package, languages))
