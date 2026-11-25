@@ -42,6 +42,8 @@ class FakeClient:
         params = params or {}
         if path == "/notes":
             raise ChallengeRequired("browser check")
+        if path == "/notes/edits":
+            return {"edits": []}
         if path != "/notes/search":
             raise AssertionError(path)
         invitation = str(params.get("invitation") or "")
@@ -227,6 +229,10 @@ class EndToEndTests(unittest.TestCase):
             toml = (project / "review.toml").read_text(encoding="utf-8")
             self.assertIn('type = "related_work_search"', toml)
             self.assertIn('mode = "off"', toml)
+            self.assertIn('venue = "iclr2024"', toml)
+            self.assertIn("blocked_ids", toml)
+            self.assertIn("Prism Sort on the Lattice-7 benchmark", toml)
+            self.assertNotIn('venue = "iclr2027"', toml)
             self.assertIn('depends_on = ["consensus"]', toml)
 
         self.assertEqual(AGENT_ADAPTER, "autopaperreview.adapters:AgentJudgmentAdapter")
@@ -248,6 +254,7 @@ class EndToEndTests(unittest.TestCase):
                 network_policy="deny",
                 requires_network=False,
                 related_work="off",
+                venue_key="iclr2027",
                 base_url="http://127.0.0.1:8000/v1",
                 model="local-reviewer",
             )
@@ -272,6 +279,7 @@ class EndToEndTests(unittest.TestCase):
                 network_policy="deny",
                 requires_network=False,
                 related_work="off",
+                venue_key="iclr2027",
                 base_url="http://127.0.0.1:8000/v1",
                 model="local-reviewer",
                 coefficient_set="apr-fusion-v1",

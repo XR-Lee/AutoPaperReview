@@ -92,6 +92,10 @@ class ForecastFeedbackTests(unittest.TestCase):
             (paper / "status.json").write_text(
                 json.dumps({"forum_id": paper.name, "state": "prepared"}), encoding="utf-8"
             )
+            (paper / "calibration_meta.json").write_text(
+                json.dumps({"venue_key": "iclr2027", "blocked_ids": [], "blocked_titles": []}),
+                encoding="utf-8",
+            )
             arguments = [
                 "calibrate-eval", "run", "--cache", str(root), "--mode", "adapter",
                 "--adapter", MODEL_ADAPTER, "--cheap", "--coefficient-set", "apr-fusion-v1",
