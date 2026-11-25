@@ -4,7 +4,7 @@ The roadmap separates the implemented `0.1.x` contract from planned data-model a
 
 ## v0.1 baseline
 
-Implemented in the current package (`0.1.10`):
+Implemented in the current package (`0.1.11`):
 
 - Strict canonical review, artifact, stage, and run models.
 - TOML configuration with DAG validation.
@@ -40,8 +40,9 @@ Shipped, and no longer the next slice:
 - v0.1.7–0.1.8: declared ICLR rating `apr-iclr-cap-v1`, page renders, format check, visual inspect, AAAI-27 profile.
 - v0.1.9: related-work search and retrieval caps. The confidentiality check landed in that same release.
 - v0.1.10: OpenAI-compatible adapter, report-only `calibrate-eval`, `apr-iclr-cap-v2` (with `math.fsum` so Python 3.11 snaps the same bins as 3.12 and 3.13), the fusion rank now locked to `forecast-k1`, and manuscript PDF annotation. PydanticAI is still not an adapter.
+- v0.1.11: published Gate 1 and Gate 2 metrics, the proposal-review figure, and the version string. Prompts are unchanged. The proposal-review harness is not merged.
 
-Still open after 0.1.10:
+Still open after 0.1.11:
 
 1. The rest of the typed-locator family, and excerpt verification against parsed PDF/DOCX text. Quote search for annotation is not that parser.
 2. A citation-support check (the citing sentence against the retrieved paper). Related-work search already resolves arXiv, OpenAlex, and Semantic Scholar metadata. Crossref is not a client.
