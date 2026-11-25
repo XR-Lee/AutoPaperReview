@@ -1070,6 +1070,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from .proposal.cli import register as register_proposal_review
+
+    register_proposal_review(subparsers)
+
     validate = subparsers.add_parser("validate", help="validate a review TOML file and local paths")
     validate.add_argument("config")
     validate.set_defaults(func=command_validate)

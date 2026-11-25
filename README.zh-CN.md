@@ -2,6 +2,8 @@
 
 # AutoPaperReview
 
+研究立项阶段可以使用 [Auto Proposal Review](docs/proposal-review.md)，评估一份 proposal 或 AutoPaperDraft 中的全部贡献候选。
+
 AutoPaperReview（简称 APR）是一条在本地运行的审稿流水线。它有两种用法，分别单独运行：
 
 - **[审稿报告](#track-a)**：默认用法。`init` 之后正常 `run`，会写出一份七维审稿，附带证据表、贡献核对和致命问题检查。产物包括 Markdown 报告和带批注的稿件 PDF；装了 reportlab 的话，还有 `review_report.pdf`。

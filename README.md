@@ -2,6 +2,8 @@ English | [Simplified Chinese](README.zh-CN.md)
 
 # AutoPaperReview
 
+For research ideas before experiments, use the [Auto Proposal Review harness](docs/proposal-review.md). It can review a standalone proposal or every candidate in an AutoPaperDraft contribution file.
+
 AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two uses, and each one is a separate run:
 
 - **[Review report](#track-a)** is the default. After `init`, a normal `run` writes a seven-dimension review with an evidence ledger, a contributions audit, and a fatal-flaw check. The outputs are a Markdown report, `review_report.pdf` when reportlab is installed, and an annotated manuscript PDF.
