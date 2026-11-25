@@ -51,6 +51,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -58,8 +59,6 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
-
-from .i18n import script_matches
 
 from .adapters import ReviewRequest, ReviewResult, _merge_literature
 from .anchors import (
@@ -110,7 +109,9 @@ from .anchors import (
     panel_role_prompt_lines,
     rebuttal_seat_prompt_lines,
 )
+from .forecast_feedback import GROUNDED_WEAKNESSES, write_forecast_feedback
 from .hashing import sha256_bytes
+from .i18n import script_matches
 from .models import (
     AgendaQuestion,
     Anchor,
@@ -189,6 +190,14 @@ class ContributionJudgment(StrictPayload):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("contribution ids must be unique")
         return self
+
+
+class ContributionWithAction(ContributionItem):
+    required_action: str = Field(min_length=1, pattern=r"\S")
+
+
+class ContributionActionJudgment(ContributionJudgment):
+    items: list[ContributionWithAction] = Field(min_length=1)
 
 
 class LedgerItem(StrictPayload):
@@ -640,6 +649,7 @@ def _same_ids(found: list[str], expected: list[str], label: str) -> None:
 
 _SCHEMAS: dict[str, type[BaseModel]] = {
     "contributions": ContributionJudgment,
+    "contributions-action": ContributionActionJudgment,
     "ledger": LedgerJudgment,
     "dimensions": DimensionJudgment,
     "fatal": FatalJudgment,
@@ -659,6 +669,16 @@ _SCHEMA_HINTS = {
         '{"items":[{"id":"C1","claim":"...","excerpt":"exact substring",'
         '"tests":"...","comparator":"...","missing":"...","severity":"major","confidence":0.5}]} '
         "items must contain at least one contribution."
+    ),
+    "contributions-action": (
+        '{"items":[{"id":"C1","claim":"...","excerpt":"exact substring",'
+        '"tests":"...","comparator":"...","missing":"...","required_action":"...",'
+        '"severity":"major","confidence":0.5}]} '
+        "Keep the comparator field for the relevant comparison. Check the manuscript for "
+        "evidence that already answers the concern. In required_action ask for the smallest "
+        "specific correction, check or qualification that resolves the remaining gap. "
+        "When the evidence already establishes the claim, say that no revision is needed. "
+        "Include at least one contribution."
     ),
     "ledger": (
         '{"ledger":[{"id":"L1","claim":"...","excerpt":"exact substring","risk":"..."}],'
@@ -942,6 +962,12 @@ def _urlopen_transport(request: urllib.request.Request, timeout: float) -> bytes
 EXCERPT_FUZZY_THRESHOLD = 0.90
 EXCERPT_FUZZY_MIN_CHARS = 24
 
+_NUMBER = re.compile(r"[+−-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:[eE][+−-]?\d+)?")
+_EVIDENCE_LITERALS = re.compile(
+    _NUMBER.pattern + r"|<=|>=|!=|[<>=≤≥≠±%]|(?<!\w)[+-](?!\w)|\b(?:no|not|never|without)\b|n't\b",
+    re.IGNORECASE,
+)
+
 _DASH_TRANSLATION = str.maketrans(
     {
         "\u2010": "-",
@@ -986,11 +1012,12 @@ def _normalize_with_origins(text: str) -> tuple[str, list[int]]:
     index = 0
     while index < len(raw):
         char = raw[index]
-        if char == "-" and index + 1 < len(raw):
+        if text[index] in {"-", "\u2010"} and index > 0 and raw[index - 1].isalpha():
             cursor = index + 1
             while cursor < len(raw) and raw[cursor].isspace():
                 cursor += 1
-            if cursor > index + 1 and cursor < len(raw) and raw[cursor].isalpha():
+            gap = raw[index + 1:cursor]
+            if re.fullmatch(r"[ \t]*(?:\r\n|[\n\r\f\u2028])[ \t]*", gap) and cursor < len(raw) and raw[cursor].isalpha():
                 index = cursor
                 continue
         if char == "\u00ad":
@@ -1037,6 +1064,7 @@ def _fuzzy_normalized_span(
         words.append((part, start, start + len(part)))
         cursor = start + len(part)
     width = len(needle_words)
+    literals = _EVIDENCE_LITERALS.findall(needle.casefold())
     best: tuple[float, int, int] | None = None
     for size in range(max(4, width - 1), width + 2):
         if size > len(words):
@@ -1045,6 +1073,9 @@ def _fuzzy_normalized_span(
             window = " ".join(word for word, _start, _end in words[offset : offset + size])
             ratio = SequenceMatcher(None, needle, window).ratio()
             if ratio < EXCERPT_FUZZY_THRESHOLD:
+                continue
+            # A close spelling match cannot establish a changed quantity or negation.
+            if _EVIDENCE_LITERALS.findall(window.casefold()) != literals:
                 continue
             span = (words[offset][1], words[offset + size - 1][2])
             if best is None or ratio > best[0] or (ratio == best[0] and span[0] < best[1]):
@@ -1057,15 +1088,38 @@ def _fuzzy_normalized_span(
     return origins[start], origins[end - 1] + 1
 
 
+def _literal_excerpt_start(excerpt: str, source: str) -> int:
+    if not excerpt:
+        return -1
+    start = source.find(excerpt)
+    if start < 0:
+        return start
+    # Only boundaries touching a digit or numeric punctuation could split a
+    # value. Ordinary quotations take the existing substring fast path.
+    if not (re.match(r"[+−-]?\.?\d", excerpt) or re.search(r"\d[.,]?$", excerpt)):
+        return start
+    spans = [m.span() for m in _NUMBER.finditer(source)]
+
+    def splits_value(offset: int) -> bool:
+        index = bisect_left(spans, (offset,)) - 1
+        return index >= 0 and offset < spans[index][1]
+
+    while start >= 0:
+        if not splits_value(start) and not splits_value(start + len(excerpt)):
+            return start
+        start = source.find(excerpt, start + 1)
+    return -1
+
+
 def _resolve_span(excerpt: str, source: str) -> tuple[int, int, bool] | None:
     """Return source offsets and whether the excerpt was an exact substring."""
-    if excerpt in source:
-        start = source.find(excerpt)
+    start = _literal_excerpt_start(excerpt, source)
+    if start >= 0:
         return start, start + len(excerpt), True
     needle, _needle_origins = _normalize_with_origins(excerpt.strip())
     normalized, origins = _normalize_with_origins(source)
-    if needle and needle in normalized and origins:
-        start = normalized.find(needle)
+    start = _literal_excerpt_start(needle, normalized) if needle and origins else -1
+    if start >= 0:
         end = start + len(needle)
         return origins[start], origins[end - 1] + 1, False
     fuzzy = _fuzzy_normalized_span(needle, normalized, origins)
@@ -1727,6 +1781,14 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
     packet_routes = metadata.get("packet_routes") or {}
     if not isinstance(packet_routes, dict):
         raise ModelExecutionError("packet_routes must be a table of judgment to route id")
+    judgments = resolve_review_judgments(judgments, cheap=bool(metadata.get("cheap")))
+    holistic_mode = _holistic_mode(metadata.get("holistic_mode"))
+    grounded_weaknesses = bool(metadata.get("grounded_weaknesses"))
+    contribution_actions = bool(metadata.get("contribution_actions"))
+    if contribution_actions and "contributions" not in judgments:
+        raise ModelExecutionError("contribution_actions requires the contributions judgment")
+    if grounded_weaknesses and (holistic_mode != "forecast" or "holistic" not in judgments):
+        raise ModelExecutionError("grounded_weaknesses requires a holistic forecast judgment")
     return {
         "base_url": base_url,
         "model": model,
@@ -1737,7 +1799,7 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
         "timeout_seconds": float(metadata.get("timeout_seconds") or DEFAULT_MODEL_TIMEOUT_SECONDS),
         "temperature": float(metadata.get("temperature") or 0),
         "json_object": bool(metadata.get("json_object", True)),
-        "judgments": resolve_review_judgments(judgments, cheap=bool(metadata.get("cheap"))),
+        "judgments": judgments,
         "cheap": bool(metadata.get("cheap")),
         "holistic_samples": _bounded_int(
             metadata.get("holistic_samples"),
@@ -1751,7 +1813,9 @@ def _settings_from_mapping(metadata: dict[str, Any]) -> dict[str, Any]:
             low=0.0,
             high=2.0,
         ),
-        "holistic_mode": _holistic_mode(metadata.get("holistic_mode")),
+        "holistic_mode": holistic_mode,
+        "grounded_weaknesses": grounded_weaknesses,
+        "contribution_actions": contribution_actions,
         "packet_routes": {str(key): str(value) for key, value in packet_routes.items()},
         "stage_signature": str(metadata.get("stage_signature") or ""),
         "bilingual": bool(metadata.get("bilingual")),
@@ -1845,6 +1909,8 @@ _SESSION_SETTINGS_EXCLUDED = frozenset(
         "holistic_samples",
         "holistic_temperature",
         "holistic_mode",
+        "grounded_weaknesses",
+        "contribution_actions",
     }
 )
 
@@ -2207,7 +2273,7 @@ After the three reviews, set predicted_mean and rating, in that order and last. 
 """.strip()
 
 
-def forecast_task_text() -> str:
+def forecast_task_text(*, grounded_weaknesses: bool = False) -> str:
     """The forecast-panel instructions. The seat ids come from ``anchors.FORECAST_SEATS``.
 
     The scale paragraphs are the round 5-10 text, unchanged, so the forecast
@@ -2220,6 +2286,7 @@ def forecast_task_text() -> str:
             *forecast_seat_prompt_lines(),
             "",
             _FORECAST_STEPS,
+            *([GROUNDED_WEAKNESSES] if grounded_weaknesses else []),
             "",
             EXPERT_SCALE_PARAGRAPHS[0],
             "",
@@ -2409,7 +2476,9 @@ def rubric_prompt_text() -> str:
     return files("autopaperreview").joinpath("prompts", "sar_bands_v1.md").read_text(encoding="utf-8")
 
 
-def judgment_prompt_fingerprint() -> str:
+def judgment_prompt_fingerprint(
+    *, grounded_weaknesses: bool = False, contribution_actions: bool = False
+) -> str:
     """Hash of the text the adapter adds beyond the route packet. A prompt edit busts the cache."""
     from .hashing import digest_excerpt
 
@@ -2424,8 +2493,9 @@ def judgment_prompt_fingerprint() -> str:
             panel_task_text(),
             matched_task_text(),
             rebuttal_task_text(),
-            forecast_task_text(),
-            "excerpt-normalize-fuzzy-v1",
+            forecast_task_text(grounded_weaknesses=grounded_weaknesses),
+            *([_system_prompt("contributions-action")] if contribution_actions else []),
+            "excerpt-normalize-fuzzy-v2",
             "fatal-verify-v1",
             "venue-mean-k3-v1",
             "audited-k1-v1",
@@ -2490,6 +2560,7 @@ def _sample_holistic(
     mode: str = DEFAULT_HOLISTIC_MODE,
     request: ReviewRequest | None = None,
     snapshots: list[Any] | None = None,
+    feedback_source: str | None = None,
 ) -> dict[str, Any]:
     """K holistic samples in the declared mode.
 
@@ -2511,7 +2582,9 @@ def _sample_holistic(
         session.fail(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     session.authorize()
     if mode == "forecast":
-        return _forecast_samples(session, packet, samples=samples, temperature=temperature)
+        return _forecast_samples(
+            session, packet, samples=samples, temperature=temperature, feedback_source=feedback_source
+        )
     if mode == "rebuttal":
         return _rebuttal_samples(session, packet, samples=samples, temperature=temperature)
     if mode == "matched":
@@ -2972,11 +3045,12 @@ def _forecast_samples(
     *,
     samples: int,
     temperature: float,
+    feedback_source: str | None = None,
 ) -> dict[str, Any]:
     """K simulated forecast panels on the whole manuscript, run together. The locked candidate ``forecast-k1``."""
     shown, main_text = full_text_packet(packet, max_chars=FULL_TEXT_MAX_CHARS)
-    user = shown + "\n\n" + forecast_task_text()
-    panels: list[dict[str, Any] | None] = [None] * samples
+    user = shown + "\n\n" + forecast_task_text(grounded_weaknesses=feedback_source is not None)
+    panels: list[ForecastJudgment | None] = [None] * samples
     errors: list[BaseException] = []
 
     def one(index: int) -> ForecastJudgment:
@@ -3000,14 +3074,28 @@ def _forecast_samples(
             except Exception as exc:
                 errors.append(exc)
                 continue
-            panels[index] = _forecast_record(payload, sample=index)
+            panels[index] = payload
     if errors:
         raise errors[0]
     if any(item is None for item in panels):
         session.fail(
             "judgment holistic produced no rating; refusing to fall back to dimension bands"
         )
-    panel_values = [item for item in panels if item is not None]
+    completed = [item for item in panels if item is not None]
+    panel_values = [_forecast_record(item, sample=i) for i, item in enumerate(completed)]
+    if feedback_source is not None:
+        span = _source_span(shown)
+        shown_source = shown[span[0]:span[1]] if span else ""
+        if main_text["cut"] == "cap":
+            shown_source = shown_source.rsplit(MAIN_TEXT_CAP_MARKER, 1)[0]
+        dropped = write_forecast_feedback(
+            session.scratch / "model" / "forecast-feedback.txt", completed, feedback_source, shown_source
+        )
+        for item_id in dropped:
+            session.reject(
+                "forecast", item_id, "weakness has no unique quoted passage in the shown manuscript",
+                category="forecast_weakness_excerpt",
+            )
     rating_values = [float(item["decision"]) for item in panel_values]
     forecast_values = [float(item["forecast_mean"]) for item in panel_values]
     vote_values = [float(item["vote_mean"]) for item in panel_values]
@@ -3388,7 +3476,10 @@ def _run_judgments(
     judgments: list[str] = settings["judgments"]
     if "contributions" in judgments:
         route_id, packet = packet_for("contributions")
-        payload = session.complete("contributions", packet, ContributionJudgment)
+        if settings["contribution_actions"]:
+            payload = session.complete("contributions-action", packet, ContributionActionJudgment)
+        else:
+            payload = session.complete("contributions", packet, ContributionJudgment)
         assert isinstance(payload, ContributionJudgment)
         for item in payload.items:
             anchor = locate_excerpt(
@@ -3430,7 +3521,9 @@ def _run_judgments(
                 location=f"Contribution {item.id}",
                 evidence=_localized(item.tests),
                 impact=_localized(item.missing),
-                required_action=_localized(item.comparator),
+                required_action=_localized(
+                    item.required_action if isinstance(item, ContributionWithAction) else item.comparator
+                ),
                 confidence=item.confidence,
                 route_ids=_route_ids(route_id, request.routes),
                 source_ids=["S1"],
@@ -3638,6 +3731,7 @@ def _run_judgments(
             mode=str(settings.get("holistic_mode") or DEFAULT_HOLISTIC_MODE),
             request=request,
             snapshots=snapshots,
+            feedback_source=request.source_text if settings["grounded_weaknesses"] else None,
         )
 
     if settings["bilingual"]:

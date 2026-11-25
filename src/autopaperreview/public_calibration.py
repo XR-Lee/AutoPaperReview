@@ -1077,6 +1077,7 @@ def _write_project(
     cheap: bool = False,
     holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
     holistic_mode: str = LOCKED_HOLISTIC_MODE,
+    grounded_weaknesses: bool = False,
 ) -> None:
     if holistic_mode not in HOLISTIC_MODES:
         raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
@@ -1147,7 +1148,9 @@ def _write_project(
             review_params.append(f"allow_remote = {'true' if allow_remote else 'false'}")
             from .rubrics import FUSION_COEFFICIENT_SET
 
-            include_holistic = with_holistic or cheap or coefficient_set == FUSION_COEFFICIENT_SET
+            include_holistic = (
+                with_holistic or cheap or grounded_weaknesses or coefficient_set == FUSION_COEFFICIENT_SET
+            )
             if cheap:
                 judgment_names = ["holistic"]
             else:
@@ -1160,6 +1163,8 @@ def _write_project(
             if include_holistic:
                 review_params.append(f"holistic_samples = {int(holistic_samples)}")
                 review_params.append(f"holistic_mode = {_toml_string(holistic_mode)}")
+            if grounded_weaknesses:
+                review_params.append("grounded_weaknesses = true")
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
@@ -1482,6 +1487,7 @@ def run_cache(
     cheap: bool = False,
     holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
     holistic_mode: str = LOCKED_HOLISTIC_MODE,
+    grounded_weaknesses: bool = False,
     only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -1494,6 +1500,8 @@ def run_cache(
     if holistic_mode not in HOLISTIC_MODES:
         raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     spec = _resolve_adapter(mode, adapter)
+    if grounded_weaknesses and (spec != MODEL_ADAPTER or holistic_mode != "forecast"):
+        raise PublicCalibrationError("grounded weaknesses require the bundled model adapter and forecast mode")
     if spec == MODEL_ADAPTER and (not base_url or not model):
         raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
     if allow_remote and network_policy != "allow":
@@ -1549,6 +1557,7 @@ def run_cache(
                 cheap=cheap,
                 holistic_samples=holistic_samples,
                 holistic_mode=holistic_mode,
+                grounded_weaknesses=grounded_weaknesses,
             )
             manifest = run_pipeline(project / "review.toml")
             waiting = awaiting_requests(manifest)
@@ -1626,6 +1635,8 @@ def run_cache(
                 "pdf_source": status.get("pdf_source"),
                 "title": status.get("title"),
             }
+            if grounded_weaknesses:
+                score["grounded_weaknesses"] = True
             _write_json(project / "our_score.json", score)
             status["state"] = "scored"
             status["error"] = None

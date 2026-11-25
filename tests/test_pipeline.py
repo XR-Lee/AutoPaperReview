@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from autopaperreview.hashing import hash_json, sha256_file
+from autopaperreview.model_exec import _source_span
 from autopaperreview.models import ReviewPackage, StageStatus
 from autopaperreview.pipeline import PipelineError, run_pipeline
 
@@ -347,12 +348,20 @@ class PipelineIntegrationTests(unittest.TestCase):
                     prompt = "prompt.md"
                     manuscript_access = false
 
+                    [[routes]]
+                    id = "M1"
+                    name = "Manuscript route"
+                    kind = "prompt"
+                    prompt = "prompt.md"
+                    manuscript_access = true
+
                     [[stages]]
                     id = "packet"
                     type = "prompt_packet"
                     [stages.params]
-                    route_ids = ["M0"]
+                    route_ids = ["M0", "M1"]
                     include_source_text = true
+                    max_source_chars = 7
                     """
                 ).strip()
                 + "\n",
@@ -366,6 +375,18 @@ class PipelineIntegrationTests(unittest.TestCase):
             self.assertNotIn(secret_text, packet)
             self.assertNotIn("## Source Text", packet)
             self.assertIn("Manuscript access: `false`", packet)
+            self.assertNotIn("Source coverage:", packet)
+
+            source_packet = workspace / ".runs" / manifest.run_id / "stages" / "packet" / "M1.md"
+            text = source_packet.read_text(encoding="utf-8")
+            start, end = _source_span(text)
+            self.assertIn("omitted text after character 7", text[:start])
+            self.assertEqual(text[start:end].strip(), secret_text[:7])
+
+            (workspace / "manuscript.txt").write_text("Résumé.  \n", encoding="utf-8")
+            complete = run_pipeline(config_path)
+            packet = workspace / ".runs" / complete.run_id / "stages" / "packet" / "M1.md"
+            self.assertNotIn("Source coverage:", packet.read_text(encoding="utf-8"))
 
     def test_command_failure_record_uses_portable_log_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

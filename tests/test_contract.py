@@ -182,6 +182,28 @@ class ContractTests(unittest.TestCase):
         repro = next(item for item in records if item.id == "INT-REPRO-reporting")
         self.assertEqual(repro.verdict, IntegrityVerdict.major)
 
+    def test_reporting_pointer_uses_prose_and_preserves_uncertainty(self) -> None:
+        def pointer(source):
+            records = build_integrity_records(
+                manuscript_text=source, snapshots=[], inventory=[], evidence=[], workspace=Path("."),
+                reporting_pointer=True,
+            )
+            return next(record for record in records if record.id == "INT-REPRO-reporting")
+
+        bibliography = "A register lists every stamp.\nReferences\nA guide to error bars.\n"
+        missing = pointer(bibliography)
+        self.assertEqual(missing.verdict, IntegrityVerdict.unclear)
+        self.assertIsNone(missing.observed)
+        text = bibliography + "\nAppendix B\n\nTwo independent runs yielded counts of 12 and 14."
+        located = pointer(text)
+        self.assertEqual(located.verdict, IntegrityVerdict.unclear)
+        self.assertIn("independent runs", located.subject)
+        self.assertIn("counts of 12 and 14", located.observed)
+        self.assertEqual(located.observed, text[located.metadata["source_start"]:located.metadata["source_end"]])
+        self.assertNotIn("guide to error bars", located.observed)
+        cited = pointer("A previous study reported a confidence interval and used a random seed.")
+        self.assertEqual(cited.verdict, IntegrityVerdict.unclear)
+
     def test_reference_integrity_marks_unresolved_identifiers_unclear(self) -> None:
         from datetime import datetime, timezone
 
@@ -208,7 +230,7 @@ class ContractTests(unittest.TestCase):
     def test_synthetic_example_run_passes_export_gate(self) -> None:
         manifest = run_pipeline(Path("examples/synthetic/review.toml"), force=True)
         self.assertTrue(all(stage.status.value in {"success", "skipped"} for stage in manifest.stages))
-        report = next(Path("examples/synthetic/.runs").glob("*/stages/report/review_package.json"))
+        report = Path("examples/synthetic/.runs") / manifest.run_id / "stages/report/review_package.json"
         package = ReviewPackage.model_validate_json(report.read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(package.issues), 2)
         self.assertTrue(package.ledger_claims)

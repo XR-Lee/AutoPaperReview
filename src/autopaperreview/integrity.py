@@ -19,9 +19,37 @@ from .models import (
 )
 
 
-_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_PERCENTAGE = r"(?<![\w.,+−-])(?:\d+(?:\.\d+)?|\.\d+)\s*%(?!\w)"
+_PERCENT = re.compile(_PERCENTAGE)
+_ACCURACY = r"(?:(?:test|validation|classification|overall|top-1)\s+)*accuracy"
+_ACCURACY_FIELD = re.compile(
+    rf"^(?:(?:our|the)\s+)?{_ACCURACY}\s*"
+    rf"(?:(?:is|was|of)\s+|[:=]\s*|observed on [^,;:%]{{1,80}}?\s+(?:is|was)\s+)?{_PERCENTAGE}",
+    re.IGNORECASE,
+)
+_ACCURACY_REPORT = re.compile(
+    rf"^(?:we|(?:our|the proposed)\s+(?:model|method|system|classifier|detector))\s+"
+    rf"(?:achiev(?:e|es|ed)|attain(?:s|ed)?|obtain(?:s|ed)?|report(?:s|ed)?|reach(?:es|ed)?)\s+"
+    rf"(?:an?\s+)?(?:{_ACCURACY}\s+of\s+{_PERCENTAGE}|{_PERCENTAGE}\s+{_ACCURACY}\b)",
+    re.IGNORECASE,
+)
+_LINKED_ACCURACY = re.compile(
+    rf"{_PERCENTAGE}\s+{_ACCURACY}\b|\b{_ACCURACY}\s*(?:(?:is|was|of)\s+|[:=]\s*)?{_PERCENTAGE}",
+    re.IGNORECASE,
+)
+_NON_RESULT = re.compile(
+    r"\b(?:baseline|target|threshold|improvement|increase|decrease|gain|loss|"
+    r"higher|lower|relative|interval|approximately|roughly|at least|at most)\b", re.IGNORECASE
+)
 _FIXTURE_ARXIV = re.compile(r"^0+\.0+$")
 _SENTENCE = re.compile(r"(?<=[.!?。？！])\s+")
+_REPORTING_TERM = re.compile(
+    r"\b(?:confidence\s+intervals?|standard\s+(?:errors?|deviations?)|error\s+bars?|"
+    r"(?:random|repeated)\s+seeds?|independent\s+runs?|single\s+run)\b",
+    re.IGNORECASE,
+)
+_BIBLIOGRAPHY = re.compile(r"(?im)^[ \t#]*(?:\d+\.?[ \t]+)?(?:references|bibliography)[ \t]*\r?$")
+_APPENDIX = re.compile(r"(?im)^[ \t#]*(?:appendix|appendices|supplementary material)\b[^\n]{0,100}$")
 
 
 def _sentences(text: str) -> list[str]:
@@ -49,6 +77,81 @@ def reporting_is_present(text: str, term: str) -> bool:
 
 def _localized(text: str) -> LocalizedText:
     return LocalizedText(primary=text, language="en")
+
+
+def _reporting_pointer(text: str) -> IntegrityRecord:
+    """Point to a manuscript passage. A keyword cannot determine scientific adequacy."""
+    references = _BIBLIOGRAPHY.search(text)
+    section_start = 0
+    end = references.start() if references else len(text)
+    match = _REPORTING_TERM.search(text, 0, end)
+    if match is None and references:
+        appendix = _APPENDIX.search(text, references.end())
+        if appendix:
+            section_start = appendix.start()
+            end = len(text)
+            match = _REPORTING_TERM.search(text, section_start)
+    if match is None:
+        return IntegrityRecord(
+            id="INT-REPRO-reporting",
+            kind=IntegrityKind.reproducibility_attestation,
+            verdict=IntegrityVerdict.unclear,
+            subject="Uncertainty reporting",
+            notes=LocalizedText(
+                primary="The automatic text check found no passage to assess.",
+                language="en",
+                translations={"zh-Hans": "自动文本检查未找到可核查的段落。"},
+            ),
+        )
+
+    # Save original character offsets. Bound the context even for unwrapped text.
+    start = max(section_start, match.start() - 100)
+    paragraph_start = text.rfind("\n\n", start, match.start())
+    if paragraph_start >= 0:
+        start = paragraph_start + 2
+    end = min(end, match.end() + 100)
+    paragraph_break = text.find("\n\n", match.end(), end)
+    if paragraph_break >= 0:
+        end = paragraph_break
+    excerpt = text[start:end]
+    term = " ".join(match.group().split())
+    return IntegrityRecord(
+        id="INT-REPRO-reporting",
+        kind=IntegrityKind.reproducibility_attestation,
+        verdict=IntegrityVerdict.unclear,
+        subject=f"“{term}” · manuscript[{start}:{end}]",
+        observed=excerpt,
+        notes=LocalizedText(
+            primary="For an empirical claim that depends on variation, check which independent units or repeated runs this passage describes.",
+            language="en",
+            translations={"zh-Hans": "若实证结论依赖样本或运行间的波动，请核对该处涉及哪些独立单位或重复运行。"},
+        ),
+        metadata={"source_start": start, "source_end": end},
+    )
+
+
+def _manuscript_accuracy(text: str) -> tuple[float | None, bool]:
+    """Bind an unqualified results.json scalar only to a single, explicit accuracy result."""
+    values: set[float] = set()
+    other_values: set[float] = set()
+    for segment in re.split(r"(?<=[.!?])\s+|[;\n]", text):
+        segment = segment.strip()
+        if not (_ACCURACY_FIELD.match(segment) or _ACCURACY_REPORT.match(segment)):
+            for match in _LINKED_ACCURACY.finditer(segment):
+                percentage = _PERCENT.search(match.group())
+                other_values.add(float(percentage.group().removesuffix("%").strip()) / 100)
+            continue
+        if _NON_RESULT.search(segment) or re.search(r"%\s*(?:[±+−–-]|to\b)", segment):
+            continue
+        percentages = _PERCENT.findall(segment)
+        if len(percentages) != 1:
+            return None, True
+        value = float(percentages[0].removesuffix("%").strip())
+        if 0 <= value <= 100:
+            values.add(value / 100)
+    if values and len(values | other_values) > 1:
+        return None, True
+    return (values.pop() if values else None), False
 
 
 def assert_inside_workspace(path: Path, workspace: Path) -> Path:
@@ -116,6 +219,7 @@ def build_integrity_records(
     inventory: list[Artifact],
     evidence: list[EvidenceRecord],
     workspace: Path,
+    reporting_pointer: bool = False,
 ) -> list[IntegrityRecord]:
     evidence_ids = {item.id for item in evidence}
     records: list[IntegrityRecord] = []
@@ -151,13 +255,27 @@ def build_integrity_records(
             )
         )
 
-    percents = [float(match) for match in _PERCENT.findall(manuscript_text)]
-    results_artifact = next((item for item in inventory if Path(item.path).name == "results.json"), None)
-    if percents and results_artifact:
+    expected, ambiguous = _manuscript_accuracy(manuscript_text)
+    results_files = [item for item in inventory if Path(item.path).name == "results.json"]
+    if ambiguous or (expected is not None and len(results_files) > 1):
+        records.append(
+            IntegrityRecord(
+                id="INT-RES-accuracy",
+                kind=IntegrityKind.results_integrity,
+                verdict=IntegrityVerdict.unclear,
+                subject="results.json / accuracy",
+                notes=LocalizedText(
+                    primary="The accuracy field cannot be linked to a unique manuscript measurement and results file.",
+                    language="en",
+                    translations={"zh-Hans": "无法将准确率字段唯一对应到稿件中的测量值和工作区中的结果文件。"},
+                ),
+            )
+        )
+    elif expected is not None and results_files:
+        results_artifact = results_files[0]
         payload = _load_json_artifact(results_artifact, workspace) or {}
         observed = payload.get("accuracy")
-        expected = percents[0] / 100.0 if percents[0] > 1 else percents[0]
-        if isinstance(observed, (int, float)):
+        if type(observed) in (int, float) and 0 <= observed <= 1:
             verdict = IntegrityVerdict.exact if abs(float(observed) - expected) < 1e-9 else IntegrityVerdict.mismatch
             records.append(
                 IntegrityRecord(
@@ -180,18 +298,22 @@ def build_integrity_records(
                     },
                 )
             )
-    elif percents:
+    elif expected is not None:
         records.append(
             IntegrityRecord(
                 id="INT-RES-accuracy",
                 kind=IntegrityKind.results_integrity,
                 verdict=IntegrityVerdict.missing,
                 subject="manuscript accuracy claim",
-                expected=str(percents[0]),
+                expected=str(expected),
                 notes=_localized("No results.json was present in the inspected workspace."),
                 metadata={"note_code": "no-results"},
             )
         )
+
+    if reporting_pointer:
+        records.append(_reporting_pointer(manuscript_text))
+        return records
 
     has_ci = reporting_is_present(manuscript_text, "confidence interval") or reporting_is_present(
         manuscript_text, "confidence intervals"

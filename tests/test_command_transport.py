@@ -293,8 +293,8 @@ AUDIT_EXCERPT = "a counting rule for the synthetic cohort"
 
 
 class LedgerConsensusTests(CommandTransportCase):
-    def test_model_audit_replaces_the_pending_placeholder_and_its_evidence(self) -> None:
-        """The deterministic ledger and the model audit both write C1 and E-C1; consensus keeps the audit."""
+    def test_model_audit_keeps_its_quote_and_the_listed_manuscript_evidence(self) -> None:
+        """A contribution audit fills C1. Its quote is kept, and so is the listed manuscript evidence."""
         self.replies.write_text(json.dumps({"contributions": _contribution(AUDIT_EXCERPT)}), encoding="utf-8")
         workspace = self.root / "project"
         (workspace / "prompts").mkdir(parents=True)
@@ -371,10 +371,15 @@ class LedgerConsensusTests(CommandTransportCase):
         self.assertNotEqual(placeholder_evidence["E-C1"], AUDIT_EXCERPT)
         merged = json.loads((run_dir / "stages" / "consensus" / "consensus.json").read_text(encoding="utf-8"))
         evidence = {item["id"]: item["excerpt"] for item in merged["evidence"]}
+        sources = {item["id"]: item["source_id"] for item in merged["evidence"]}
         claims = {item["id"]: item for item in merged["ledger_claims"]}
-        self.assertEqual(evidence["E-C1"], AUDIT_EXCERPT)
         self.assertEqual(claims["C1"]["claim"]["primary"], "The counting rule is the first listed contribution.")
-        self.assertEqual(claims["C1"]["in_paper_evidence_ids"], ["E-C1"])
+        self.assertEqual(claims["C1"]["metadata"]["audit"], "checked")
+        self.assertEqual(claims["C1"]["in_paper_evidence_ids"], ["model-E-C1", "E-C1"])
+        self.assertEqual(evidence["model-E-C1"], AUDIT_EXCERPT)
+        self.assertEqual(sources["model-E-C1"], "S1")
+        self.assertEqual(evidence["E-C1"], placeholder_evidence["E-C1"])
+        self.assertEqual(sources["E-C1"], "S-manuscript")
         self.assertEqual(claims["C2"]["metadata"]["audit"], "pending")
         self.assertEqual(evidence["E-C2"], placeholder_evidence["E-C2"])
 

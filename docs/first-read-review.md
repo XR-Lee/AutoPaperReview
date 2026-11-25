@@ -6,6 +6,13 @@ This document records the open venue guides and open reviewers this slice copied
 
 Related documents: [Architecture](architecture.md), [Roadmap](roadmap.md), [Feature gaps versus stronger open experiments](oss-experiment-gaps.md).
 
+## Model-generated revision requests
+
+For an experimental model-based contribution audit, set `contribution_actions = true` in
+the `execute_review` stage's `[stages.params]`. Include the `contributions` judgment.
+The model checks for evidence that addresses its concern and writes a separate revision
+request into the report's **Required action** field. The ledger retains the comparator.
+
 ## The failure mode
 
 Before this slice, the harness already stored evidence IDs, anchors, and Evidence / Impact / Required action fields. The rendered review still read like an auditor's notebook:
