@@ -11,6 +11,7 @@ import shutil
 import sys
 from importlib.resources import files
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -23,8 +24,10 @@ from .models import BatchCalibration, ReviewIssue, ReviewPackage, RunManifest
 from .pipeline import (
     PipelineError,
     RunLockedError,
+    _atomic_write,
     default_registry,
     load_manifest,
+    run_lock,
     run_pipeline,
     validate_config_paths,
 )
@@ -278,29 +281,45 @@ def command_calibrate_eval_run(args: argparse.Namespace) -> int:
             "related_work": args.related_work,
             "status": manifest["status"],
         }
-    result = run_cache(
-        Path(args.cache),
-        mode=args.mode,
-        adapter=args.adapter,
-        network_policy=args.network_policy,
-        requires_network=args.requires_network,
-        related_work=args.related_work,
-        base_url=args.base_url,
-        model=args.model_name,
-        api_key_env=args.api_key_env,
-        allow_remote=args.allow_remote,
-        coefficient_set=args.coefficient_set,
-        with_holistic=args.with_holistic,
-        cheap=args.cheap,
-        holistic_samples=args.holistic_samples,
-        holistic_mode=args.holistic_mode,
-        only_ids=only_ids,
-    )
+        if args.grounded_weaknesses:
+            fixed_stamp["grounded_weaknesses"] = True
+    cache = assert_local_only(Path(args.cache))
     if fixed_stamp is not None:
-        cache = assert_local_only(Path(args.cache))
-        stamp = cache / "fixed-eval-run.json"
-        stamp.write_text(json.dumps(fixed_stamp, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        result = {**result, "fixed_eval": fixed_stamp}
+        cache.mkdir(parents=True, exist_ok=True)
+    lock = run_lock(cache) if fixed_stamp is not None else contextlib.nullcontext()
+    with lock:
+        if fixed_stamp is not None:
+            stamp = cache / "fixed-eval-run.json"
+            fixed_stamp.update(run_state="incomplete", run_id=uuid4().hex)
+            _atomic_write(stamp, json.dumps(fixed_stamp, indent=2, sort_keys=True) + "\n")
+        result = run_cache(
+            cache,
+            mode=args.mode,
+            adapter=args.adapter,
+            network_policy=args.network_policy,
+            requires_network=args.requires_network,
+            related_work=args.related_work,
+            base_url=args.base_url,
+            model=args.model_name,
+            api_key_env=args.api_key_env,
+            allow_remote=args.allow_remote,
+            coefficient_set=args.coefficient_set,
+            with_holistic=args.with_holistic,
+            cheap=args.cheap,
+            holistic_samples=args.holistic_samples,
+            holistic_mode=args.holistic_mode,
+            grounded_weaknesses=args.grounded_weaknesses,
+            only_ids=only_ids,
+        )
+        if fixed_stamp is not None:
+            scored_ids = {row["forum_id"] for row in result["scored"]}
+            if not result["errors"] and not result["awaiting_judgment"]:
+                if scored_ids == only_ids:
+                    fixed_stamp["run_state"] = "complete"
+                    _atomic_write(stamp, json.dumps(fixed_stamp, indent=2, sort_keys=True) + "\n")
+                else:
+                    result["errors"].append({"error": "fixed run did not score every requested paper"})
+            result = {**result, "fixed_eval": fixed_stamp}
     if result["awaiting_judgment"]:
         status = "awaiting_judgment"
         code = 3
@@ -1206,6 +1225,11 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--requires-network", action="store_true")
     eval_run.add_argument("--coefficient-set", default="apr-iclr-cap-v2")
     eval_run.add_argument("--with-holistic", action="store_true")
+    eval_run.add_argument(
+        "--grounded-weaknesses",
+        action="store_true",
+        help="ask forecast reviewers for actionable weaknesses and write their located comments to model/forecast-feedback.txt",
+    )
     eval_run.add_argument(
         "--cheap",
         action="store_true",

@@ -13,10 +13,12 @@ stay in that cache.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import statistics
 import subprocess
+import time
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
@@ -32,9 +34,21 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .adapters import digest_packet_text, load_review_adapter
 from .anchors import HOLISTIC_MODES, LOCKED_HOLISTIC_MODE, LOCKED_HOLISTIC_SAMPLES
+from .iclr_anonymize import anonymize_iclr_submission, own_arxiv_ids
 from .pipeline import PipelineError, awaiting_requests, run_pipeline
 from .rating import snap_down
+from .rating_scales import (
+    RatingScale,
+    classic_scale,
+    scale_for_venue_text,
+    scale_for_year,
+    unparsed_fraction_limit as configured_unparsed_limit,
+)
 from .rubrics import COEFFICIENT_SET, ICLR_BINS
+from .venues import known_venue_keys
+
+LOGGER = logging.getLogger(__name__)
+OPENREVIEW_MIN_INTERVAL_SECONDS = 1.0
 
 API_ROOT = "https://api2.openreview.net"
 USER_AGENT = "AutoPaperReview-calibration-eval"
@@ -284,8 +298,30 @@ def is_official_review(note: dict[str, Any]) -> bool:
     return True
 
 
-def parse_rating(value: Any) -> int | None:
-    """Parse a public ICLR rating into a bin. Unknown scales are ignored."""
+class RatingScaleError(PublicCalibrationError):
+    """Official ratings were present and off the venue scale.
+
+    Dropping them would change which papers and which reviewers enter the
+    sample. The counts are the whole message; review prose is not included.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        scale_key: str,
+        parsed: int,
+        unparsed: int,
+        missing: int,
+    ) -> None:
+        super().__init__(message)
+        self.scale_key = scale_key
+        self.parsed = parsed
+        self.unparsed = unparsed
+        self.missing = missing
+
+
+def _leading_int(value: Any) -> int | None:
     if isinstance(value, dict) and "value" in value:
         value = value["value"]
     if isinstance(value, bool) or value is None:
@@ -294,13 +330,36 @@ def parse_rating(value: Any) -> int | None:
         number = int(value)
         if float(number) != float(value):
             return None
-        return number if number in ICLR_BINS else None
+        return number
     if isinstance(value, str):
-        head = value.strip().split(":", 1)[0].strip()
-        if head.isdigit():
-            number = int(head)
-            return number if number in ICLR_BINS else None
+        head = value.strip().split(":", 1)[0].strip().split()
+        token = head[0] if head else ""
+        if token.isdigit():
+            return int(token)
     return None
+
+
+def _rating_token(value: Any) -> str:
+    number = _leading_int(value)
+    if number is None:
+        return "non-numeric"
+    return str(number)
+
+
+def parse_rating(value: Any, *, scale: RatingScale | None = None) -> int | None:
+    """Parse one official rating on ``scale``.
+
+    The default scale is the ICLR 2024/2025 set 1/3/5/6/8/10, which keeps
+    older callers stable. Venue-aware callers pass ``scale_for_year`` or
+    ``scale_for_venue_text``. A number that is outside the scale returns
+    None. Callers must count those misses. None does not mean the review
+    was absent.
+    """
+    active = scale or classic_scale()
+    number = _leading_int(value)
+    if number is None or not active.allows(number):
+        return None
+    return number
 
 
 def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -315,17 +374,120 @@ def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]
     return list(best.values())
 
 
-def human_ratings(notes: list[dict[str, Any]]) -> tuple[list[int], list[str]]:
+class RatingParseResult:
+    """Parsed official ratings plus the ones the scale refused."""
+
+    def __init__(
+        self,
+        *,
+        ratings: list[int],
+        labels: list[str],
+        scale: RatingScale,
+        attempted: int,
+        unparsed: int,
+        missing: int,
+        off_scale_tokens: list[str],
+    ) -> None:
+        self.ratings = ratings
+        self.labels = labels
+        self.scale = scale
+        self.attempted = attempted
+        self.unparsed = unparsed
+        self.missing = missing
+        self.off_scale_tokens = off_scale_tokens
+
+    @property
+    def scale_key(self) -> str:
+        return self.scale.key
+
+
+def collect_official_ratings(
+    notes: list[dict[str, Any]],
+    *,
+    scale: RatingScale | None = None,
+    unparsed_fraction_limit: float | None = None,
+) -> RatingParseResult:
+    """Parse every official rating. Off-scale values are counted, not dropped.
+
+    ``unparsed_fraction_limit`` is the largest share of present ratings that
+    may fall outside the scale. The default is the configured limit, which is
+    0: one off-scale rating fails the paper. Missing rating fields are counted
+    separately and do not by themselves trip the limit.
+    """
+    active = scale or classic_scale()
+    limit = configured_unparsed_limit() if unparsed_fraction_limit is None else float(unparsed_fraction_limit)
+    if limit < 0 or limit > 1:
+        raise PublicCalibrationError("unparsed_fraction_limit must be between 0 and 1")
     ratings: list[int] = []
     labels: list[str] = []
-    for note in latest_official_reviews(notes):
+    unparsed = 0
+    missing = 0
+    off_scale_tokens: list[str] = []
+    reviews = latest_official_reviews(notes)
+    for note in reviews:
         raw = content_value(note, "rating")
-        parsed = parse_rating(raw)
+        if raw is None or raw == "":
+            missing += 1
+            continue
+        parsed = parse_rating(raw, scale=active)
         if parsed is None:
+            unparsed += 1
+            off_scale_tokens.append(_rating_token(raw))
             continue
         ratings.append(parsed)
         labels.append(str(raw if not isinstance(raw, dict) else raw.get("value")))
-    return ratings, labels
+    present = unparsed + len(ratings)
+    if unparsed:
+        LOGGER.warning(
+            "official ratings off scale %s: unparsed=%s present=%s missing=%s tokens=%s",
+            active.key,
+            unparsed,
+            present,
+            missing,
+            off_scale_tokens[:12],
+        )
+    if present and (unparsed / present) > limit:
+        raise RatingScaleError(
+            f"{unparsed} of {present} official ratings are off the {active.label()} scale "
+            f"(limit {limit}). Refusing to drop them. Off-scale tokens: {off_scale_tokens[:12]}.",
+            scale_key=active.key,
+            parsed=len(ratings),
+            unparsed=unparsed,
+            missing=missing,
+        )
+    return RatingParseResult(
+        ratings=ratings,
+        labels=labels,
+        scale=active,
+        attempted=len(reviews),
+        unparsed=unparsed,
+        missing=missing,
+        off_scale_tokens=off_scale_tokens,
+    )
+
+
+def human_ratings(
+    notes: list[dict[str, Any]],
+    *,
+    scale: RatingScale | None = None,
+    unparsed_fraction_limit: float | None = None,
+) -> tuple[list[int], list[str]]:
+    """Official ratings on ``scale``. Off-scale ratings raise ``RatingScaleError``."""
+    parsed = collect_official_ratings(
+        notes,
+        scale=scale,
+        unparsed_fraction_limit=unparsed_fraction_limit,
+    )
+    return parsed.ratings, parsed.labels
+
+
+def rating_scale_for_submission(submission: dict[str, Any], *, year: int | None = None) -> RatingScale:
+    if year is not None:
+        return scale_for_year(year)
+    return scale_for_venue_text(
+        str(content_value(submission, "venueid") or ""),
+        str(content_value(submission, "venue") or ""),
+    )
 
 
 SUBSCORE_AXES = ("soundness", "presentation", "contribution")
@@ -628,7 +790,8 @@ class HttpOpenReviewClient:
 
     def __init__(self, *, timeout: float = 60, sleeper: Sleeper | None = None) -> None:
         self.timeout = timeout
-        self._sleep = sleeper or (lambda _seconds: None)
+        self._sleep = sleeper or time.sleep
+        self.edits_blocked = False
 
     def get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         query = urllib.parse.urlencode({key: value for key, value in (params or {}).items() if value is not None})
@@ -640,12 +803,12 @@ class HttpOpenReviewClient:
             raise PublicCalibrationError("OpenReview returned a non-JSON notes payload") from exc
         if not isinstance(payload, dict):
             raise PublicCalibrationError("OpenReview notes payload was not an object")
-        self._sleep(0.2)
+        self._sleep(OPENREVIEW_MIN_INTERVAL_SECONDS)
         return payload
 
     def get_bytes(self, url: str) -> bytes:
         body = self._read(url, accept="application/pdf,*/*")
-        self._sleep(0.2)
+        self._sleep(OPENREVIEW_MIN_INTERVAL_SECONDS)
         return body
 
     def _read(self, url: str, *, accept: str) -> bytes:
@@ -848,18 +1011,103 @@ def _openreview_pdf_urls(forum_id: str, pdf_path: str | None) -> list[str]:
     return urls
 
 
-def download_pdf(
-    client: Any,
-    submission: dict[str, Any],
-    *,
-    pdf_fallback: str,
-    arxiv_finder: ArxivFinder,
-) -> tuple[str, bytes]:
-    forum_id = str(submission.get("forum") or submission.get("id"))
-    pdf_path = content_value(submission, "pdf")
-    pdf_path = str(pdf_path) if isinstance(pdf_path, str) else None
+_CAMERA_READY_INVITATION = re.compile(r"(?i)camera[\s_-]*ready|final[\s_-]*(?:submission|version)")
+
+
+def _pdf_pointer(value: Any) -> str | None:
+    if isinstance(value, dict) and "value" in value:
+        value = value["value"]
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _invitation_blob(record: dict[str, Any]) -> str:
+    invitations = [str(item) for item in (record.get("invitations") or [])]
+    if isinstance(record.get("invitation"), str):
+        invitations.append(record["invitation"])
+    return " ".join(invitations)
+
+
+def _edit_timestamp(record: dict[str, Any]) -> int:
+    for key in ("tcdate", "tmdate", "cdate", "mdate"):
+        value = record.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    note = record.get("note")
+    if isinstance(note, dict):
+        return _edit_timestamp(note)
+    return 0
+
+
+def load_submission_edits(client: Any, note_id: str) -> list[dict[str, Any]]:
+    """Edit history for one note. A 403 stops further edit calls on this client."""
+    if getattr(client, "edits_blocked", False):
+        return []
+    try:
+        payload = client.get_json("/notes/edits", {"note.id": note_id, "limit": 200})
+    except ChallengeRequired:
+        setattr(client, "edits_blocked", True)
+        return []
+    except PublicCalibrationError:
+        return []
+    edits = payload.get("edits") or []
+    return [item for item in edits if isinstance(item, dict)]
+
+
+def _pdf_candidates(submission: dict[str, Any], edits: list[dict[str, Any]]) -> list[tuple[int, str, bool]]:
+    """(timestamp, pdf pointer, camera_ready) from the edit history and the current note."""
+    found: list[tuple[int, str, bool]] = []
+    for edit in edits:
+        note = edit.get("note") if isinstance(edit.get("note"), dict) else edit
+        pointer = _pdf_pointer(content_value(note, "pdf"))
+        if pointer is None:
+            continue
+        invitation = _invitation_blob(edit) or _invitation_blob(note)
+        found.append((_edit_timestamp(edit), pointer, bool(_CAMERA_READY_INVITATION.search(invitation))))
+    current = _pdf_pointer(content_value(submission, "pdf"))
+    if current is not None:
+        invitation = _invitation_blob(submission)
+        found.append(
+            (
+                _edit_timestamp(submission),
+                current,
+                bool(_CAMERA_READY_INVITATION.search(invitation)),
+            )
+        )
+    return found
+
+
+def prefer_original_pdf(submission: dict[str, Any], edits: list[dict[str, Any]]) -> tuple[str, str] | None:
+    """Latest non-camera-ready PDF, when the history distinguishes one.
+
+    Returns ``(source, pointer)``. ``openreview:original`` is a pre-camera-ready
+    PDF. ``openreview:submission`` is the current PDF when nothing in the
+    history is marked camera-ready. None means the only PDF on record is
+    camera-ready, so the caller anonymizes that text instead.
+    """
+    candidates = _pdf_candidates(submission, edits)
+    if not candidates:
+        return None
+    anonymous = [item for item in candidates if not item[2]]
+    camera = [item for item in candidates if item[2]]
+    if anonymous:
+        _timestamp, pointer, _flag = max(anonymous, key=lambda item: item[0])
+        if camera and any(item[1] != pointer for item in camera):
+            return "openreview:original", pointer
+        if camera and all(item[1] == pointer for item in camera):
+            return "openreview:submission", pointer
+        if not camera:
+            return "openreview:submission", pointer
+        return "openreview:original", pointer
+    return None
+
+
+def _read_pdf(client: Any, forum_id: str, pointer: str | None) -> tuple[bytes | None, bool]:
     challenged = False
-    for url in _openreview_pdf_urls(forum_id, pdf_path):
+    for url in _openreview_pdf_urls(forum_id, pointer):
         try:
             body = client.get_bytes(url)
         except ChallengeRequired:
@@ -868,7 +1116,37 @@ def download_pdf(
         except PublicCalibrationError:
             continue
         if body.startswith(b"%PDF"):
-            return "openreview", body
+            return body, challenged
+    return None, challenged
+
+
+def download_pdf(
+    client: Any,
+    submission: dict[str, Any],
+    *,
+    pdf_fallback: str,
+    arxiv_finder: ArxivFinder,
+    edits: list[dict[str, Any]] | None = None,
+) -> tuple[str, bytes]:
+    """Prefer a pre-camera-ready OpenReview PDF, then the current PDF, then arXiv."""
+    forum_id = str(submission.get("forum") or submission.get("id"))
+    preferred = prefer_original_pdf(submission, list(edits or []))
+    challenged = False
+    tried: set[str] = set()
+    if preferred is not None:
+        source, pointer = preferred
+        tried.add(pointer)
+        body, hit_challenge = _read_pdf(client, forum_id, pointer)
+        challenged = challenged or hit_challenge
+        if body is not None:
+            return source, body
+    current = _pdf_pointer(content_value(submission, "pdf"))
+    if current not in tried:
+        label = "openreview:camera-ready" if preferred is None else "openreview:current"
+        body, hit_challenge = _read_pdf(client, forum_id, current)
+        challenged = challenged or hit_challenge
+        if body is not None:
+            return label, body
     if pdf_fallback != "arxiv":
         if challenged:
             raise ChallengeRequired(
@@ -1000,27 +1278,47 @@ def _fetch_one(
                 submission, reviews = direct
         decision = decision_of(submission, item.decision)
         title = str(content_value(submission, "title") or "")
-        ratings, labels = human_ratings(reviews)
+        scale = rating_scale_for_submission(submission)
+        parsed_ratings = collect_official_ratings(reviews, scale=scale)
+        ratings, labels = parsed_ratings.ratings, parsed_ratings.labels
         status["title"] = title
         status["decision"] = decision
         status["n_ratings"] = len(ratings)
+        status["rating_scale"] = parsed_ratings.scale_key
+        status["ratings_parsed"] = len(ratings)
+        status["ratings_unparsed"] = parsed_ratings.unparsed
+        status["ratings_missing"] = parsed_ratings.missing
         if decision not in {"accept", "reject"}:
             raise PublicCalibrationError("public note has no accept/reject decision")
         if len(ratings) < 2:
-            raise PublicCalibrationError("fewer than two official ratings on the 1/3/5/6/8/10 scale")
+            raise PublicCalibrationError(
+                f"fewer than two official ratings on the {scale.label()} scale"
+            )
+        edits = load_submission_edits(client, item.forum_id)
         pdf_source, pdf_bytes = download_pdf(
             client,
             submission,
             pdf_fallback=pdf_fallback,
             arxiv_finder=arxiv_finder,
+            edits=edits,
         )
         pdf_path = destination / "manuscript.pdf"
         pdf_path.write_bytes(pdf_bytes)
-        text = text_extractor(pdf_path).strip()
-        if len(text) < 800:
+        raw_text = text_extractor(pdf_path).strip()
+        anonymized, removed = anonymize_iclr_submission(raw_text)
+        if len(anonymized.strip()) < 800:
             raise PublicCalibrationError("extracted manuscript text is too short to review")
-        (destination / "manuscript.txt").write_text(text + "\n", encoding="utf-8")
+        (destination / "manuscript.raw.txt").write_text(raw_text + "\n", encoding="utf-8")
+        (destination / "manuscript.txt").write_text(anonymized, encoding="utf-8")
         _write_json(destination / "submission.json", submission)
+        write_calibration_meta(
+            destination,
+            submission=submission,
+            forum_id=item.forum_id,
+            pdf_source=pdf_source,
+            raw_text=raw_text,
+            scale_key=parsed_ratings.scale_key,
+        )
         heldout = destination / "heldout"
         heldout.mkdir(parents=True, exist_ok=True)
         _write_json(heldout / "reviews.json", reviews)
@@ -1031,13 +1329,17 @@ def _fetch_one(
                 "ratings": ratings,
                 "rating_labels": labels,
                 "subscores": human_subscores(reviews),
+                "rating_scale": parsed_ratings.scale_key,
+                "ratings_unparsed": parsed_ratings.unparsed,
+                "ratings_missing": parsed_ratings.missing,
             },
         )
         status.update(
             {
                 "state": "fetched",
                 "pdf_source": pdf_source,
-                "text_chars": len(text),
+                "text_chars": len(anonymized),
+                "anonymizer_removed": removed,
                 "error": None,
             }
         )
@@ -1054,9 +1356,117 @@ def _prompt_version(filename: str) -> str:
 
 
 def _toml_string(value: str) -> str:
-    if any(character in value for character in "\n\r\""):
-        raise PublicCalibrationError("TOML string values cannot contain quotes or newlines")
-    return f'"{value}"'
+    """A TOML basic string. Quotes and newlines are escaped."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_string_array(values: list[str]) -> str:
+    return "[" + ", ".join(_toml_string(item) for item in values) + "]"
+
+
+_VENUE_YEAR = re.compile(r"(?i)(?:ICLR\.cc/|ICLR\s+)(20\d{2})")
+
+
+def venue_key_for_submission(submission: dict[str, Any]) -> str | None:
+    blob = " ".join(
+        str(part)
+        for part in (
+            content_value(submission, "venueid"),
+            content_value(submission, "venue"),
+        )
+        if part
+    )
+    match = _VENUE_YEAR.search(blob)
+    if match is None or "iclr" not in blob.lower():
+        return None
+    return f"iclr{match.group(1)}"
+
+
+def _blocked_ids_for(forum_id: str, pdf_source: str | None, manuscript: str) -> list[str]:
+    found: list[str] = []
+
+    def add(token: str) -> None:
+        cleaned = token.strip()
+        if cleaned and cleaned not in found:
+            found.append(cleaned)
+
+    if forum_id:
+        add(forum_id)
+        add(f"openreview:{forum_id}")
+    if pdf_source and pdf_source.startswith("arxiv:"):
+        token = pdf_source.split(":", 1)[1]
+        add(token)
+        add(f"arxiv:{token}")
+    for token in own_arxiv_ids(manuscript):
+        add(token)
+        add(f"arxiv:{token}")
+    return found
+
+
+def write_calibration_meta(
+    destination: Path,
+    *,
+    submission: dict[str, Any],
+    forum_id: str,
+    pdf_source: str | None,
+    raw_text: str,
+    scale_key: str,
+) -> dict[str, Any]:
+    title = str(content_value(submission, "title") or "")
+    payload = {
+        "venue_key": venue_key_for_submission(submission),
+        "blocked_ids": _blocked_ids_for(forum_id, pdf_source, raw_text),
+        "blocked_titles": [title] if title else [],
+        "rating_scale": scale_key,
+        "pdf_source": pdf_source,
+    }
+    _write_json(destination / "calibration_meta.json", payload)
+    return payload
+
+
+def calibration_identity(destination: Path) -> dict[str, Any]:
+    meta_path = destination / "calibration_meta.json"
+    if meta_path.is_file():
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    submission_path = destination / "submission.json"
+    submission = json.loads(submission_path.read_text(encoding="utf-8")) if submission_path.is_file() else {}
+    status_path = destination / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
+    raw_path = destination / "manuscript.raw.txt"
+    text_path = raw_path if raw_path.is_file() else destination / "manuscript.txt"
+    text = text_path.read_text(encoding="utf-8") if text_path.is_file() else ""
+    forum_id = str(submission.get("forum") or submission.get("id") or status.get("forum_id") or "")
+    return {
+        "venue_key": venue_key_for_submission(submission) if submission else None,
+        "blocked_ids": _blocked_ids_for(forum_id, status.get("pdf_source"), text),
+        "blocked_titles": [str(content_value(submission, "title"))] if content_value(submission, "title") else [],
+        "rating_scale": status.get("rating_scale"),
+        "pdf_source": status.get("pdf_source"),
+    }
+
+
+def resolve_venue_key(destination: Path, explicit: str | None) -> tuple[str, list[str], list[str]]:
+    """Venue and the ids/titles that must not come back as prior work.
+
+    An explicit venue wins. Otherwise the cache meta or the submission venue
+    id is used. There is no silent default: a missing venue fails the project
+    instead of searching ICLR 2027.
+    """
+    identity = calibration_identity(destination)
+    key = explicit or identity.get("venue_key")
+    if not key:
+        raise PublicCalibrationError(
+            "related-work venue is unset. Pass venue_key or fetch a submission whose venue id names the year."
+        )
+    if key not in known_venue_keys():
+        raise PublicCalibrationError(
+            f"related-work venue {key} has no deadline profile. Add profiles/{key}.deadlines.json."
+        )
+    blocked_ids = [str(item) for item in identity.get("blocked_ids") or [] if str(item).strip()]
+    blocked_titles = [str(item) for item in identity.get("blocked_titles") or [] if str(item).strip()]
+    return str(key), blocked_ids, blocked_titles
 
 
 def _write_project(
@@ -1077,12 +1487,15 @@ def _write_project(
     cheap: bool = False,
     holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
     holistic_mode: str = LOCKED_HOLISTIC_MODE,
+    grounded_weaknesses: bool = False,
+    venue_key: str | None = None,
 ) -> None:
     if holistic_mode not in HOLISTIC_MODES:
         raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     project = destination / "project"
     project.mkdir(parents=True, exist_ok=True)
-    manuscript = strip_venue_status_lines((destination / "manuscript.txt").read_text(encoding="utf-8"))
+    raw_manuscript = (destination / "manuscript.txt").read_text(encoding="utf-8")
+    manuscript, _removed = anonymize_iclr_submission(raw_manuscript)
     (project / "manuscript.txt").write_text(manuscript, encoding="utf-8")
     pdf = destination / "manuscript.pdf"
     if pdf.is_file():
@@ -1147,7 +1560,9 @@ def _write_project(
             review_params.append(f"allow_remote = {'true' if allow_remote else 'false'}")
             from .rubrics import FUSION_COEFFICIENT_SET
 
-            include_holistic = with_holistic or cheap or coefficient_set == FUSION_COEFFICIENT_SET
+            include_holistic = (
+                with_holistic or cheap or grounded_weaknesses or coefficient_set == FUSION_COEFFICIENT_SET
+            )
             if cheap:
                 judgment_names = ["holistic"]
             else:
@@ -1160,6 +1575,8 @@ def _write_project(
             if include_holistic:
                 review_params.append(f"holistic_samples = {int(holistic_samples)}")
                 review_params.append(f"holistic_mode = {_toml_string(holistic_mode)}")
+            if grounded_weaknesses:
+                review_params.append("grounded_weaknesses = true")
         if requires_network:
             review_params.append("requires_network = true")
             review_params.append('network_scope = "fulltext"')
@@ -1183,10 +1600,15 @@ def _write_project(
             'type = "related_work_search"',
             'depends_on = ["ingest"]',
             "[stages.params]",
-            'venue = "iclr2027"',
-            f"mode = {_toml_string(related_work)}",
-            'network_scope = "metadata"',
         ]
+        venue, blocked_ids, blocked_titles = resolve_venue_key(destination, venue_key)
+        related_params.append(f"venue = {_toml_string(venue)}")
+        related_params.append(f"mode = {_toml_string(related_work)}")
+        related_params.append('network_scope = "metadata"')
+        if blocked_ids:
+            related_params.append(f"blocked_ids = {_toml_string_array(blocked_ids)}")
+        if blocked_titles:
+            related_params.append(f"blocked_titles = {_toml_string_array(blocked_titles)}")
         project = destination / "project"
         findings = project / "related_work_findings.json"
         confirmation = project / "related_work_confirmation.json"
@@ -1482,6 +1904,7 @@ def run_cache(
     cheap: bool = False,
     holistic_samples: int = LOCKED_HOLISTIC_SAMPLES,
     holistic_mode: str = LOCKED_HOLISTIC_MODE,
+    grounded_weaknesses: bool = False,
     only_ids: set[str] | None = None,
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -1494,6 +1917,8 @@ def run_cache(
     if holistic_mode not in HOLISTIC_MODES:
         raise PublicCalibrationError(f"holistic_mode must be one of {', '.join(HOLISTIC_MODES)}")
     spec = _resolve_adapter(mode, adapter)
+    if grounded_weaknesses and (spec != MODEL_ADAPTER or holistic_mode != "forecast"):
+        raise PublicCalibrationError("grounded weaknesses require the bundled model adapter and forecast mode")
     if spec == MODEL_ADAPTER and (not base_url or not model):
         raise PublicCalibrationError("OpenAICompatibleAdapter requires --base-url and --model")
     if allow_remote and network_policy != "allow":
@@ -1549,6 +1974,7 @@ def run_cache(
                 cheap=cheap,
                 holistic_samples=holistic_samples,
                 holistic_mode=holistic_mode,
+                grounded_weaknesses=grounded_weaknesses,
             )
             manifest = run_pipeline(project / "review.toml")
             waiting = awaiting_requests(manifest)
@@ -1626,6 +2052,8 @@ def run_cache(
                 "pdf_source": status.get("pdf_source"),
                 "title": status.get("title"),
             }
+            if grounded_weaknesses:
+                score["grounded_weaknesses"] = True
             _write_json(project / "our_score.json", score)
             status["state"] = "scored"
             status["error"] = None

@@ -58,6 +58,7 @@ from autopaperreview.public_calibration import (  # noqa: E402
     materialize_preloaded,
     submission_number,
 )
+from autopaperreview.rating_scales import scale_for_year  # noqa: E402
 
 USER_AGENT = "AutoPaperReview-calibration-eval"
 API_ROOT = "https://api2.openreview.net"
@@ -313,10 +314,10 @@ def _ratings_for(stub: dict[str, Any]) -> tuple[str, list[int], list[dict[str, A
         for note in data.get("notes") or []:
             if note.get("forum") == stub["forum_id"]:
                 notes.append(note)
-        ratings, _labels = human_ratings(notes)
+        ratings, _labels = human_ratings(notes, scale=scale_for_year(int(stub["year"])))
         if len(ratings) >= 2:
             break
-    ratings, _labels = human_ratings(notes)
+    ratings, _labels = human_ratings(notes, scale=scale_for_year(int(stub["year"])))
     return stub["forum_id"], ratings, notes
 
 
@@ -389,7 +390,8 @@ def _score_batch(
             try:
                 forum_id, ratings, notes = future.result()
             except (PublicCalibrationError, ChallengeRequired, urllib.error.URLError, OSError) as exc:
-                print(f"rating fetch failed {exc.__class__.__name__}", file=sys.stderr)
+                detail = str(exc) if isinstance(exc, PublicCalibrationError) else exc.__class__.__name__
+                print(f"rating fetch failed {detail}", file=sys.stderr)
                 continue
             stub = stubs_by_id[forum_id]
             scored[forum_id] = {

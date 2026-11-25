@@ -79,6 +79,7 @@ class RelatedWorkSearchParams(ParamsModel):
     pool_path: str | None = None
     cutoff_date: str | None = None
     blocked_ids: list[str] = Field(default_factory=list)
+    blocked_titles: list[str] = Field(default_factory=list)
     pool_summary_chars: int = Field(default=2000, ge=280, le=20000)
     timeout_seconds: float = Field(default=DEFAULT_MODEL_TIMEOUT_SECONDS, gt=0)
 
@@ -228,6 +229,8 @@ class RelatedWorkSearchStage(StageHandler):
             material["cutoff_date"] = params.cutoff_date
         if params.blocked_ids:
             material["blocked_ids"] = list(params.blocked_ids)
+        if params.blocked_titles:
+            material["blocked_titles"] = list(params.blocked_titles)
         material["pool_summary_chars"] = params.pool_summary_chars
         return material
 
@@ -255,6 +258,7 @@ class RelatedWorkSearchStage(StageHandler):
                 network_policy=context.loaded_config.config.project.network_policy.value,
                 cutoff_date=date.fromisoformat(params.cutoff_date) if params.cutoff_date else None,
                 blocked_ids=params.blocked_ids,
+                blocked_titles=params.blocked_titles,
             )
             raise AwaitingInput(
                 "agent related-work inspector requires a findings drop; "
@@ -298,6 +302,7 @@ class RelatedWorkSearchStage(StageHandler):
             pool_path=pool,
             cutoff_date=date.fromisoformat(params.cutoff_date) if params.cutoff_date else None,
             blocked_ids=params.blocked_ids,
+            blocked_titles=params.blocked_titles,
             pool_summary_chars=params.pool_summary_chars,
         )
         retrieved_at = datetime.now(timezone.utc)

@@ -2,7 +2,7 @@
 
 One ICLR dev set and one CVPR dev registration. Rank metrics, the promotion benchmark, and regression tests use these lists. A new benchmark does not draw a fresh sample.
 
-Status is **locked**. `content_sha256` is `3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440`. The paper list is in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md). `rank_eval` and `calibrate-eval run --fixed-set iclr-dev` call `assert_manifest` before scoring and exit 2 when the content digest does not match. The output records the status and the digest. The published README rank stays the previous holdout number until a locked private-holdout run replaces it.
+Status is **locked**. `content_sha256` is `3dadef447e93452fc3d21ad0ff6c51f3bf042e93ec233fd01a4c75691dc51440`. The paper list is in [benchmarks/fixed_eval/PROPOSAL.md](../benchmarks/fixed_eval/PROPOSAL.md). `rank_eval` and `calibrate-eval run --fixed-set iclr-dev` call `assert_manifest` before scoring and exit 2 when the content digest does not match. The output records the status and the digest. The published ranks are the 2026-11-25 Gate 1 comparison on this dev set and the Gate 2 comparison on the private holdout, in [docs/metrics.md](../docs/metrics.md). The earlier 15-paper public comparison stays in the README and is not the release number.
 
 ## ICLR tiers
 

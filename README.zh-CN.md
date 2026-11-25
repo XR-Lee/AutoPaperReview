@@ -7,13 +7,13 @@
 AutoPaperReview（简称 APR）是一条在本地运行的审稿流水线。它有两种用法，分别单独运行：
 
 - **[审稿报告](#track-a)**：默认用法。`init` 之后正常 `run`，会写出一份七维审稿，附带证据表、贡献核对和致命问题检查。产物包括 Markdown 报告和带批注的稿件 PDF；装了 reportlab 的话，还有 `review_report.pdf`。
-- **[评分与基准](#track-b)**：可选，默认关闭。`holistic` 预测之后再接一个 `rate` 阶段，系数用 `apr-fusion-v1`，得到排序分 `forecast-k1`。留出集表格只测这个排序分。
+- **[评分与基准](#track-b)**：可选，默认关闭。`holistic` 预测之后再接一个 `rate` 阶段，系数用 `apr-fusion-v1`，得到排序分 `forecast-k1`。本版本公布的数字是 2026-11-25 的 Gate 1 和 Gate 2。15 篇的表是更早的对照。
 
-![左侧是审稿报告里的合成批注页，右侧是基准里的留出集排序分。页面是虚构的跟踪笔记，不是真实投稿。Opus 5.5 Spearman 0.851，Grok 4.7 Spearman 0.761。左侧正文是英文示例。](docs/assets/hero.zh-CN.png)
+![左侧是审稿报告里的合成批注页，右侧是更早的 15 篇对照里的排序分卡片。页面是虚构的跟踪笔记，不是真实投稿。卡片上是 Opus 5.5 Spearman 0.851 和 Grok 4.7 Spearman 0.761。本版本公布的数字是 2026-11-25 的两道门。左侧正文是英文示例。](docs/assets/hero.zh-CN.png)
 
-图的右半边来自可选的评分与基准部分。
+图的右半边来自可选的评分与基准部分。这些卡片是更早的 15 篇对照，不是本版本公布的数字。
 
-版本 `0.1.10`，Alpha。Python 3.10–3.13。MIT 许可证。APR 不能代替人工审稿。
+版本 `0.1.11`，Alpha。Python 3.10–3.13。MIT 许可证。APR 不能代替人工审稿。
 
 <a id="track-a"></a>
 
@@ -362,7 +362,35 @@ coefficient_set = "apr-fusion-v1"
 
 ![各系统在留出集上的 Spearman 和 AUC，含 GPT-6 Astra。误差线是 95% 自助法区间。APR Opus 的 AUC 画成柱，数值是 1.000。](docs/assets/holdout-glance.zh-CN.png)
 
-图中 APR 的柱子是只算排序分的 `forecast-k1`。误差线是论文层面的 95% 自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 照样画成柱，但区间是退化的 [1.000, 1.000]，因为在已完成的 14 篇里，分数把录用和拒稿完全分开了。APR Opus 的 n=14，其余各行 n=15，区间都很宽。GPT-6 Astra 是图上的第三个模型，APR 和 OpenJudge 都是 n=15。口径和完整表格见 [基准测了什么](#benchmark-scope)；两套流程差在哪、分数在哪一步提上去，见 [方法和消融](#method)。
+图中 APR 的柱子是只算排序分的 `forecast-k1`。误差线是论文层面的 95% 自助法区间（重抽样 4000 次，种子 `20261021`）。APR Opus 的 AUC 照样画成柱，但区间是退化的 [1.000, 1.000]，因为在已完成的 14 篇里，分数把录用和拒稿完全分开了。APR Opus 的 n=14，其余各行 n=15，区间都很宽。GPT-6 Astra 是图上的第三个模型，APR 和 OpenJudge 都是 n=15。这张图是 [基准测了什么](#benchmark-scope) 里更早的 15 篇对照。本版本公布的数字见 [2026-11-25 的公布排序分](#published-ranks)。两套流程差在哪、分数在哪一步提上去，见 [方法和消融](#method)。
+
+<a id="published-ranks"></a>
+
+### 公布的排序分，2026-11-25
+
+这些是本版本对完整稿件公布的数字。用的是锁定的 `forecast-k1`：一次抽样、三个席位，排序分是期望评分的均值，并限制在量表两端之内。候选是本版本的代码，加上 `--grounded-weaknesses`。对照是上一版 main，没有这个开关。差值是候选减去对照。区间是配对的分层自助法：重抽样 4000 次，种子 `20261029`，分位数 0.025 和 0.975。门禁报告没有给每个绝对 Spearman 单独再做一个区间。区间包含零，按晋升规则就不算变化。排序分的 MAE 只有在整个区间都低于零时才算变好。两份报告都不写论文、标题或单篇分数。会议档的表和协议见 [docs/metrics.md](docs/metrics.md)。
+
+**Gate 1，锁定的开发集，n=192。** 模型 grok-4.7，推理 effort xhigh，2026-11-25。四个分层各 48 篇。解析失败 0。流水线失败 0。状态 PASS。报告：[benchmarks/promotion/reports/2026-11-25-gate1-grok192-candidate-vs-main.md](benchmarks/promotion/reports/2026-11-25-gate1-grok192-candidate-vs-main.md)。
+
+| 指标 | 本版本 | 上一版 main | 差值 | 95% 区间 |
+| --- | ---: | ---: | ---: | --- |
+| Spearman | 0.6467 | 0.6002 | +0.0466 | [−0.0082, 0.1029] |
+| Kendall tau-b | 0.4720 | 0.4367 | +0.0352 | [−0.0112, 0.0821] |
+| 录用/拒稿 AUC | 0.8446 | 0.8494 | −0.0048 | [−0.0410, 0.0302] |
+| MAE | 1.1247 | 1.1987 | −0.0740 | [−0.1271, −0.0187] |
+
+偏差（排序分减去官方评分均值）在本版本是 −0.2656，在上一版 main 是 −0.3306。排序分的 MAE 更好。另外三项排序指标的区间都包含零。AUC 的点估计略低。最后一个不足里的引文能够定位的席位：490/576 = 0.8507，配对差值 +0.8507 [0.8160, 0.8854]。上一版 main 没有要求引文。
+
+**Gate 2，私有留出集，n=24。** 模型 claude-opus-5-5，推理 effort xhigh，2026-11-25。同样四个分层，每层六篇。只评一次。这次留出集没有用来改提示词或分数。允许重试一次之后的解析失败：0。流水线失败：0。状态 PASS。报告：[benchmarks/promotion/reports/2026-11-25-gate2-opus-holdout-candidate-vs-main.md](benchmarks/promotion/reports/2026-11-25-gate2-opus-holdout-candidate-vs-main.md)。
+
+| 指标 | 本版本 | 上一版 main | 差值 | 95% 区间 |
+| --- | ---: | ---: | ---: | --- |
+| Spearman | 0.6168 | 0.6282 | −0.0114 | [−0.1021, 0.0680] |
+| Kendall tau-b | 0.4371 | 0.4871 | −0.0499 | [−0.1485, 0.0449] |
+| 录用/拒稿 AUC | 1.0000 | 1.0000 | +0.0000 | [0.0000, 0.0000] |
+| MAE | 1.1033 | 1.1112 | −0.0079 | [−0.0933, 0.0720] |
+
+偏差在本版本是 −0.7422，在上一版 main 是 −0.7737。每一项主要排序指标的区间都包含零。两边的 AUC 都是 1.0000。n=24，其中 8 篇录用、16 篇拒稿，所以这个值是小样本上的结果。最后一个不足里的引文能够定位的席位：62/72 = 0.8611，配对差值 +0.8611 [0.7778, 0.9444]。
 
 ### 预测怎样变成排序分
 
@@ -390,7 +418,9 @@ coefficient_set = "apr-fusion-v1"
 
 <a id="benchmark-scope"></a>
 
-### 基准测了什么
+### 更早的 15 篇公开对照
+
+这一节不是本版本公布的数字。公布的数字见 [2026-11-25 的公布排序分](#published-ranks)。下面的格子是更早的、和其他系统放在一起的公开对照。仓库里仍然没有那张 15 篇表格背后的 id 列表。
 
 留出集和 tune-30 的数字测的是排序分，不是完整的审稿。
 
@@ -555,7 +585,7 @@ autopaperreview calibrate-eval run \
 
 `calibrate-eval run` 的 `--fixed-set` 默认是 `none`，评的是你抓下来的那份缓存。要评已锁定的 192 篇开发集（每个分层 48 篇），加上 `--fixed-set iclr-dev --model-id "your-model-id" --effort xhigh`。这两个参数在开发集上是必填的，上面的 forecast-k1 参数也必须和清单一致。
 
-5. 生成两份报告，它们测的东西不一样。`calibrate-eval report` 拿会议档（`our_bin`，即决策档）和人类均分比，结果对不上留出集表格；那张表里的 Spearman 和 AUC 用的是连续的 `forecast-k1`。`scripts/rank_eval.py --mode locked` 读的是 `rank_score`，默认评 `benchmarks/fixed_eval/` 里已锁定的固定 ICLR 开发集（`--fixed-set iclr-dev`）。这次运行必须带 `--model-id` 和 `--effort`。`--fixed-set none` 评整份缓存，已公布的留出集表格就是这样算的。`--resamples` 默认 4000。自助法种子 `20261021` 写在 `rank_metrics.py` 里，不是命令行参数。缓存和 `--output` 都必须是 Git 忽略的路径，例如 `reviews/` 或 `workdir/`。命令会拒绝检出目录里受 Git 跟踪的路径。论文集合和清单摘要对不上时，固定集运行以退出码 2 结束。见 [docs/fixed-eval.md](docs/fixed-eval.md)。
+5. 生成两份报告，它们测的东西不一样。`calibrate-eval report` 拿会议档（`our_bin`，即决策档）和人类均分比，结果对不上留出集表格；那张表里的 Spearman 和 AUC 用的是连续的 `forecast-k1`。`scripts/rank_eval.py --mode locked` 读的是 `rank_score`，默认评 `benchmarks/fixed_eval/` 里已锁定的固定 ICLR 开发集（`--fixed-set iclr-dev`）。这次运行必须带 `--model-id` 和 `--effort`。`--fixed-set none` 评整份缓存，更早的 15 篇表格就是这样算的。本版本公布的数字是 [docs/metrics.md](docs/metrics.md) 里的 Gate 1 和 Gate 2。`--resamples` 默认 4000。自助法种子 `20261021` 写在 `rank_metrics.py` 里，不是命令行参数。缓存和 `--output` 都必须是 Git 忽略的路径，例如 `reviews/` 或 `workdir/`。命令会拒绝检出目录里受 Git 跟踪的路径。论文集合和清单摘要对不上时，固定集运行以退出码 2 结束。见 [docs/fixed-eval.md](docs/fixed-eval.md)。
 
 ```bash
 autopaperreview calibrate-eval report \
@@ -571,6 +601,30 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
 ```
 
 不要把 `--only-ids` 和 `--fixed-set iclr-dev` 一起用。`--fixed-set iclr-dev` 打开时，`scripts/rank_eval.py` 的 `--ids` 必须和开发集一致。`--holdout-file` 评的是私有留出集，只在要改 README 数字时使用。本 README 不公布那些 id。
+
+## 提案审稿
+
+只有标题和一段短描述时，也可以审（`prompt_packet` 的 `input_mode = "proposal"`），不需要 PDF。有两套测量很容易混在一起。它们不是同一个数。
+
+### 想法分数和终评
+
+分支 `feat/proposal-review-harness` 上的提案审稿框架，评的是 ICLR 2024 公开 OpenReview 投稿压成早期提案之后的文本：标题加一段短描述，没有结果，也没有 PDF。APR 给想法维度打 1–5 分。对照是官方终评的审稿人均分。这个框架没有合并。它不是本版本代码的一部分。
+
+这些队列是按终评分层抽的，所以相关是样本内部的关联。区间是在这些终评分层里做 3000 次百分位自助法。没有前瞻记录。这些提案是在会议结束之后才打的分，不是在工作做出来之前。
+
+![提案分更高的地方，终评也更高。固定测试 n=100，Spearman 0.677。独立确认 n=100，Spearman 0.597。两次重复 n=199，Spearman 0.522。点上没有标签。每个队列都按终评分层。](docs/assets/proposal_score_vs_final_review.png)
+
+| 队列 | n | Spearman | 95% 区间 | 录用/拒稿 AUC |
+| --- | ---: | ---: | --- | ---: |
+| 固定测试 | 100 | 0.677 | [0.559, 0.772] | 0.812 |
+| 独立确认 | 100 | 0.597 | [0.465, 0.713] | 0.794 |
+| 两次重复 | 199 | 0.522 | [0.400, 0.637] | 0.805 |
+
+两次重复的 AUC 用的是有决定的 141 篇。在这 199 篇里，按 APR 分数取前 20% 是 40 篇，其中终评均值至少为 7 的有 23 篇；随机抽 40 篇大约会有 10.05 篇。在 AI-Researcher 研究的 84 篇真实、实验前的 NLP 提案上，和专家想法分的 Spearman 是 0.273。
+
+### 本版本实际跑的路径
+
+随版本发布的路径是 `proposal_audit_v1`，用的是 `sar_bands_v1` 里给完整论文写的原创性分档。它不是上图背后的那个框架，也不会打出上面的 1–5 想法分。在 ClaimNov 的 later-realized 50（[issue #33](https://github.com/XR-Lee/AutoPaperReview/issues/33)）上，原创性在 50 篇里有 49 篇是条款 or-6，剩下 1 篇是 or-8。截断设在 4 时一个也抓不住（误报率 0.000）。截断设在 6 时标出 0.980 [0.940, 1.000]。这个分数分不开这批提案。试点目录里仍然没有存那次运行。见 [benchmarks/claimnov_pilot/README.md](benchmarks/claimnov_pilot/README.md) 和 [docs/metrics.md](docs/metrics.md)。
 
 ## 保密
 
@@ -596,7 +650,10 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 
 **评分与基准**
 
-- 表里的数字来自一次只算排序分的 forecast 调用，不衡量写出来的审稿、维度分数、致命标签或带批注的 PDF。和人类评分比较的也不是决策档对应的会议评分。完整审稿比「美元 / 篇」那一列贵得多。
+- 本版本公布的排序分是 Gate 1（grok-4.7，n=192，2026-11-25）和 Gate 2（claude-opus-5-5，n=24，2026-11-25）。Gate 1 的排序 MAE 比上一版 main 更好。Gate 1 上另外几项主要排序指标的区间都包含零。Gate 2 上每一项主要排序指标的区间都包含零。Gate 2 的录用/拒稿 AUC 在 24 篇上是 1.0000（8 篇录用、16 篇拒稿）。
+- 两道门都只评一次 forecast 调用。它们不衡量七维审稿、致命标签或带批注的 PDF。`--grounded-weaknesses` 改变写出来的不足。在 Gate 1 上，它没有把 Spearman、Kendall 或 AUC 移出包含零的区间。
+- 提案图是分层队列上的样本内关联。它不是随版本发布的 `proposal_audit_v1` 路径。在 ClaimNov later-realized 50 上，原创性在 50 篇里有 49 篇塌到 or-6（[issue #33](https://github.com/XR-Lee/AutoPaperReview/issues/33)）。
+- 15 篇的表来自一次只算排序分的 forecast 调用，不衡量写出来的审稿、维度分数、致命标签或带批注的 PDF。和人类评分比较的也不是决策档对应的会议评分。完整审稿比「美元 / 篇」那一列贵得多。
 - 十五篇论文、一次 Opus 超时、自助法区间大约从 0.4 到 1.0，这意味着 Spearman 差 0.02 算不上结论。
 - 用 Opus 和 Grok 时，APR 的分数都低于人类均分。
 - 按记录的 effort，Opus 每篇大约 0.66 美元、要几分钟。那张表里有一次调用超时。模型调用的默认预算是 7200 秒。
@@ -607,10 +664,10 @@ CI 跑的就是 `python3 scripts/check_confidentiality.py` 这项检查。如果
 
 ## 状态
 
-AutoPaperReview `0.1.10` 处于 Alpha 阶段，适用于 Python 3.10–3.13，采用 MIT 许可证。
+AutoPaperReview `0.1.11` 处于 Alpha 阶段，适用于 Python 3.10–3.13，采用 MIT 许可证。
 
 核心是一个本地运行的 DAG（有向无环图），由 TOML 配置、Pydantic 记录、按内容哈希的缓存和适配器组成。`src/autopaperreview/prompts/` 里的提示词和流水线一起做版本管理。解析器和模型厂商都隔在适配器后面。
 
-所有拉取请求都以 `pre-release` 为目标，并且只有在 CI 全部通过时才合并。`main` 只接受来自 `pre-release` 的晋升。一次晋升只有在回归报告显示 `pre-release` 在同一固定基准上的分数高于或等于 `main` 时才允许。两条分支使用同一个模型：通过 Cursor 运行的 grok-4.7，reasoning_effort 为 `xhigh`。基准定义仍是 TODO，见 [分支](docs/branching.md)。
+所有拉取请求都以 `pre-release` 为目标，并且只有在 CI 全部通过时才合并。`main` 只接受来自 `pre-release` 的晋升。一次晋升只有在 [benchmarks/promotion/benchmark-v1.md](benchmarks/promotion/benchmark-v1.md) 里的固定基准通过时才允许。Gate 1 和 Gate 2 已经在本版本公布的审稿代码上通过。本版本改的是版本号和公布的指标，不改提示词。见 [分支](docs/branching.md) 和 [公布的指标](docs/metrics.md)。
 
 仓库里的延伸阅读：[架构](docs/architecture.md)、[公开标定](docs/public-calibration.md)、[相关工作检索](docs/related-work-search.md)、[初读写法](docs/first-read-review.md)。[docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) 是 2026-08-29 的一份缺口清单，早于 `forecast-k1`；当前的比较请看「分数之外」一节的对照表。

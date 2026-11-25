@@ -54,6 +54,8 @@ PYTHONPATH=. python3 -m benchmarks.claimnov_pilot.published \
 
 ## Status
 
-`results/status.json` records that this pilot did not call the model. No APR comparison is stored, and no issue was opened.
+`results/status.json` records that this pilot did not call the model. No APR comparison is stored in this directory.
+
+A separate local run is recorded in [issue #33](https://github.com/XR-Lee/AutoPaperReview/issues/33). On the ClaimNov later-realized 50, proposal mode with grok-4.7-build finished 50 of 50 items. Originality is clause `or-6` on 49 of 50 and `or-8` on the other one. The false-alarm rate is 0.000 at a cutoff of 4 and 0.980 [0.940, 1.000] at a cutoff of 6 (4000-draw bootstrap). `missing_closest_neighbor` is 0.000. The model chose those clauses. The paper originality bands do not separate those 50 items. That run is not in git.
 
 `run` exits 3 when `APR_MODEL_API_KEY` is unset, 4 when the secret is set but proposal text or pool abstracts are missing, and 2 when both are present. This revision does not call the model on that last path. Rebuilt disguise, hybrid, or claim-disputed text must not be paired with the published rows.

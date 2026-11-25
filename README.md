@@ -7,13 +7,13 @@ For research ideas before experiments, use the [Auto Proposal Review harness](do
 AutoPaperReview (APR) is a local pipeline that reviews a manuscript. It has two uses, and each one is a separate run:
 
 - **[Review report](#track-a)** is the default. After `init`, a normal `run` writes a seven-dimension review with an evidence ledger, a contributions audit, and a fatal-flaw check. The outputs are a Markdown report, `review_report.pdf` when reportlab is installed, and an annotated manuscript PDF.
-- **[Venue score and benchmark](#track-b)** is optional and off by default. A `holistic` forecast plus a `rate` stage with `apr-fusion-v1` produces the `forecast-k1` rank. The holdout table measures only that rank.
+- **[Venue score and benchmark](#track-b)** is optional and off by default. A `holistic` forecast plus a `rate` stage with `apr-fusion-v1` produces the `forecast-k1` rank. The release numbers are the 2026-11-25 Gate 1 and Gate 2 results. The 15-paper table is an earlier comparison.
 
-![Left: a synthetic annotated page from the review report. Right: holdout rank cards from the benchmark. The page is an invented tracking note, not a real submission. Opus 5.5 Spearman 0.851, Grok 4.7 Spearman 0.761.](docs/assets/hero.png)
+![Left: a synthetic annotated page from the review report. Right: holdout rank cards from the earlier 15-paper glance. The page is an invented tracking note, not a real submission. Those cards read Opus 5.5 Spearman 0.851 and Grok 4.7 Spearman 0.761. The release numbers are the 2026-11-25 gates.](docs/assets/hero.png)
 
-The right half comes from the optional benchmark track.
+The right half comes from the optional benchmark track. The cards are the earlier 15-paper glance, not the release number.
 
-Version `0.1.10`, alpha. Python 3.10–3.13. MIT license. APR doesn't replace a human reviewer.
+Version `0.1.11`, alpha. Python 3.10–3.13. MIT license. APR doesn't replace a human reviewer.
 
 <a id="track-a"></a>
 
@@ -363,7 +363,35 @@ With `cheap = true`, the run keeps the holistic call and skips contributions, le
 
 ![Holdout Spearman and AUC by system, including GPT-6 Astra. Error bars are 95% bootstrap intervals. APR Opus AUC is a bar at 1.000.](docs/assets/holdout-glance.png)
 
-APR's bars use the rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The chart still draws the APR Opus AUC bar. Its interval is degenerate, [1.000, 1.000], because the score separates accept from reject perfectly on the 14 finished papers. APR Opus has n=14 and the other rows have n=15. The intervals are wide. GPT-6 Astra is the third model on the chart, with n=15 for APR and for OpenJudge. For the scope and the full table, see [What the benchmark measured](#benchmark-scope). For how the pipelines differ and where the score moved, see [Method and ablation](#method).
+APR's bars use the rank-only `forecast-k1`. Error bars are 95% paper-level bootstrap intervals (4000 resamples, seed `20261021`). The chart still draws the APR Opus AUC bar. Its interval is degenerate, [1.000, 1.000], because the score separates accept from reject perfectly on the 14 finished papers. APR Opus has n=14 and the other rows have n=15. The intervals are wide. GPT-6 Astra is the third model on the chart, with n=15 for APR and for OpenJudge. This chart is the earlier 15-paper comparison in [What the benchmark measured](#benchmark-scope). The release numbers are [Published ranks, 2026-11-25](#published-ranks). For how the pipelines differ and where the score moved, see [Method and ablation](#method).
+
+<a id="published-ranks"></a>
+
+### Published ranks, 2026-11-25
+
+These are the release numbers for a finished manuscript. They use locked `forecast-k1`: one sample, three seats, rank = clamped mean expected rating. The candidate is this release's code with `--grounded-weaknesses`. The comparison arm is the previous main without that flag. Differences are candidate minus that arm. Intervals are a paired stratified bootstrap: 4000 resamples, seed `20261029`, percentiles 0.025 and 0.975. The gate reports do not publish a separate interval around each absolute Spearman. An interval that contains zero is not a change under the promotion rule. Rank MAE is better when its interval lies entirely below zero. Neither report names a paper, a title, or a per-paper score. Venue-bin tables and the protocol are in [docs/metrics.md](docs/metrics.md).
+
+**Gate 1, locked dev set, n=192.** Model grok-4.7, reasoning effort xhigh, 2026-11-25. Four tiers of 48. Parse failures 0. Pipeline failures 0. Status PASS. Report: [benchmarks/promotion/reports/2026-11-25-gate1-grok192-candidate-vs-main.md](benchmarks/promotion/reports/2026-11-25-gate1-grok192-candidate-vs-main.md).
+
+| Metric | This release | Previous main | Difference | 95% interval |
+| --- | ---: | ---: | ---: | --- |
+| Spearman | 0.6467 | 0.6002 | +0.0466 | [−0.0082, 0.1029] |
+| Kendall tau-b | 0.4720 | 0.4367 | +0.0352 | [−0.0112, 0.0821] |
+| Accept/reject AUC | 0.8446 | 0.8494 | −0.0048 | [−0.0410, 0.0302] |
+| MAE | 1.1247 | 1.1987 | −0.0740 | [−0.1271, −0.0187] |
+
+Bias (rank minus the mean official rating) is −0.2656 on this release and −0.3306 on the previous main. Rank MAE is better. The other three rank intervals contain zero. The AUC point estimate is slightly lower. Seats whose last-weakness quote resolves: 490/576 = 0.8507, paired difference +0.8507 [0.8160, 0.8854]. The previous main did not ask for a quote.
+
+**Gate 2, private holdout, n=24.** Model claude-opus-5-5, reasoning effort xhigh, 2026-11-25. Six papers in each of the same four tiers. Scored once. The holdout was not used to change a prompt or a score. Parse failures after the one allowed retry: 0. Pipeline failures: 0. Status PASS. Report: [benchmarks/promotion/reports/2026-11-25-gate2-opus-holdout-candidate-vs-main.md](benchmarks/promotion/reports/2026-11-25-gate2-opus-holdout-candidate-vs-main.md).
+
+| Metric | This release | Previous main | Difference | 95% interval |
+| --- | ---: | ---: | ---: | --- |
+| Spearman | 0.6168 | 0.6282 | −0.0114 | [−0.1021, 0.0680] |
+| Kendall tau-b | 0.4371 | 0.4871 | −0.0499 | [−0.1485, 0.0449] |
+| Accept/reject AUC | 1.0000 | 1.0000 | +0.0000 | [0.0000, 0.0000] |
+| MAE | 1.1033 | 1.1112 | −0.0079 | [−0.0933, 0.0720] |
+
+Bias is −0.7422 on this release and −0.7737 on the previous main. Every primary rank interval contains zero. AUC is 1.0000 on both arms. n=24, with 8 accepts and 16 rejects, so that value is a small-sample result. Seats whose last-weakness quote resolves: 62/72 = 0.8611, paired difference +0.8611 [0.7778, 0.9444].
 
 ### How the forecast becomes a rank
 
@@ -391,7 +419,9 @@ APR records a verified venue cap and doesn't apply it to this rank. The forecast
 
 <a id="benchmark-scope"></a>
 
-### What the benchmark measured
+### Earlier 15-paper public comparison
+
+This section is not the release number. The release numbers are [Published ranks, 2026-11-25](#published-ranks). The cells below are the earlier public comparison with other systems. The repository still has no id list for that 15-paper table.
 
 The holdout and tune-30 numbers measure the rank, not a full review.
 
@@ -556,7 +586,7 @@ autopaperreview calibrate-eval run \
 
 `calibrate-eval run` defaults to `--fixed-set none` and scores the cache you fetched. Add `--fixed-set iclr-dev --model-id "your-model-id" --effort xhigh` to score the locked 192-paper dev set (48 papers in each tier). Those two flags are required for that set, and the forecast-k1 flags in the command above have to match the manifest.
 
-5. Build the two reports. They measure different things. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean, so its numbers don't match the holdout table. That table's Spearman and AUC use the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score` and, by default, scores the locked fixed ICLR dev set in `benchmarks/fixed_eval/` (`--fixed-set iclr-dev`). That run requires `--model-id` and `--effort`. `--fixed-set none` scores the whole cache, which is how the published holdout table was computed. `--resamples` defaults to 4000. The bootstrap seed is `20261021`, set inside `rank_metrics.py`, not a flag. The cache and `--output` must be gitignored paths such as `reviews/` or `workdir/`. The commands refuse a tracked path inside the checkout. A fixed-set run whose papers do not match the manifest digest exits 2. See [docs/fixed-eval.md](docs/fixed-eval.md).
+5. Build the two reports. They measure different things. `calibrate-eval report` scores the venue bin (`our_bin`, the decision bin) against the human mean, so its numbers don't match the holdout table. That table's Spearman and AUC use the continuous `forecast-k1` rank. `scripts/rank_eval.py --mode locked` reads `rank_score` and, by default, scores the locked fixed ICLR dev set in `benchmarks/fixed_eval/` (`--fixed-set iclr-dev`). That run requires `--model-id` and `--effort`. `--fixed-set none` scores the whole cache, which is how the earlier 15-paper table was computed. The release numbers are Gate 1 and Gate 2 in [docs/metrics.md](docs/metrics.md). `--resamples` defaults to 4000. The bootstrap seed is `20261021`, set inside `rank_metrics.py`, not a flag. The cache and `--output` must be gitignored paths such as `reviews/` or `workdir/`. The commands refuse a tracked path inside the checkout. A fixed-set run whose papers do not match the manifest digest exits 2. See [docs/fixed-eval.md](docs/fixed-eval.md).
 
 ```bash
 autopaperreview calibrate-eval report \
@@ -572,6 +602,30 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
 ```
 
 Don't pass `--only-ids` with `--fixed-set iclr-dev`. `--ids` on `scripts/rank_eval.py` has to match the dev set when `--fixed-set iclr-dev` is on. `--holdout-file` scores the private holdout and is only for a README number change. This README does not publish those ids.
+
+## Proposal review
+
+A title and a short description can be reviewed without a PDF (`prompt_packet` with `input_mode = "proposal"`). Two measurements are easy to mix up. They are not the same number.
+
+### Idea score against the final review
+
+A proposal-review harness on branch `feat/proposal-review-harness` scores ICLR 2024 public OpenReview submissions after they are compressed to an early proposal: the title plus a short description, with no results and no PDF. APR scores idea dimensions on 1–5. The comparison is the official final mean reviewer score. That harness is not merged. It is not part of the code in this release.
+
+The cohorts are stratified by the final score, so the correlation is a within-sample association. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace. These proposals were scored after the conference, not before the work was done.
+
+![Higher proposal scores sit next to higher final review scores. Fixed test n=100, Spearman 0.677. Independent confirm n=100, Spearman 0.597. Two replications n=199, Spearman 0.522. Dots are unlabeled. Each cohort is stratified by the final score.](docs/assets/proposal_score_vs_final_review.png)
+
+| Cohort | n | Spearman | 95% interval | Accept/reject AUC |
+| --- | ---: | ---: | --- | ---: |
+| Fixed test | 100 | 0.677 | [0.559, 0.772] | 0.812 |
+| Independent confirm | 100 | 0.597 | [0.465, 0.713] | 0.794 |
+| Two replications | 199 | 0.522 | [0.400, 0.637] | 0.805 |
+
+The two-replication AUC uses the 141 papers that have a decision. On those 199 papers, the top 20% by the APR score is 40 papers and holds 23 whose final mean is at least 7, against about 10.05 expected from a random 40. On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273.
+
+### What this release runs
+
+The shipped path is `proposal_audit_v1` with the paper originality bands in `sar_bands_v1`. It is not the harness behind the figure, and it does not emit the 1–5 idea score above. On the ClaimNov later-realized 50 ([issue #33](https://github.com/XR-Lee/AutoPaperReview/issues/33)), originality is clause or-6 on 49 of 50 items and or-8 on the remaining 1. A cutoff at 4 catches none of them (false-alarm rate 0.000). A cutoff at 6 flags 0.980 [0.940, 1.000]. That score does not separate those proposals. The pilot directory still does not store that run. See [benchmarks/claimnov_pilot/README.md](benchmarks/claimnov_pilot/README.md) and [docs/metrics.md](docs/metrics.md).
 
 ## Confidentiality
 
@@ -597,7 +651,10 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 
 **Venue score and benchmark**
 
-- The table scores one rank-only forecast call. It doesn't measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column shows.
+- The release rank is Gate 1 (grok-4.7, n=192, 2026-11-25) and Gate 2 (claude-opus-5-5, n=24, 2026-11-25). Gate 1 rank MAE is better than the previous main. The other primary rank intervals on Gate 1 contain zero. Every primary rank interval on Gate 2 contains zero. Gate 2 accept/reject AUC is 1.0000 on 24 papers (8 accepts and 16 rejects).
+- Both gates score one forecast call. They do not measure the seven-dimension review, the fatal labels, or the annotated PDF. `--grounded-weaknesses` changes the written weaknesses. On Gate 1 it does not move Spearman, Kendall, or AUC outside an interval that contains zero.
+- The proposal figure is a within-sample association on stratified cohorts. It is not the shipped `proposal_audit_v1` path. On ClaimNov later-realized 50, originality collapses to or-6 on 49 of 50 ([issue #33](https://github.com/XR-Lee/AutoPaperReview/issues/33)).
+- The 15-paper table scores one rank-only forecast call. It doesn't measure the written review, the dimension bands, the fatal labels, or the annotated PDF. The decision-bin venue rating was not the number compared with humans. A full review costs considerably more than the USD/paper column shows.
 - Fifteen papers, one Opus timeout, and bootstrap intervals from about 0.4 to about 1.0 mean that a 0.02 Spearman gap isn't a finding.
 - With both Opus and Grok, APR scores below the human mean.
 - At the reported effort, Opus costs about $0.66 and takes several minutes per paper. One call in that table timed out. The default model-call budget is 7200 seconds.
@@ -608,10 +665,10 @@ The network policy is a declaration that the runner enforces on stage metadata. 
 
 ## Status
 
-AutoPaperReview `0.1.10` is alpha software for Python 3.10–3.13, released under the MIT license.
+AutoPaperReview `0.1.11` is alpha software for Python 3.10–3.13, released under the MIT license.
 
 The core is a local DAG (directed acyclic graph) with TOML configuration, Pydantic records, a content-hash cache, and adapters. Prompts in `src/autopaperreview/prompts/` are versioned with the pipeline. Parsers and model vendors stay behind the adapters.
 
-All pull requests target `pre-release` and merge only when CI is fully green. `main` only takes promotions from `pre-release`. A promotion is allowed only when a regression report shows that `pre-release` scores higher than or equal to `main` on the same fixed benchmark. Both branches run with the same model, grok-4.7 at reasoning_effort `xhigh`, via Cursor. The benchmark definition is a TODO in [Branching](docs/branching.md).
+All pull requests target `pre-release` and merge only when CI is fully green. `main` only takes promotions from `pre-release`. A promotion is allowed only when the fixed benchmark in [benchmarks/promotion/benchmark-v1.md](benchmarks/promotion/benchmark-v1.md) passes. Gate 1 and Gate 2 passed for the review code this release publishes. This release changes the version and the published metrics. It does not change prompts. See [Branching](docs/branching.md) and [published metrics](docs/metrics.md).
 
 Further reading in this repository: [architecture](docs/architecture.md), [public calibration](docs/public-calibration.md), [related-work search](docs/related-work-search.md), and [first-read writing](docs/first-read-review.md). [docs/oss-experiment-gaps.md](docs/oss-experiment-gaps.md) is a gap list dated 2026-08-29. It predates `forecast-k1`. For the current comparison, use the comparison matrix in this README.
