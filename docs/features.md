@@ -1,6 +1,6 @@
 # Feature reference
 
-This is the full list of what AutoPaperReview `0.1.10` provides. The [README](../README.md) has the short version and the `forecast-k1` run instructions. Behavior is described as shipped; the [Changelog](../CHANGELOG.md) records when each piece changed.
+This is the full list of what AutoPaperReview `0.1.11` provides. The [README](../README.md) has the short version and the `forecast-k1` run instructions. Behavior is described as shipped; the [Changelog](../CHANGELOG.md) records when each piece changed. Published Gate 1, Gate 2, and proposal-review numbers, with the caveats, are in [metrics](metrics.md). The proposal-review harness on `feat/proposal-review-harness` is not part of this release.
 
 ## What v0.1 provides
 

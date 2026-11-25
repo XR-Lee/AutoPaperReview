@@ -34,7 +34,7 @@ Use `--fixed-set none` for an exploratory report on a mixed cache. Its `forecast
 
 ## Fixed dev set
 
-`benchmarks/fixed_eval/manifest.json` is the locked ICLR dev set (192 papers, 48 in each mean-rating tier) and the CVPR registration for S24-P and S24-D2. Status is `locked`. `scripts/rank_eval.py` defaults to this ICLR set and requires `--model-id` and `--effort`. `calibrate-eval run` stays on the whole cache unless you pass `--fixed-set iclr-dev`. The private holdout is not in git. A dev-set number does not replace the published README rank. See [fixed evaluation set](fixed-eval.md).
+`benchmarks/fixed_eval/manifest.json` is the locked ICLR dev set (192 papers, 48 in each mean-rating tier) and the CVPR registration for S24-P and S24-D2. Status is `locked`. `scripts/rank_eval.py` defaults to this ICLR set and requires `--model-id` and `--effort`. `calibrate-eval run` stays on the whole cache unless you pass `--fixed-set iclr-dev`. The private holdout is not in git. The published ranks are in [metrics](metrics.md): Gate 1 on this dev set and Gate 2 on the private holdout, both dated 2026-11-25. A new dev-set run does not by itself replace those numbers. See [fixed evaluation set](fixed-eval.md).
 
 ## What is measured
 
