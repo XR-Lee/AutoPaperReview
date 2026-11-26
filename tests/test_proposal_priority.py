@@ -10,6 +10,10 @@ from autopaperreview.proposal.prior_index import build, retrieve
 from autopaperreview.proposal.priority import stage_for_feature, text_packet
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class TestProposalPriority(unittest.TestCase):
     def test_fixed_auc_ties_and_missing_values(self):
         rows = [
@@ -172,6 +176,7 @@ class TestFixedProposalBenchmark(unittest.TestCase):
                     [],
                     2,
                     cached_only=True,
+                    leak_judge=clean_judge,
                 )
             with self.assertRaisesRegex(ValueError, "missing cached merit"):
                 invoke(
@@ -182,6 +187,7 @@ class TestFixedProposalBenchmark(unittest.TestCase):
                     [],
                     2,
                     cached_only=True,
+                    leak_judge=clean_judge,
                 )
             run.assert_not_called()
 
@@ -324,6 +330,7 @@ class TestContrastiveProposalReview(unittest.TestCase):
         for row in bank:
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
+            row.setdefault("revision_ms", 10)
         packet, scores = contrast.packet(target, bank)
         self.assertNotIn("HELD-OUT", str(packet))
         self.assertEqual(len(scores), 6)
@@ -364,6 +371,7 @@ class TestContrastiveProposalReview(unittest.TestCase):
         for row in bank:
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
+            row.setdefault("revision_ms", 10)
         matched, _ = contrast.packet(target, bank, {"query": "pollen microscope grain"})
         self.assertEqual(matched["target"], target)
         self.assertTrue(

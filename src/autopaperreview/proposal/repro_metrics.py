@@ -2,7 +2,7 @@
 
 Per-paper rows are not in git. Set ``APR_PROPOSAL_REPRO_DIR`` to a directory
 outside the repository. ``benchmarks/proposal/repro/aggregates.json`` holds the
-headline numbers, and ``external-sha256.json`` holds the checksums of the row
+headline numbers. Separate SHA-256 manifests cover the original and HMAC row
 files. The intervals match the original resampling: final-score tiers with a
 numpy Generator, and the 84-proposal draw with ``random.Random`` (2000 draws,
 not the 3000-draw tier bootstrap). This module does not download papers and
@@ -37,6 +37,8 @@ NLP_SEED = 11752
 NLP_DRAWS = 2000
 NLP_THRESHOLD = 6.625
 _HEADLINE_FIELDS = ("n", "decision_n", "rho", "auc")
+_RAW_MANIFEST = "external-sha256.json"
+_HMAC_MANIFEST = "external-hmac-sha256.json"
 
 
 def repo_repro_dir() -> Path:
@@ -66,9 +68,12 @@ def identifier_key(identifier: str, salt: str) -> str:
 
 def normalize_table(text: str) -> list[list[str]]:
     """Read a CSV or TSV with CR LF or LF, and strip each cell."""
-    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
-    header = cleaned.split("\n", 1)[0]
-    delimiter = "\t" if header.count("\t") > header.count(",") else ","
+    cleaned = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    header = next((line for line in cleaned.splitlines() if line.strip()), "")
+    try:
+        delimiter = csv.Sniffer().sniff(header, delimiters=",\t").delimiter
+    except csv.Error:
+        delimiter = ","
     return [
         [cell.strip() for cell in row]
         for row in csv.reader(io.StringIO(cleaned), delimiter=delimiter)
@@ -76,20 +81,36 @@ def normalize_table(text: str) -> list[list[str]]:
     ]
 
 
-def verify_external_files(folder: Path) -> None:
-    listed = json.loads((repo_repro_dir() / "external-sha256.json").read_text(encoding="utf-8"))
+def _read_external_manifest(name: str) -> dict[str, str]:
+    listed = json.loads((repo_repro_dir() / name).read_text(encoding="utf-8"))
     files = listed.get("files")
     if not isinstance(files, dict) or not files:
-        raise RuntimeError("external-sha256.json has no file checksums")
-    for name, expected in files.items():
+        raise RuntimeError(f"{name} has no file checksums")
+    return files
+
+
+def published_external_files() -> tuple[str, ...]:
+    """Relative names of the files needed for an official reproduction."""
+    return tuple(_read_external_manifest(_RAW_MANIFEST))
+
+
+def verify_external_files(folder: Path) -> None:
+    raw = _read_external_manifest(_RAW_MANIFEST)
+    actual = {}
+    for name in raw:
         path = folder / name
         if not path.is_file():
             raise FileNotFoundError(
                 f"external proposal rows were not found under {folder} (missing {name})"
             )
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != expected:
-            raise RuntimeError(f"external proposal file does not match the committed sha256: {name}")
+        actual[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual == raw:
+        return
+    if (repo_repro_dir() / _HMAC_MANIFEST).is_file():
+        hmac_files = _read_external_manifest(_HMAC_MANIFEST)
+        if actual == hmac_files:
+            return
+    raise RuntimeError("external proposal files do not match either committed SHA-256 manifest")
 
 
 def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
@@ -133,23 +154,38 @@ def _near(left: Any, right: Any) -> bool:
     try:
         got = float(left)
         want = float(right)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     if not math.isfinite(got) or not math.isfinite(want):
         return False
     return abs(got - want) <= 1e-6
 
 
+def _interval_matches(got: Any, want: Any) -> bool:
+    return (
+        isinstance(got, (list, tuple)) and isinstance(want, (list, tuple))
+        and len(got) == len(want) == 2
+        and all(_near(left, right) for left, right in zip(got, want, strict=True))
+    )
+
+
 def headlines_match(recomputed: dict[str, Any], committed: dict[str, Any] | None = None) -> bool:
     """True when the external recompute agrees with the committed aggregates."""
     expected = committed_aggregates() if committed is None else committed
+    try:
+        return _match_cohorts(recomputed, expected)
+    except (KeyError, TypeError):
+        return False
+
+
+def _match_cohorts(recomputed, expected):
     for name in ("fixed100", "confirm100", "replications199"):
         got = recomputed[name]
         want = expected[name]
         for field in _HEADLINE_FIELDS:
             if not _near(got[field], want[field]):
                 return False
-        if not _near(got["rho_ci95"][0], want["rho_ci95"][0]) or not _near(got["rho_ci95"][1], want["rho_ci95"][1]):
+        if not _interval_matches(got["rho_ci95"], want["rho_ci95"]):
             return False
         if got["top20"]["included_positive_range"] != want["top20"]["included_positive_range"]:
             return False
@@ -163,7 +199,7 @@ def headlines_match(recomputed: dict[str, Any], committed: dict[str, Any] | None
         if not _near(got_nlp[field], want_nlp[field]):
             return False
     for field in ("rho_ci95", "auc_ci95"):
-        if not _near(got_nlp[field][0], want_nlp[field][0]) or not _near(got_nlp[field][1], want_nlp[field][1]):
+        if not _interval_matches(got_nlp[field], want_nlp[field]):
             return False
     return True
 
@@ -215,6 +251,8 @@ def _replication_cohort(folder: Path, numpy) -> dict[str, Any]:
         enrolled += 1
         if row["base"] is None:
             continue
+        # The checksum-verified historical export uses booleans on some rows.
+        accept = row.get("accept")
         rows.append(
             _paper(
                 row["key"],
@@ -222,7 +260,7 @@ def _replication_cohort(folder: Path, numpy) -> dict[str, Any]:
                 row["base"],
                 row["target"],
                 row["rating"],
-                row.get("accept"),
+                int(accept) if type(accept) is bool else accept,
             )
         )
     from .data import digest

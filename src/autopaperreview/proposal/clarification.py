@@ -9,7 +9,9 @@ from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
 from .data import digest, read, reported_result, write
+from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
 from .outcome_screen import units
+from .sanitized import require_model_input, seal
 from .stages import claude_argv
 
 SONNET = "claude-sonnet-5-5"
@@ -23,7 +25,10 @@ STAGES = {
 }
 
 
-def judgment(stage, data, cache, *, cached_only, timeout):
+def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
+    require_leak_judge(leak_judge)
+    data = require_model_input(seal(data))
+    apply_leak_audit(data, leak_judge)
     model, system, abstention = STAGES[stage]
     command = claude_argv()
     request = dict(stage=stage, model=model, prompt=digest(system), command=digest(command), input=digest(data))
@@ -40,8 +45,9 @@ def judgment(stage, data, cache, *, cached_only, timeout):
     feedback = ""
     disposition = "response"
     for attempt in range(3):
+        message = audited_prompt(data, leak_judge, feedback)
         try:
-            raw, _ = run_command(command, system=system, model=model, prompt=json.dumps(data, ensure_ascii=False) + feedback, timeout=timeout)
+            raw, _ = run_command(command, system=system, model=model, prompt=message, timeout=timeout)
         except RuntimeError as exc:
             if not re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 raise
@@ -54,11 +60,11 @@ def judgment(stage, data, cache, *, cached_only, timeout):
         try:
             output = json.loads(recover_json(body))
             protocol.validate(stage, output, data)
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError):
             if attempt == 2:
                 output, disposition = abstention, "invalid"
                 break
-            feedback = "\nReturn the requested JSON and valid identifiers. " + str(exc)[:100]
+            feedback = "\nReturn the requested JSON and valid identifiers."
             continue
         if stage == "question" and not output.get("abstain") and protocol.outside_scope(" ".join(protocol.interpretations(output).values())):
             output, disposition = abstention, "scope"
@@ -100,7 +106,8 @@ def cited_answer(material, interpretations, label, call):
     return dict(answer="unknown", evidence=None)
 
 
-def clarify(item, cache, *, cached_only=False, timeout=240):
+def clarify(item, cache, *, cached_only=False, timeout=240, leak_judge=None):
+    require_leak_judge(leak_judge)
     proposal = item.get("proposal", {})
     audit = item.get("source_audit", {})
     screen = item.get("outcome_screen", {})
@@ -122,7 +129,7 @@ def clarify(item, cache, *, cached_only=False, timeout=240):
         raise ValueError("expected matching proposal and source fingerprints from prioritize --include-source-audit")
     requests = {}
     def call(label, stage, data):
-        key, value = judgment(stage, data, cache, cached_only=cached_only, timeout=timeout)
+        key, value = judgment(stage, data, cache, cached_only=cached_only, timeout=timeout, leak_judge=leak_judge)
         requests[label] = key
         return value
     plan = plan_units(proposal)
@@ -179,9 +186,15 @@ def dispatch(args):
     items = document if batch else [document]
     if any(not isinstance(r, dict) for r in items):
         raise ValueError("expected a source-audited APR result or array of results")
+    judge = require_leak_judge(model_leak_judge(
+        root / "cache", OPUS, claude_argv(), args.timeout, cached_only=args.cached_only,
+    ))
     lockdir = root / "locks" / "clarification"
     lockdir.mkdir(parents=True, exist_ok=True)
     with run_lock(lockdir):
-        answers = [clarify(r, root / "cache", cached_only=args.cached_only, timeout=args.timeout) for r in items]
+        answers = [
+            clarify(r, root / "cache", cached_only=args.cached_only, timeout=args.timeout, leak_judge=judge)
+            for r in items
+        ]
         write(output, answers if batch else answers[0])
     return 0

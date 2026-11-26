@@ -12,8 +12,10 @@ from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .clarification_protocol import outside_scope
 from .data import digest, read, reported_result, write
+from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
 from .material import material
 from .panel_prompts import FORECAST, SOURCE
+from .sanitized import require_model_input, seal
 from .stages import claude_argv
 
 AXES = ("importance", "novelty", "value", "mechanism", "testability", "reach")
@@ -62,7 +64,10 @@ def validate_forecast(output, statements):
         raise ValueError("reviewer masses must sum to twenty")
 
 
-def request(stage, body, cache, offline):
+def request(stage, body, cache, offline, *, leak_judge=None):
+    require_leak_judge(leak_judge)
+    body = require_model_input(seal(body))
+    apply_leak_audit(body, leak_judge)
     source_stage = stage == "source-review"
     prompt, validate = (SOURCE, validate_source) if source_stage else (FORECAST, validate_forecast)
     model, command = "claude-sonnet-5-5", claude_argv()
@@ -97,8 +102,9 @@ def request(stage, body, cache, offline):
         return key, r
     feedback = ""
     for _ in range(3):
+        message = audited_prompt(body, leak_judge, feedback)
         try:
-            raw, _ = run_command(command, model=model, system=prompt, prompt=json.dumps(body, ensure_ascii=False)+feedback, timeout=240)
+            raw, _ = run_command(command, model=model, system=prompt, prompt=message, timeout=240)
         except RuntimeError as exc:
             if re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 r["state"] = "refusal"
@@ -120,7 +126,8 @@ def request(stage, body, cache, offline):
     return key, r
 
 
-def evaluate(row, cache, offline):
+def evaluate(row, cache, offline, *, leak_judge=None):
+    require_leak_judge(leak_judge)
     texts = material(row)
     src = (row.get("source_audit") or {}).get("source_units", {})
     if not isinstance(src, dict) or any(not isinstance(v, str) for v in src.values()):
@@ -129,7 +136,7 @@ def evaluate(row, cache, offline):
     if any(outside_scope(t) or reported_result(t) for t in texts):
         texts = []
     original = {f"s{i}":v for i,v in enumerate(texts, 1)}
-    req, checked = request("source-review", dict(sources=source, statements=original), cache, offline)
+    req, checked = request("source-review", dict(sources=source, statements=original), cache, offline, leak_judge=leak_judge)
     retained, decisions = [], {}
     for tag, text in original.items():
         item = checked["output"].get(tag)
@@ -150,7 +157,7 @@ def evaluate(row, cache, offline):
     if not retained:
         return out
     body = {f"s{i}":v["text"] for i,v in enumerate(retained, 1)}
-    out["forecast"], pred = request("forecast", body, cache, offline)
+    out["forecast"], pred = request("forecast", body, cache, offline, leak_judge=leak_judge)
     out["state"] = pred["state"]
     if pred["state"] != "response":
         return out
@@ -185,12 +192,15 @@ def dispatch(args):
         raise ValueError("expected audited proposals with string IDs")
     if len({r["id"] for r in rows}) != len(rows):
         raise ValueError("expected distinct proposal IDs")
+    judge = require_leak_judge(model_leak_judge(
+        cache, "claude-sonnet-5-5", claude_argv(), 240, cached_only=args.cached_only,
+    ))
     if args.cached_only:
-        result = [evaluate(r, cache, True) for r in rows]
+        result = [evaluate(r, cache, True, leak_judge=judge) for r in rows]
     else:
         cache.mkdir(parents=True, exist_ok=True)
         with run_lock(cache):
-            result = [evaluate(r, cache, False) for r in rows]
+            result = [evaluate(r, cache, False, leak_judge=judge) for r in rows]
     if dest:
         write(dest, result)
     else:

@@ -17,7 +17,7 @@ from typing import Any
 from .venues import profile_dir
 
 _YEAR = re.compile(r"(?:ICLR\.cc/|ICLR\s+)(20\d{2})\b", re.IGNORECASE)
-_RANGE_KEY = re.compile(r"range:(\d+)-(\d+)\Z")
+_RANGE_KEY = re.compile(r"range:([+-]?[0-9]+)-([+-]?[0-9]+)\Z")
 
 
 @dataclass(frozen=True)
@@ -72,9 +72,13 @@ def _parsed_range(key: str) -> RatingScale | None:
     match = _RANGE_KEY.fullmatch(key)
     if match is None:
         return None
-    minimum, maximum = int(match.group(1)), int(match.group(2))
+    try:
+        minimum, maximum = int(match.group(1)), int(match.group(2))
+    except ValueError:
+        return None
     if minimum > maximum:
         return None
+    key = f"range:{minimum}-{maximum}"
     block = _payload()["generic_range"]
     source = (
         str(block.get("source") or "")
@@ -111,8 +115,10 @@ def classic_scale() -> RatingScale:
 
 
 def scale_for_key(key: str | None) -> RatingScale:
-    if not key:
+    if key is None:
         return classic_scale()
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("rating_scale must be a non-empty string")
     registered = registered_scales()
     if key in registered:
         return registered[key]

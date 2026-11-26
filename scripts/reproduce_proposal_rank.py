@@ -21,11 +21,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from autopaperreview.proposal.cohort import (  # noqa: E402
-    validate_manifest,
-    validate_predictions,
-    validate_references,
-)
 from autopaperreview.proposal.data import read  # noqa: E402
 from autopaperreview.proposal.fixed_benchmark import evaluate_fixed  # noqa: E402
 from autopaperreview.proposal.repro_metrics import (  # noqa: E402
@@ -64,16 +59,17 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             print("missing cohort artifact: " + ", ".join(missing), file=sys.stderr)
             return 2
-        manifest = validate_manifest(read(args.manifest))
-        predictions = validate_predictions(read(args.predictions))
-        references = validate_references(read(args.references))
-        result = evaluate_fixed(
-            manifest,
-            predictions,
-            references,
-            bootstrap=args.bootstrap,
-            stratified_draws=args.stratified_draws,
-        )
+        try:
+            result = evaluate_fixed(
+                read(args.manifest),
+                read(args.predictions),
+                read(args.references),
+                bootstrap=args.bootstrap,
+                stratified_draws=args.stratified_draws,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"invalid cohort artifact: {exc}", file=sys.stderr)
+            return 2
     else:
         external = args.root
         if external is None and os.environ.get(EXTERNAL_DIR_ENV):

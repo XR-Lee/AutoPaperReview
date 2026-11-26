@@ -3,7 +3,7 @@
 from collections import Counter
 from math import log, sqrt
 
-from .prior_index import words
+from .prior_index import development_row, words
 
 
 def tokens(proposal):
@@ -11,7 +11,7 @@ def tokens(proposal):
 
 
 def packet(proposal, training, exclude_key=""):
-    pool = [r for r in training if r["key"] != exclude_key and r["split"] == "dev"]
+    pool = [r for r in training if r["key"] != exclude_key and development_row(r)]
     pool.sort(key=lambda r: (r["target"], r["key"]))
     if len(pool) < 8:
         raise ValueError("need at least eight distinct development examples")

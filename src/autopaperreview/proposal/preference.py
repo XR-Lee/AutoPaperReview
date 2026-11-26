@@ -3,6 +3,7 @@
 from statistics import mean, pstdev
 
 from .data import digest
+from .prior_index import development_row
 
 
 def excerpts(proposal):
@@ -11,7 +12,7 @@ def excerpts(proposal):
 
 def panel(proposal, bank, round_number, exclude_key=""):
     pool = sorted(
-        (r for r in bank if r["split"] == "dev" and r["key"] != exclude_key),
+        (r for r in bank if r["key"] != exclude_key and development_row(r)),
         key=lambda r: (r["target"], r["key"]),
     )
     if len(pool) < 15:

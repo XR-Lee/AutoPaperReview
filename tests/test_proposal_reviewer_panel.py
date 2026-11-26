@@ -7,12 +7,16 @@ from autopaperreview.proposal import reviewer_panel as panel
 from autopaperreview.proposal.data import digest, write
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class ReviewerPanelTest(TestCase):
     def test_only_full_source_spans_can_enter_forecast(self):
         source = {"u1": "Investigate whether the two proposed groupings are equivalent."}
         row = {"id": "toy", "overall": 3.5, "source_audit": {"source_units": source}}
         texts = ["Investigate groupings.", "Question about costs."]
-        def call(stage, body, cache, offline):
+        def call(stage, body, cache, offline, *, leak_judge):
             if stage == "source-review":
                 return "g", dict(state="response", output={
                     "s1":{"label":"partial", "evidence":[["u1","groupings"]]},
@@ -21,7 +25,7 @@ class ReviewerPanelTest(TestCase):
             self.assertEqual(body, {"s1": texts[1]})
             return "f", dict(state="response", output=[dict(n=20, grade=4, pro=["value",2,"s1"], con=None)])
         with patch.object(panel, "material", return_value=texts), patch.object(panel,"request",side_effect=call):
-            r = panel.evaluate(row,Path("."),True)
+            r = panel.evaluate(row,Path("."),True,leak_judge=clean_judge)
         pro = r["profiles"][0]["pro"]
         self.assertEqual(pro["original_id"],"s2")
         for q in pro["evidence"]:
@@ -41,11 +45,11 @@ class ReviewerPanelTest(TestCase):
     def test_empty_and_failed_source_reads_abstain_and_cached_only_never_calls(self):
         with TemporaryDirectory() as d, patch.object(panel, "run_command") as live:
             row={"id":"empty","overall":None,"proposal":{}}
-            result=panel.evaluate(row,Path(d),True)
+            result=panel.evaluate(row,Path(d),True,leak_judge=clean_judge)
             self.assertIsNone(result["simulated_grade"])
             self.assertEqual(result["state"],"insufficient_verified_material")
             with self.assertRaises(ValueError):
-                panel.request("forecast",{"s1":"A hypothesis."},Path(d),True)
+                panel.request("forecast",{"s1":"A hypothesis."},Path(d),True,leak_judge=clean_judge)
             live.assert_not_called()
 
     def test_will_not_trust_a_malformed_cached_mass(self):
@@ -55,4 +59,4 @@ class ReviewerPanelTest(TestCase):
             path=Path(d)/"forecast"/(digest(desc)+".json")
             write(path,dict(request=desc,state="response",output=[dict(n=1,grade=4,pro=None,con=None)]))
             with self.assertRaises(ValueError):
-                panel.request("forecast",body,Path(d),True)
+                panel.request("forecast",body,Path(d),True,leak_judge=clean_judge)

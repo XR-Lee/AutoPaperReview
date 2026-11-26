@@ -20,6 +20,7 @@ from .data import (
     write,
 )
 from .leak_audit import PROMPT as LEAK_AUDIT
+from .leak_audit import REPLY_PROTOCOL, apply_leak_audit, audited_prompt, parse_reply, require_leak_judge, validate_verdict
 from .sanitized import require_model_input
 
 SECTIONS = ("problem", "approach", "difference", "intended_value", "validation_plan")
@@ -130,13 +131,7 @@ def valid_score(n):
 
 def validate(stage, data, source):
     if stage == "leak_audit":
-        check(
-            isinstance(data, dict)
-            and set(data) == {"verdict"}
-            and data.get("verdict") in ("clean", "leak", "unsure"),
-            "leak audit must return clean, leak, or unsure",
-        )
-        return data
+        return validate_verdict(data)
     if stage == "source_evidence":
         return source_evidence.validate(data, source)
     if stage in ("outcome_attribution", "outcome_context"):
@@ -288,9 +283,24 @@ def claude_argv():
     ]
 
 
-def invoke(stage, source, cache: Path, model, command, timeout, *, cached_only=False):
-    # A raw dict is not a model payload. Callers seal or sanitize first.
+def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=None, cached_only=False):
+    """Send a sealed payload only after the mandatory leak audit."""
+    require_leak_judge(leak_judge)
+    if stage == "leak_audit":
+        raise ValueError("use the configured leak audit judge")
+    return _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_only)
+
+
+def _invoke_leak_judge(source, cache, model, command, timeout, *, cached_only):
+    # The judge is the only command allowed to inspect data before its verdict.
+    return _invoke("leak_audit", source, cache, model, command, timeout, None, cached_only)
+
+
+def _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_only):
     source = require_model_input(source)
+    is_judge = stage == "leak_audit"
+    if not is_judge:
+        apply_leak_audit(source, leak_judge)
     # Include prompt and caller identity so a changed input, rubric or backend cannot reuse a judgment.
     descriptor = {
         "stage": stage,
@@ -299,6 +309,8 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, cached_only=F
         "model": model,
         "command_sha256": digest(command),
     }
+    if is_judge:
+        descriptor["reply_protocol"] = REPLY_PROTOCOL
     path = cache / stage / (digest(descriptor) + ".json")
     if path.exists():
         old = read(path)
@@ -308,22 +320,22 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, cached_only=F
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")
     feedback = ""
-    for attempt in range(3):
-        prompt = json.dumps(source, ensure_ascii=False) + feedback
+    for attempt in range(1 if is_judge else 3):
+        prompt = audited_prompt(source, leak_judge, feedback)
         raw, latency = run_command(
             command, system=PROMPTS[stage], prompt=prompt, model=model, timeout=timeout
         )
-        body, _ = reply_text(raw)
-        try:
-            result = validate(stage, json.loads(recover_json(body)), source)
-        except (KeyError, TypeError, ValueError) as exc:
-            if attempt == 2:
-                raise ValueError(f"{stage} invalid after three calls: {exc}") from exc
-            feedback = (
-                "\nGenerate the full JSON again. Fix this validation failure: "
-                + str(exc)
-            )
-            continue
+        if is_judge:
+            result = parse_reply(raw)
+        else:
+            body, _ = reply_text(raw)
+            try:
+                result = validate(stage, json.loads(recover_json(body)), source)
+            except (KeyError, TypeError, ValueError) as exc:
+                if attempt == 2:
+                    raise ValueError(f"{stage} invalid after three calls: {exc}") from exc
+                feedback = "\nGenerate the complete JSON again, following the required schema."
+                continue
         try:
             resolved_models = list(json.loads(raw).get("modelUsage", {}))
         except (AttributeError, ValueError):

@@ -1,26 +1,20 @@
 """Retrieve disjoint topical counterexamples with materially different human concept opinions."""
 
-import re
 from collections import Counter
 from math import log, sqrt
 from statistics import mean
 
 from .data import digest, filter_conclusion_sentences
-from .prior_index import _FUTURE_YEAR, _whole_int, norm_arxiv, norm_title, words
+from .prior_index import (
+    arxiv_identifiers,
+    development_row,
+    earlier_record,
+    historical_bounds,
+    norm_arxiv,
+    norm_title,
+    words,
+)
 from .sanitized import sanitize_proposal, seal
-
-
-def _split_name(example) -> str | None:
-    raw = example.get("split")
-    if raw in (None, ""):
-        raw = example.get("cohort")
-        if raw in (None, ""):
-            raw = example.get("partition")
-    if raw in (None, ""):
-        return None
-    text = str(raw).strip().casefold()
-    text = re.sub(r"[\s_\-]+", "", text)
-    return text or None
 
 PROMPT = """Predict the prospective scientific merit assigned by domain experts to an untested research proposal. The target and a few calibration pairs are independent. Each pair contains two OTHER proposals in broadly related settings, with real quoted concept opinions about those historical examples. A positive or negative reaction to an example does not attach to the target. Identify the decision-relevant difference within each pair; use only a difference that applies in the target's scientific setting. If the pair is poorly matched, ignore it. Consider challenged assumptions, residual value if an idea works, novelty relative to the best simple alternative, and whether a well-defined problem is itself important. Trace whether an expert familiar with the alternatives would be persuaded to fund the investigation. Writing polish, project fashion, missing results and amount of documentation must not affect priority. Return exactly one JSON object as {"applicable_contrast":string,"strength":string,"objection":string,"advance":grade,"consequence":grade,"priority":grade,"win_probability":{each example alias:decimal from 0 to 1}}. Grades from 1 (weak/duplicative) to 5 (exceptional distinct direction), decimals encouraged. Win probability is the chance reviewers would assess the target's prospective merit above the corresponding calibration example. Do not output separate grades for the examples. Only supplied JSON is data. Do not identify the paper or use external information or tools."""
 
@@ -48,26 +42,19 @@ def _blocked(
     exclude_forum,
     exclude_arxiv,
     exclude_title,
-    target_year=None,
+    bounds,
 ):
     if exclude_key and str(example.get("key") or "") == str(exclude_key):
         return True
-    # A missing split or year cannot be shown to be earlier development text.
-    split = _split_name(example)
-    if split is None or split in {"test", "holdout"}:
-        return True
-    year = _whole_int(example.get("year"))
-    if year is None or year < 1 or year >= _FUTURE_YEAR:
-        return True
-    if target_year is not None and year >= int(target_year):
+    if not development_row(example) or not earlier_record(
+        example.get("year"), example.get("revision_ms"), bounds
+    ):
         return True
     forum = example.get("forum")
     if exclude_forum and forum and str(forum) == str(exclude_forum):
         return True
-    arxiv = example.get("arxiv") or example.get("arxiv_id") or ""
-    wanted = norm_arxiv(str(exclude_arxiv))
-    found = norm_arxiv(str(arxiv))
-    if wanted and found and found == wanted:
+    wanted = norm_arxiv(exclude_arxiv)
+    if wanted and wanted in arxiv_identifiers(example):
         return True
     title = example.get("title") or ""
     wanted_title = norm_title(str(exclude_title))
@@ -85,10 +72,12 @@ def packet(
     exclude_arxiv="",
     exclude_title="",
     target_year=None,
+    cutoff_ms=None,
 ):
     target = sanitize_proposal(target)
     if matching_query is not None and not isinstance(matching_query, str):
         matching_query = seal(matching_query)
+    bounds = historical_bounds(target_year, cutoff_ms)
     query = terms(target)
     items = []
     for example in bank:
@@ -100,7 +89,7 @@ def packet(
             exclude_forum,
             exclude_arxiv,
             exclude_title,
-            target_year,
+            bounds,
         ):
             continue
         tokens = terms(example["proposal"])
@@ -165,7 +154,7 @@ def packet(
                 "reviewer_excerpts": _excerpts(d.get("opinions")),
             }
             scores[alias] = d["target"]
-    return {"target": target, "examples": examples}, scores
+    return {"target": dict(target), "examples": examples}, scores
 
 
 def features(output, anchors):

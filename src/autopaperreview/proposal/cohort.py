@@ -14,7 +14,10 @@ field. A year below 1 is rejected in both.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from .data import declared_rating_scale, require_finite_number
 
 MANIFEST_VERSION = 1
 CASE_SPLITS = frozenset({"test", "dev", "holdout"})
@@ -32,29 +35,37 @@ def _string(value: Any, what: str) -> str:
     return value
 
 
-def validate_manifest(doc: Any) -> dict:
-    """Require the locked-cohort fields. Extra keys are rejected."""
+def index_by_forum(doc: Any, label: str) -> dict:
+    if not isinstance(doc, list) or not doc:
+        raise ValueError(f"{label} must be a non-empty array")
+    indexed = {}
+    for item in doc:
+        row = _object(item, f"{label} row")
+        forum = _string(row.get("forum"), "forum")
+        if forum in indexed:
+            raise ValueError("duplicate forum ID")
+        indexed[forum] = row
+    return indexed
+
+
+def validate_manifest(doc: Any, *, allow_legacy: bool = False) -> dict:
+    """Validate a strict lock, or a versionless published or legacy lock."""
     manifest = _object(doc, "manifest")
     allowed = {"version", "ids_sha256", "cases", "seed", "source"}
     unknown = set(manifest) - allowed
-    if unknown:
+    legacy = allow_legacy and "version" not in manifest
+    if unknown and not legacy:
         raise ValueError(f"unknown manifest fields: {sorted(unknown)}")
-    if manifest.get("version") != MANIFEST_VERSION:
+    if not legacy and (
+        type(manifest.get("version")) is not int or manifest["version"] != MANIFEST_VERSION
+    ):
         raise ValueError(f"manifest version must be {MANIFEST_VERSION}")
     digest = manifest.get("ids_sha256")
-    if not isinstance(digest, str) or len(digest) != 64:
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise ValueError("ids_sha256 must be a SHA-256 hex digest")
-    cases = manifest.get("cases")
-    if not isinstance(cases, list) or not cases:
-        raise ValueError("manifest needs a non-empty cases list")
-    forums = set()
-    for case in cases:
-        row = _object(case, "manifest case")
-        forum = _string(row.get("forum"), "forum")
-        if forum in forums:
-            raise ValueError("duplicate forum ID")
-        forums.add(forum)
-        if row.get("split") not in CASE_SPLITS:
+    for row in index_by_forum(manifest.get("cases"), "manifest cases").values():
+        split = row.get("split", "test" if legacy else None)
+        if not isinstance(split, str) or (split not in CASE_SPLITS and not (legacy and split == "val")):
             raise ValueError("split must be test, dev, or holdout")
         case_allowed = {
             "forum",
@@ -69,13 +80,14 @@ def validate_manifest(doc: Any) -> dict:
             "submission_ms",
         }
         extra = set(row) - case_allowed
-        if extra:
+        if extra and not legacy:
             raise ValueError(f"unknown manifest case fields: {sorted(extra)}")
         if "year" in row and (type(row["year"]) is not int or row["year"] < 1):
             raise ValueError("year must be a positive integer venue year")
+        declared_rating_scale(row)
         for stamp in ("cutoff_ms", "submission_ms"):
-            if stamp in row and type(row[stamp]) is not int:
-                raise ValueError(f"{stamp} must be an integer millisecond timestamp")
+            if stamp in row and (type(row[stamp]) is not int or not 0 < row[stamp] < 2 ** 63):
+                raise ValueError(f"{stamp} must be a positive integer millisecond timestamp")
     if "seed" in manifest and not isinstance(manifest["seed"], str):
         raise ValueError("seed must be a string")
     if "source" in manifest and not isinstance(manifest["source"], dict):
@@ -84,25 +96,17 @@ def validate_manifest(doc: Any) -> dict:
 
 
 def validate_predictions(doc: Any) -> list:
-    if not isinstance(doc, list) or not doc:
-        raise ValueError("predictions must be a non-empty array")
-    forums = set()
-    for item in doc:
-        row = _object(item, "prediction")
-        forum = _string(row.get("forum"), "forum")
-        if forum in forums:
-            raise ValueError("duplicate forum ID")
-        forums.add(forum)
-        overall = row.get("overall")
-        if isinstance(overall, bool) or not isinstance(overall, (int, float)):
-            raise ValueError("overall must be a finite number")
+    for row in index_by_forum(doc, "predictions").values():
+        require_finite_number(row.get("overall"), "overall")
     return doc
 
 
-def validate_references(doc: Any) -> list:
-    if not isinstance(doc, list) or not doc:
-        raise ValueError("references must be a non-empty array")
-    forums = set()
+def validate_decision(value: Any) -> None:
+    if value is not None and (type(value) is not int or value not in (0, 1)):
+        raise ValueError("accept must be 0, 1, or null")
+
+
+def validate_references(doc: Any, *, allow_legacy: bool = False) -> list:
     allowed = {
         "forum",
         "prospective",
@@ -117,23 +121,14 @@ def validate_references(doc: Any) -> list:
         "input_sha256",
         "independent_reference",
     }
-    for item in doc:
-        row = _object(item, "reference")
+    if allow_legacy:
+        allowed.update({"full_ratings", "opinion_evidence"})
+    for row in index_by_forum(doc, "references").values():
         extra = set(row) - allowed
         if extra:
             raise ValueError(f"unknown reference fields: {sorted(extra)}")
-        forum = _string(row.get("forum"), "forum")
-        if forum in forums:
-            raise ValueError("duplicate forum ID")
-        forums.add(forum)
         for field in ("prospective", "final_rating"):
-            value = row.get(field)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{field} must be a number")
-        if "accept" in row and row["accept"] is not None and row["accept"] not in (0, 1):
-            raise ValueError("accept must be 0, 1, or null")
-        if "year" in row and row["year"] is not None and (
-            type(row["year"]) is not int or row["year"] < 1
-        ):
-            raise ValueError("year must be a positive integer venue year")
+            require_finite_number(row.get(field), field)
+        validate_decision(row.get("accept"))
+        declared_rating_scale(row)
     return doc

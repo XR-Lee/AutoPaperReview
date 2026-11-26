@@ -6,6 +6,7 @@ import json
 import math
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from math import log
 from pathlib import Path
 
@@ -22,16 +23,22 @@ def norm_title(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
-# Without a target year, a sentinel this large is not treated as prior work.
-_FUTURE_YEAR = 2099
+_SPLIT_FIELDS = ("split", "partition", "cohort")
+_DEVELOPMENT_SPLITS = {"dev", "development"}
+_ARXIV_FIELDS = ("arxiv", "arxiv_id")
 
 
 def norm_arxiv(value: str) -> str:
-    text = (value or "").strip().lower()
+    text = (value or "").strip().casefold()
     text = text.split("#", 1)[0].split("?", 1)[0].strip()
-    text = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/", "", text)
-    text = re.sub(r"^arxiv:", "", text)
-    text = re.sub(r"\.pdf$", "", text)
+    text = re.sub(r"^arxiv:\s*", "", text)
+    text = re.sub(
+        r"^(?:(?:https?:)?//)?(?:[a-z0-9-]+\.)*arxiv\.org(?::\d+)?/"
+        r"(?:abs|pdf|html|ps|format)/",
+        "",
+        text,
+    )
+    text = re.sub(r"\.pdf$", "", text.rstrip("/"))
     return re.sub(r"v\d+$", "", text)
 
 
@@ -61,24 +68,51 @@ def _whole_int(value: object) -> int | None:
 
 def _positive_stamp(value: object) -> int | None:
     number = _whole_int(value)
-    if number is None or number <= 0:
+    if number is None or not 0 < number < 2 ** 63:
         return None
     return number
 
 
-def _split_name(value: object) -> str | None:
-    if value in (None, ""):
-        return None
-    text = str(value).strip().casefold()
-    text = re.sub(r"[\s_\-]+", "", text)
-    return text or None
+def development_row(row) -> bool:
+    """Every non-blank split alias must identify a development record."""
+    names = []
+    for field in _SPLIT_FIELDS:
+        value = row.get(field)
+        if value is None or isinstance(value, str) and not value.strip():
+            continue
+        if not isinstance(value, str):
+            return False
+        names.append(value.strip().casefold())
+    return bool(names) and all(name in _DEVELOPMENT_SPLITS for name in names)
+
+
+def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
+    now = datetime.now(timezone.utc)
+    year = now.year if target_year is None else _positive_stamp(target_year)
+    if year is None:
+        raise ValueError("target year must be a positive integer")
+    cutoff = int(now.timestamp() * 1000) if cutoff_ms is None else _positive_stamp(cutoff_ms)
+    if cutoff is None:
+        raise ValueError("cutoff must be a finite positive timestamp")
+    return year, cutoff
+
+
+def earlier_record(year, revision, bounds) -> bool:
+    year_limit, cutoff = bounds
+    year = _positive_stamp(year)
+    revision = _positive_stamp(revision)
+    return year is not None and year < year_limit and revision is not None and revision < cutoff
+
+
+def arxiv_identifiers(row) -> set[str]:
+    return {identifier for field in _ARXIV_FIELDS if (identifier := norm_arxiv(str(row.get(field) or "")))}
 
 
 def _connect(db, *, readonly=False):
     import sqlite3
 
     if readonly:
-        return sqlite3.connect(f"file:{Path(db).resolve().as_posix()}?mode=ro", uri=True)
+        return sqlite3.connect(f"{Path(db).resolve().as_uri()}?mode=ro", uri=True)
     return sqlite3.connect(db)
 
 
@@ -97,19 +131,14 @@ def build(corpus: Path, db: Path):
                 re.IGNORECASE,
             ):
                 continue
-            # Rows without a split or a year are not prior work. A non-finite
-            # or non-positive revision is dropped here and does not raise.
-            split = _split_name(p.get("split"))
-            year = _whole_int(p.get("year"))
+            year = _positive_stamp(p.get("year"))
             revision = _positive_stamp(p.get("revision_ms"))
-            if split is None or split in {"test", "holdout"} or year is None or year < 1:
+            arxiv = arxiv_identifiers(p)
+            if not development_row(p) or year is None or revision is None or len(arxiv) > 1:
                 continue
-            if year >= _FUTURE_YEAR or revision is None:
-                continue
-            arxiv = norm_arxiv(str(p.get("arxiv") or p.get("arxiv_id") or ""))
             conn.execute(
                 "INSERT INTO papers VALUES (?,?,?,?,?,?,?)",
-                (p["title"], p["abstract"], year, revision, p.get("forum"), arxiv, split),
+                (p["title"], p["abstract"], year, revision, p.get("forum"), next(iter(arxiv), ""), "dev"),
             )
         conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
         conn.commit()
@@ -121,51 +150,6 @@ def _columns(conn):
         return [row[1] for row in info]
     cursor = conn.execute("SELECT * FROM papers LIMIT 0")
     return [item[0] for item in cursor.description]
-
-
-def _blocked_hit(
-    title,
-    abstract,
-    year,
-    rev,
-    forum,
-    arxiv,
-    split,
-    *,
-    exclude_title,
-    exclude_forum,
-    exclude_arxiv,
-    target_year,
-    cutoff_ms,
-):
-    if exclude_forum and str(forum) == str(exclude_forum):
-        return True
-    if exclude_title and norm_title(title) and norm_title(title) == norm_title(exclude_title):
-        return True
-    target_arxiv = norm_arxiv(exclude_arxiv)
-    row_arxiv = norm_arxiv(arxiv)
-    if target_arxiv and (
-        row_arxiv == target_arxiv
-        or target_arxiv in f"{title} {abstract} {forum}".lower()
-    ):
-        return True
-    name = _split_name(split)
-    if name is None or name in {"test", "holdout"}:
-        return True
-    year_i = _whole_int(year)
-    rev_i = _positive_stamp(rev)
-    if year_i is None or year_i < 1 or rev_i is None:
-        return True
-    if target_year is None and year_i >= _FUTURE_YEAR:
-        return True
-    if target_year is not None and year_i >= int(target_year):
-        return True
-    cutoff = None if cutoff_ms is None else _positive_stamp(cutoff_ms)
-    if cutoff_ms is not None and cutoff is None:
-        return True
-    if cutoff is not None and rev_i >= cutoff:
-        return True
-    return False
 
 
 def retrieve(
@@ -183,15 +167,25 @@ def retrieve(
     from .sanitized import sanitize_proposal
 
     proposal = sanitize_proposal(proposal)
-    if cutoff_ms is not None and _positive_stamp(cutoff_ms) is None:
-        raise ValueError("cutoff must be a finite positive timestamp")
+    bounds = historical_bounds(target_year, cutoff_ms)
     content = " ".join(x for x in proposal.values() if isinstance(x, str))
     counts = Counter(words(content))
     seen = set(words(exclude_title))
     ab = set(words(exclude_abstract))
+    target_title = norm_title(exclude_title)
+    target_arxiv = norm_arxiv(exclude_arxiv)
+    if limit <= 0:
+        return []
     with _connect(db, readonly=True) as conn:
         columns = set(_columns(conn))
-        has_arxiv = "arxiv" in columns
+        split_fields = tuple(k for k in _SPLIT_FIELDS if k in columns)
+        revision = "revision" if "revision" in columns else "revision_ms"
+        required = ("title", "abstract", "year", revision, "forum")
+        if not split_fields or not set(required).issubset(columns):
+            return []
+        selected = ", ".join(required)
+        arxiv_fields = tuple(k for k in _ARXIV_FIELDS if k in columns)
+        eligibility_args = ", ".join((*required, *split_fields, *arxiv_fields))
         size = conn.execute("SELECT count(*) FROM papers").fetchone()[0]
         terms = []
         for w, n in counts.most_common(150):
@@ -199,92 +193,48 @@ def retrieve(
             if freq and 2 <= freq[0] < 0.30 * size:
                 terms.append((min(3, n) * log((size + 1) / (freq[0] + 1)), w))
         q = " OR ".join('"' + w + '"' for _, w in sorted(terms, reverse=True)[:24])
-        picked = []
         if not q:
-            return picked
-        # Forum, year, and submission-date cutoffs are applied before the hit
-        # limit so the target and later papers do not crowd out earlier work.
-        filters = ["papers MATCH ?"]
-        params: list = [q]
-        if exclude_forum and "forum" in columns:
-            filters.append("ifnull(forum, '') != ?")
-            params.append(str(exclude_forum))
-        if "year" in columns:
-            if target_year is not None:
-                filters.append("CAST(year AS INTEGER) > 0 AND CAST(year AS INTEGER) < ?")
-                params.append(int(target_year))
-            else:
-                filters.append(
-                    f"CAST(year AS INTEGER) > 0 AND CAST(year AS INTEGER) < {_FUTURE_YEAR}"
-                )
-        if "revision" in columns:
-            filters.append("CAST(revision AS INTEGER) > 0")
-            if cutoff_ms is not None:
-                filters.append("CAST(revision AS INTEGER) < ?")
-                params.append(_positive_stamp(cutoff_ms))
-        if "split" in columns:
-            filters.append(
-                "lower(trim(split)) != '' AND lower(trim(split)) NOT IN ('test', 'holdout')"
-            )
-        else:
             return []
-        selected = "title, abstract, year, revision, forum"
-        if has_arxiv:
-            selected += ", arxiv"
-        if "split" in columns:
-            selected += ", split"
-        rows = conn.execute(
-            f"SELECT {selected} FROM papers WHERE {' AND '.join(filters)} "
-            "ORDER BY bm25(papers, 3, 1) LIMIT 64",
-            params,
-        )
-        for row in rows:
-            title, abstract, year, rev, forum = row[:5]
-            cursor = 5
-            arxiv = ""
-            if has_arxiv:
-                arxiv = row[cursor]
-                cursor += 1
-            split = row[cursor] if "split" in columns else None
-            if _blocked_hit(
-                title,
-                abstract,
-                year,
-                rev,
-                forum,
-                arxiv,
-                split,
-                exclude_title=exclude_title,
-                exclude_forum=exclude_forum,
-                exclude_arxiv=exclude_arxiv,
-                target_year=target_year,
-                cutoff_ms=cutoff_ms,
+
+        def eligible(title, abstract, year, rev, forum, *aliases):
+            row = dict(zip((*split_fields, *arxiv_fields), aliases, strict=True))
+            if not development_row(row) or not earlier_record(year, rev, bounds):
+                return False
+            if not isinstance(title, str) or not isinstance(abstract, str):
+                return False
+            if exclude_forum and str(forum) == str(exclude_forum):
+                return False
+            if target_title and norm_title(title) == target_title:
+                return False
+            if target_arxiv and (
+                target_arxiv in arxiv_identifiers(row)
+                or target_arxiv in f"{title} {abstract} {forum}".casefold()
             ):
-                continue
+                return False
             t = set(words(title))
             a = set(words(abstract))
-            if (
+            return not (
                 seen
                 and len(t & seen) / max(1, len(t | seen)) > 0.49
                 or ab
                 and len(a & ab) / max(1, len(a | ab)) > 0.42
-            ):
-                continue
-            # Venue outcome, reviewer comments and paper identity of the target are not fields in the critic packet.
-            year_i = _whole_int(year)
-            rev_i = _positive_stamp(rev)
-            if year_i is None or rev_i is None:
-                continue
-            picked.append(
-                {
-                    "title": title,
-                    "abstract": abstract[:2400],
-                    "year": year_i,
-                    "forum": forum,
-                    "revision_ms": rev_i,
-                    "split": _split_name(split),
-                }
             )
-            if len(picked) == limit:
-                break
-    return picked
+
+        # Filter before ranking and limiting so ineligible rows cannot crowd out eligible hits.
+        conn.create_function("eligible_paper", -1, eligible, deterministic=True)
+        rows = conn.execute(
+            f"SELECT {selected} FROM papers WHERE papers MATCH ? AND eligible_paper({eligibility_args}) "
+            "ORDER BY bm25(papers, 3, 1), rowid LIMIT ?",
+            (q, limit),
+        )
+        return [
+            {
+                "title": title,
+                "abstract": abstract[:2400],
+                "year": _positive_stamp(year),
+                "forum": forum,
+                "revision_ms": _positive_stamp(rev),
+                "split": "dev",
+            }
+            for title, abstract, year, rev, forum in rows
+        ]

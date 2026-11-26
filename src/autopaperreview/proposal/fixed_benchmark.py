@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import math
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from pathlib import Path
 
 from ..public_calibration import assert_local_only
+from .cohort import index_by_forum, validate_manifest, validate_predictions, validate_references
 from .data import digest, read, require_official_mean, scale_for_reference, write
 from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
-from .leak_audit import model_leak_judge
+from .leak_audit import model_leak_judge, require_leak_judge
 from .priority import add_screen_provider, claude_argv, load_profile, rank, screen_rank_inputs, text_packet
-from .stages import invoke
+from .prior_index import norm_arxiv
 
 
 def _present(source, field):
@@ -21,6 +20,12 @@ def _present(source, field):
     value = source[field]
     if value in (None, ""):
         return None
+    if field in {"arxiv", "arxiv_id"}:
+        if not isinstance(value, str):
+            raise ValueError("arxiv must be a string")
+        return norm_arxiv(value) or None
+    if field in {"year", "cutoff_ms", "submission_ms"} and type(value) is not int:
+        raise ValueError(f"{field} must be an integer")
     return value
 
 
@@ -45,36 +50,18 @@ def _locked(case, row, dest, fields):
         raise ValueError(f"{dest} on the proposal disagrees with the cohort lock")
     if locked is None and supplied is not None:
         raise ValueError(f"{dest} must be set on the cohort lock")
-    if locked is None:
-        return None
-    if dest == "year" and (type(locked) is not int or locked < 1):
-        raise ValueError("year must be a positive integer venue year")
-    if dest == "cutoff_ms" and type(locked) is not int:
-        raise ValueError("cutoff_ms must be an integer millisecond timestamp")
-    if dest == "arxiv" and not isinstance(locked, str):
-        raise ValueError("arxiv must be a string")
     return locked
-
-
-def index(rows, field):
-    if not isinstance(rows, list):
-        raise TypeError("expected a list of records")
-    lookup = {r[field]: r for r in rows}
-    if len(lookup) != len(rows):
-        raise ValueError("duplicate forum ID")
-    return lookup
 
 
 def cohort_cases(manifest):
     """Any locked test list. The digest is the sorted forum ids, not a fixed n."""
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("cases"), list):
-        raise ValueError("manifest needs a cases list")
-    all_ids = index(manifest["cases"], "forum")
+    validate_manifest(manifest, allow_legacy=True)
+    all_ids = index_by_forum(manifest["cases"], "manifest cases")
     test = {fid: c for fid, c in all_ids.items() if c.get("split", "test") == "test"}
     if not test:
         raise ValueError("manifest has no test cases")
     expected = manifest.get("ids_sha256")
-    if not isinstance(expected, str) or digest(sorted(test)) != expected:
+    if digest(sorted(test)) != expected:
         raise ValueError("forum IDs do not match the manifest digest")
     return test
 
@@ -95,8 +82,10 @@ def evaluate_fixed(
 ):
     cases = cohort_cases(manifest)
     test = set(cases)
-    pred = index(predictions, "forum")
-    gold = index(references, "forum")
+    pred = index_by_forum(validate_predictions(predictions), "predictions")
+    gold = index_by_forum(
+        validate_references(references, allow_legacy="version" not in manifest), "references"
+    )
     if set(pred) != test or set(gold) != test:
         raise ValueError(
             "predictions and references must cover exactly the complete fixed test"
@@ -107,30 +96,20 @@ def evaluate_fixed(
         score = pred[fid]["overall"]
         target = g["prospective"]
         rating = g["final_rating"]
-        accept = g.get("accept", None)
-        if type(score) not in (float, int) or not math.isfinite(float(score)):
-            raise ValueError("missing or nonfinite prediction")
-        if type(target) not in (float, int) or not 1 <= target <= 5:
-            raise ValueError("incomplete reference")
-        if accept is not None and accept not in (0, 1):
-            raise ValueError("incomplete reference")
-        require_official_mean(rating, scale_for_reference(g))
+        if not 1 <= target <= 5:
+            raise ValueError("prospective must be from 1 to 5")
         case = cases[fid]
-        if (
-            type(case.get("year")) is int
-            and type(g.get("year")) is int
-            and case["year"] != g["year"]
-        ):
-            raise ValueError("reference year disagrees with the cohort lock")
+        require_official_mean(rating, scale_for_reference(g, lock=case))
         row = {
             "key": fid,
             "target": target,
-            "accept": None if accept is None else int(accept),
+            "accept": g.get("accept"),
             "rating": rating,
             "features": {"score": score},
         }
-        if g.get("stratum") is not None:
-            row["stratum"] = g["stratum"]
+        stratum = case.get("stratum", case.get("tier", g.get("stratum")))
+        if stratum is not None:
+            row["stratum"] = stratum
         rows.append(row)
     spec = {"method": "mean", "names": ["score"]}
     result = evaluate(rows, spec, bootstrap)
@@ -190,7 +169,7 @@ def register(sub):
 
 def blind_inputs(manifest, proposals):
     cases = sealed_cases(manifest)
-    records = index(proposals, "forum")
+    records = index_by_forum(proposals, "blind proposals")
     if records.keys() != cases.keys():
         raise ValueError("blind proposals must cover exactly the complete fixed test")
     inputs = []
@@ -240,7 +219,9 @@ def predict_dispatch(args):
     profile, folder = load_profile(args.profile)
     root = assert_local_only(args.work)
     output = assert_local_only(args.output)
-    call = partial(invoke, cached_only=args.cached_only)
+    judge = require_leak_judge(model_leak_judge(
+        root / "cache", "claude-opus-5-5", claude_argv(), 240, cached_only=args.cached_only,
+    ))
 
     provider = getattr(args, "outcome_screen_provider", None)
 
@@ -255,6 +236,7 @@ def predict_dispatch(args):
                 profile,
                 cached_only=args.cached_only,
                 provider=provider,
+                leak_judge=judge,
             )
             audit["outcome_screen"] = evidence
             if not assessable:
@@ -274,14 +256,8 @@ def predict_dispatch(args):
             root,
             profile,
             folder,
-            call=call,
-            leak_judge=model_leak_judge(
-                root / "cache",
-                "claude-opus-5-5",
-                claude_argv(),
-                240,
-                call=call,
-            ),
+            cached_only=args.cached_only,
+            leak_judge=judge,
             **metadata,
         )
         return {"forum": fid, "overall": judged["overall"], **audit}

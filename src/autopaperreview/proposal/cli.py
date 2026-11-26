@@ -13,7 +13,7 @@ from . import evaluation
 from .data import apd_cases, prepare, read, reported_result, snapshot_cases, write
 from .fetch import SNAPSHOTS, download, live_cases
 from .runner import run_batch, stage_result
-from .leak_audit import apply_leak_audit, model_leak_judge
+from .leak_audit import model_leak_judge
 from .sanitized import sanitize_proposal, seal
 from .stages import SECTIONS, calibrated, check, claude_argv, invoke, scored
 
@@ -266,17 +266,8 @@ def dispatch(args):
         if args.proposal.suffix.lower() == ".json":
             doc = read(args.proposal)
             check(isinstance(doc, dict), "expected a JSON proposal object")
-            sections = doc.get("proposal", doc)
-            check(
-                isinstance(sections, dict) and set(sections) == set(SECTIONS),
-                "expected five proposal sections",
-            )
-            packet = sanitize_proposal(
-                {
-                    k: v.get("text") if isinstance(v, dict) and set(v) <= {"text"} else v
-                    for k, v in sections.items()
-                }
-            )
+            packet = sanitize_proposal(doc)
+            check(set(packet) == set(SECTIONS), "expected five proposal sections")
         else:
             packet = sanitize_proposal(args.proposal.read_text(encoding="utf-8").strip())
         check(any(packet.values()), "empty proposal")
@@ -285,10 +276,6 @@ def dispatch(args):
             "remove reported outcomes before scoring the proposal",
         )
         command = command_argv(args.command) if args.command else claude_argv()
-        apply_leak_audit(
-            packet,
-            model_leak_judge(root / "cache", args.model, command, args.timeout),
-        )
         path = invoke(
             args.reviewer,
             seal(packet),
@@ -296,6 +283,7 @@ def dispatch(args):
             args.model,
             command,
             args.timeout,
+            leak_judge=model_leak_judge(root / "cache", args.model, command, args.timeout),
         )
         record = read(path)
         result = with_calibration({"review": scored(record)}, record, args.calibration)

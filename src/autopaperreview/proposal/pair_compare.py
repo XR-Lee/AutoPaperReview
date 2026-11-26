@@ -8,6 +8,8 @@ from pathlib import Path
 
 from ..public_calibration import assert_local_only
 from .data import read, write
+from .leak_audit import model_leak_judge, require_leak_judge
+from .stages import claude_argv
 
 
 def register(parent):
@@ -18,6 +20,8 @@ def register(parent):
     parser.add_argument("--model", "--model-dir", dest="model_dir", type=Path, required=True,
                         help="local pair-model ZIP or its extracted directory")
     parser.add_argument("--output", type=Path, help="write JSON locally (default stdout)")
+    parser.add_argument("--work", type=Path, help="local directory for leak audit receipts")
+    parser.add_argument("--cached-only", action="store_true", help="use previous leak audit receipts offline")
     parser.set_defaults(func=dispatch)
 
 
@@ -36,7 +40,8 @@ def select(document, left, right):
     return by_id[left], by_id[right]
 
 
-def evaluate(directory, left, right):
+def evaluate(directory, left, right, *, leak_judge=None):
+    require_leak_judge(leak_judge)
     try:
         from .pair_model import PairEvaluator
     except ModuleNotFoundError as exc:
@@ -45,16 +50,17 @@ def evaluate(directory, left, right):
         raise ValueError("install autopaperreview[proposal-pair] for local pair inference") from exc
 
     model = PairEvaluator(directory / "model.json", directory / "specter.onnx", directory / "tokenizer.json")
-    return model.compare(left, right)
+    return model.compare(left, right, leak_judge=leak_judge)
 
 
 MODEL_FILES = {"model.json", "specter.onnx", "tokenizer.json"}
 STABILITY_FILES = {"stability-model.json", "stability-models.npy"}
 
 
-def evaluate_bundle(path, left, right):
+def evaluate_bundle(path, left, right, *, leak_judge=None):
+    require_leak_judge(leak_judge)
     if path.is_dir():
-        return evaluate(path, left, right)
+        return evaluate(path, left, right, leak_judge=leak_judge)
     if not zipfile.is_zipfile(path):
         raise ValueError("expected a local pair-model ZIP or directory")
     with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory() as tmp:
@@ -67,7 +73,7 @@ def evaluate_bundle(path, left, right):
         for name in selected:
             with archive.open(name) as source, (directory / name).open("wb") as output:
                 shutil.copyfileobj(source, output)
-        return evaluate(directory, left, right)
+        return evaluate(directory, left, right, leak_judge=leak_judge)
 
 
 def dispatch(args):
@@ -77,7 +83,17 @@ def dispatch(args):
     if output and (output in {source, directory} or output.parent == directory and output.name in MODEL_FILES | STABILITY_FILES):
         raise ValueError("use a separate output path")
     left, right = select(read(source), args.left, args.right)
-    result = evaluate_bundle(directory, left, right)
+    def compare(cache):
+        judge = model_leak_judge(cache, "claude-opus-5-5", claude_argv(), 240, cached_only=args.cached_only)
+        return evaluate_bundle(directory, left, right, leak_judge=judge)
+
+    if args.work:
+        result = compare(assert_local_only(args.work) / "cache")
+    elif args.cached_only:
+        raise ValueError("--cached-only requires --work for leak audit receipts")
+    else:
+        with tempfile.TemporaryDirectory(prefix="apr-proposal-pair-audit-") as cache:
+            result = compare(Path(cache))
     if output:
         write(output, result)
     else:

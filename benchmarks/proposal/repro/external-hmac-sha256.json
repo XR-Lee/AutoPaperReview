@@ -1,0 +1,13 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "fixed100/lock.json": "56ace841a03e8642a7a90dd752b12d22bde4d7e68c9a50f4a6eb9ff146a8b98c",
+    "fixed100/fixed-predictions.json": "9204e515d8dd04ca983384577d7e18a850df70edaf09380f18ae4fbef7764343",
+    "fixed100/references.json": "ed83c183599bead88f31e88e7809cadc48b9a4d78b30ad4fdd8e267c0e7312c9",
+    "confirm100/lock.json": "8a8cb3f56dce9d5597d5fa769bece6cf47c0759edd8d85f93d5a8f0433450fa4",
+    "confirm100/fresh-predictions.json": "d7f55352de5d9bfb39661f69f6482f73216c5d63e7a8af65da11a4cc2bd3b572",
+    "confirm100/references.json": "6da0c8f4b8a0556b911a810c3d7de40d3abf2d621206196a9791c273c3819168",
+    "replications199/joined.json": "a6366311183f9a933f424a5f911fceda14eed0266afe3a0b5c7de5755084ee5b",
+    "nlp84/deployed-external-rows.json": "ccbb46de5cf5620843ba9b2a2fbf85ce483d12591e1ebf7563f1a0e01ed7644d"
+  }
+}

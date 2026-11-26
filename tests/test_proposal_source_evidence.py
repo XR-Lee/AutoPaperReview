@@ -9,6 +9,10 @@ from autopaperreview.proposal import source_evidence as evidence
 from autopaperreview.proposal.data import read, write
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class TestProposalSourceEvidence(unittest.TestCase):
     def test_whole_fields_and_partial_fields(self):
         proposal = {
@@ -42,11 +46,11 @@ class TestProposalSourceEvidence(unittest.TestCase):
         ):
             cache = Path(t)
             plan = {"mechanism": "Gather tokens."}
-            result = evidence.audit({}, plan, cache, cached_only=True)
+            result = evidence.audit({}, plan, cache, cached_only=True, leak_judge=clean_judge)
             self.assertEqual(result["claims"]["u1"]["status"], "unclear")
             self.assertIsNone(result["proposal"]["mechanism"])
             with self.assertRaisesRegex(ValueError, "missing cached"):
-                evidence.audit({"s": "Gather tokens."}, plan, cache, cached_only=True)
+                evidence.audit({"s": "Gather tokens."}, plan, cache, cached_only=True, leak_judge=clean_judge)
 
     def test_paired_cli_accepts_empty_source_and_preserves_score(self):
         with tempfile.TemporaryDirectory() as t:
@@ -75,7 +79,7 @@ class TestProposalSourceEvidence(unittest.TestCase):
                 return p, {"removed": []}
 
             def judged(
-                stage, request, cache, model, command, timeout, *, cached_only=False
+                stage, request, cache, model, command, timeout, *, cached_only=False, leak_judge
             ):
                 self.assertEqual(stage, "source_evidence")
                 path = cache / "synthetic.json"

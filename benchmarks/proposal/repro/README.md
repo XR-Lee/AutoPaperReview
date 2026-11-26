@@ -7,13 +7,18 @@ export APR_PROPOSAL_REPRO_DIR=/path/outside/git
 python3 scripts/reproduce_proposal_rank.py
 ```
 
-`APR_PROPOSAL_REPRO_DIR` must contain the row files named in `external-sha256.json`. The script checks those SHA-256 checksums before it recomputes. The checksums are the original delivered bytes, including reference files that still contain review quotes. The scorer reads the numeric fields and the row keys. `replications199` is scored from `joined.json`. That delivery does not include a blind index, and the check does not ask for one.
+`APR_PROPOSAL_REPRO_DIR` can point to the original or HMAC bundle. The script requires all eight files to match a single committed SHA-256 manifest before it recomputes. `external-sha256.json` covers the original delivered bytes. `external-hmac-sha256.json` covers the corresponding HMAC bundle. The scorer reads numeric fields and row keys. `replications199` uses `joined.json` directly.
 
-`scripts/rekey_external_repro.py` writes a second directory whose identifier fields are HMAC-SHA256 under `APR_PROPOSAL_REPRO_SALT`. It does not modify the originals, so the checksums above still match. The salt is not written and the raw identifiers are not printed. nlp84 row keys are included.
+To rekey the eight reproduction files, supply `APR_PROPOSAL_REPRO_SALT` through the environment and use a separate output directory. The rekeyer recalculates the cohort locks' test-ID digests after transforming the identifiers. For recursive conversion, it supports known ID fields in JSON and JSONL and recognized ID columns in CSV and TSV. Keep both bundles outside git because the files can contain review quotes and other per-paper data.
 
-Without that directory, the script prints `aggregates.json` and does not fail. The unit test that recomputes the headlines skips in the same case. A synthetic fixture covers the Spearman, AUC, top-fifth, and HMAC arithmetic.
+```bash
+python3 scripts/rekey_external_repro.py --published-only \
+  --root /path/to/original/rows --output /separate/path/to/hmac/rows
+```
 
-Optional `APR_PROPOSAL_REPRO_SALT` is an HMAC-SHA256 salt for identifiers. The salt is not in git, and the script does not write the keys. See `key-scheme.json`.
+The committed HMAC manifest pins the distributed bundle. Verification and recomputation use the file checksums and require no salt. Rekeying with a different salt produces a bundle with its own checksums. See `key-scheme.json` for the scheme.
+
+With the external directory unset, the script prints `aggregates.json` and the external-recompute test skips. A synthetic fixture covers the Spearman, AUC, top-fifth, and HMAC arithmetic.
 
 The command needs numpy (`pip install 'numpy>=1.24,<3'`, or `pip install -e '.[repro]'`). It does not download papers and it does not call a model.
 

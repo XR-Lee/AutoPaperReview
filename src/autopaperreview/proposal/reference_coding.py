@@ -9,18 +9,20 @@ from statistics import mean
 
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
+from .cohort import validate_decision
 from .data import (
     cleaning_rules,
     digest,
-    neutralize_label_text,
     read,
     require_official_mean,
+    retained_label_text,
     scale_for_reference,
     write,
 )
-from .leak_audit import apply_leak_audit
-from .sanitized import seal
+from .leak_audit import PROMPT as AUDIT_PROMPT
+from .leak_audit import REPLY_PROTOCOL, model_leak_judge, require_leak_judge
 from .merit import reference_packet
+from .sanitized import seal
 from .stages import PROMPTS, claude_argv, invoke
 
 MODELS = {"ref_extract": "claude-sonnet-5-5", "ref_grade": "claude-opus-5-5"}
@@ -28,14 +30,25 @@ MODELS = {"ref_extract": "claude-sonnet-5-5", "ref_grade": "claude-opus-5-5"}
 
 def protocol(command):
     return {
-        "version": 1,
+        "version": 2,
         "models": dict(MODELS),
         "prompt_hashes": {stage: digest(PROMPTS[stage]) for stage in MODELS},
         "command_sha256": digest(command),
         "aggregation": "mean_available_reviewers",
         "positive_threshold": 3.5,
+        "evidence_binding": "contiguous_retained_source",
+        "audit_prompt_sha256": digest(AUDIT_PROMPT),
+        "audit_reply_protocol": REPLY_PROTOCOL,
         "text_cleaning_sha256": digest(cleaning_rules()),
     }
+
+
+def _validate_labels(row):
+    rating = row.get("final_rating")
+    scale = scale_for_reference(row)
+    if rating is not None:
+        require_official_mean(rating, scale)
+    validate_decision(row.get("accept"))
 
 
 def validate_cases(rows):
@@ -50,7 +63,7 @@ def validate_cases(rows):
         forums.add(forum)
         reviews = row.get("reviews")
         if not isinstance(reviews, list):
-            raise TypeError("expected reviews in their original order")
+            raise ValueError("expected reviews in their original order")
         for review in reviews:
             note = review.get("id") if isinstance(review, dict) else None
             if not isinstance(note, str) or not note or note in notes:
@@ -62,56 +75,56 @@ def validate_cases(rows):
                 for k, s in units.items()
             ):
                 raise ValueError("expected numbered review units containing text")
-        rating = row.get("final_rating")
-        scale = scale_for_reference(row)
-        if rating is not None:
-            require_official_mean(rating, scale)
-        if "accept" in row and (
-            type(row["accept"]) not in (int, bool) or row["accept"] not in (0, 1)
-        ):
-            raise ValueError("accept must be 0 or 1")
+        _validate_labels(row)
 
 
 def independent_protocol(command):
     return {**protocol(command), "grade_context": "one_reviewer_per_call"}
 
 
-def reviewer_result(note, units, extracted, grade):
-    """Offsets refer to the original unit, one span per occurrence.
-
-    A repeated excerpt advances through the original text, so the second copy
-    does not reuse the first offset.
-    """
-    original = note.get("units") if isinstance(note.get("units"), dict) else units
+def bind_evidence(units, extracted):
+    """Bind each extracted excerpt to a contiguous retained source span."""
     spans = []
-    cursor: dict[str, int] = {}
-    for index in grade["used"]:
-        evidence = extracted[index]
+    cursor: dict[tuple[str, str], int] = {}
+    for evidence in extracted:
         unit, quote = evidence["id"], evidence["quote"]
-        source = original.get(unit, "")
-        start_at = cursor.get(unit, 0)
-        if (
-            not isinstance(source, str)
-            or not isinstance(quote, str)
-            or not quote
-            or quote not in source[start_at:]
-        ):
-            raise ValueError("evidence quote is not in the original review unit")
-        start = source.index(quote, start_at)
-        cursor[unit] = start + len(quote)
+        if unit not in units or not isinstance(quote, str) or not quote:
+            raise ValueError("invalid reference evidence")
+        text, offsets = units[unit]
+        occurrence = (unit, quote)
+        start = text.find(quote, cursor.get(occurrence, 0))
+        while start >= 0:
+            original = offsets[start]
+            if original is not None and all(
+                offset == original + i
+                for i, offset in enumerate(offsets[start : start + len(quote)])
+            ):
+                break
+            start = text.find(quote, start + 1)
+        else:
+            raise ValueError("evidence quote must match a contiguous retained review span")
+        cursor[occurrence] = start + len(quote)
         spans.append(
-            {"unit": unit, "start": start, "end": start + len(quote), "quote": quote}
+            {"unit": unit, "start": original, "end": original + len(quote), "quote": quote}
         )
-    return {"id": note["id"], "score": grade["score"], "evidence": spans}
+    return spans
+
+
+def reviewer_result(note, spans, grade):
+    return {
+        "id": note["id"],
+        "score": grade["score"],
+        "evidence": [spans[index] for index in grade["used"]],
+    }
 
 
 def coding_units(units):
-    """Remove acceptance and overall-rating sentences before a coder sees them."""
+    """Remove label sentences while retaining each unit's source offsets."""
     cleaned = {}
     for key, text in units.items():
-        kept = neutralize_label_text(text)
+        kept, offsets = retained_label_text(text)
         if kept:
-            cleaned[key] = kept
+            cleaned[key] = (kept, offsets)
     return cleaned
 
 
@@ -120,27 +133,36 @@ def code_paper(
     include_independent_grades=False,
     leak_judge=None,
 ):
-    comments = {
+    require_leak_judge(leak_judge)
+    _validate_labels(row)
+    mapped_comments = {
         f"r{i}": coding_units(note["units"])
         for i, note in enumerate(row["reviews"], 1)
     }
+    comments = {
+        alias: {unit: text for unit, (text, _) in units.items()}
+        for alias, units in mapped_comments.items()
+    }
     requests = {}
-    extracted = {}
+    bound = {}
     grades = {}
 
     def stage(name, data, receipts, key):
         p = invoke(
-            name, data, cache, MODELS[name], command, timeout, cached_only=cached_only
+            name, data, cache, MODELS[name], command, timeout,
+            leak_judge=leak_judge, cached_only=cached_only,
         )
         receipts[key] = p.stem
         return read(p)["output"]
 
     source = {}
-    payload = seal({key: units for key, units in comments.items() if units}) if any(comments.values()) else {}
-    if leak_judge is not None and payload:
-        apply_leak_audit(payload, leak_judge)
+    payload = {key: units for key, units in comments.items() if units}
     if payload:
-        extracted = stage("ref_extract", payload, requests, "ref_extract")
+        extracted = stage("ref_extract", seal(payload), requests, "ref_extract")
+        bound = {
+            alias: bind_evidence(mapped_comments[alias], evidence)
+            for alias, evidence in extracted.items()
+        }
         source = reference_packet(comments, extracted)
         if any(source.values()):
             grades = stage("ref_grade", seal(source), requests, "ref_grade")
@@ -150,10 +172,9 @@ def code_paper(
     independent_requests = {}
     for i, review in enumerate(row["reviews"], 1):
         alias = f"r{i}"
-        units = comments[alias]
-        evidence = extracted.get(alias, [])
+        evidence = bound.get(alias, [])
         reviewers.append(
-            reviewer_result(review, units, evidence, grades.get(alias, default_grade))
+            reviewer_result(review, evidence, grades.get(alias, default_grade))
         )
         if include_independent_grades:
             grade = default_grade
@@ -165,7 +186,7 @@ def code_paper(
                     review["id"],
                 )
                 grade = response.get("r1", default_grade)
-            independent.append(reviewer_result(review, units, evidence, grade))
+            independent.append(reviewer_result(review, evidence, grade))
     valid = [r["score"] for r in reviewers if r["score"] is not None]
     result = {
         "forum": row["forum"],
@@ -219,6 +240,9 @@ def dispatch(args):
     rows = read(args.inputs)
     validate_cases(rows)
     command = claude_argv()
+    judge = require_leak_judge(model_leak_judge(
+        root / "cache", MODELS["ref_extract"], command, args.timeout, cached_only=args.cached_only,
+    ))
     config = protocol(command)
     code = partial(
         code_paper,
@@ -227,6 +251,7 @@ def dispatch(args):
         timeout=args.timeout,
         cached_only=args.cached_only,
         include_independent_grades=args.include_independent_grades,
+        leak_judge=judge,
     )
     lockdir = root / "locks" / "idea-references"
     lockdir.mkdir(parents=True, exist_ok=True)

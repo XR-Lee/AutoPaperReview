@@ -64,6 +64,10 @@ def note_case(index):
     return sub, review, group
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class TestProposalReview(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -234,7 +238,7 @@ class TestProposalReview(unittest.TestCase):
             return json.dumps(out), 0.01
 
         def stage(name, model="mock"):
-            run_batch(run, stage=name, model=model, command=["mock"], jobs=1, timeout=5)
+            run_batch(run, stage=name, model=model, command=["mock"], jobs=1, timeout=5, leak_judge=clean_judge)
 
         with patch("autopaperreview.proposal.stages.run_command", agent):
             for name in ("compress", "review", "label", "audit"):

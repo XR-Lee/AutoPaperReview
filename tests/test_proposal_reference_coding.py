@@ -7,6 +7,10 @@ from autopaperreview.proposal import reference_coding
 from autopaperreview.proposal.data import digest, write
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class ProposalReferenceCodingTest(unittest.TestCase):
     def test_models_and_exact_evidence_are_isolated_from_outcomes(self):
         quotes = ["A useful question.", "The proposed test is ambiguous."]
@@ -22,7 +26,7 @@ class ProposalReferenceCodingTest(unittest.TestCase):
         calls = []
         with TemporaryDirectory() as tmp:
 
-            def fake(stage, src, cache, model, command, timeout, *, cached_only):
+            def fake(stage, src, cache, model, command, timeout, *, cached_only, leak_judge):
                 calls.append((stage, model, src))
                 obj = (
                     {
@@ -40,12 +44,12 @@ class ProposalReferenceCodingTest(unittest.TestCase):
                 return path
 
             with patch.object(reference_coding, "invoke", side_effect=fake):
-                actual = reference_coding.code_paper(data, Path(tmp), ["judge"])
+                actual = reference_coding.code_paper(data, Path(tmp), ["judge"], leak_judge=clean_judge)
         self.assertEqual(actual["prospective"], 3.25)
         self.assertEqual([c[1] for c in calls], list(reference_coding.MODELS.values()))
         self.assertEqual(list(calls[0][2]), ["r1", "r2"])
         self.assertEqual(
-            calls[1][2]["r1"],
+            list(calls[1][2]["r1"]),
             [{"excerpt": quotes[0], "context": "Reviewer writes " + quotes[0]}],
         )
         for n, review in enumerate(actual["reviewers"]):
@@ -69,7 +73,7 @@ class ProposalReferenceCodingTest(unittest.TestCase):
         }
         calls = []
         with TemporaryDirectory() as temp:
-            def invoke(stage, source, cache, model, cmd, timeout, *, cached_only):
+            def invoke(stage, source, cache, model, cmd, timeout, *, cached_only, leak_judge):
                 self.assertTrue(cached_only)
                 calls.append((stage, source))
                 if stage == "ref_extract":
@@ -85,7 +89,7 @@ class ProposalReferenceCodingTest(unittest.TestCase):
                 return path
 
             with patch.object(reference_coding, "invoke", side_effect=invoke):
-                out = reference_coding.code_paper(row, Path(temp), ["judge"], cached_only=True,
+                out = reference_coding.code_paper(row, Path(temp), ["judge"], cached_only=True, leak_judge=clean_judge,
                                                   include_independent_grades=True)
         self.assertEqual(len(calls), 4)
         self.assertEqual([v for _, v in calls[2:]], [{"r1": calls[1][1][k]} for k in ["r1", "r3"]])
@@ -101,7 +105,7 @@ class ProposalReferenceCodingTest(unittest.TestCase):
         row = {"forum": "f", "reviews": [{"id": "n", "units": {}}]}
         reference_coding.validate_cases([row])
         with patch.object(reference_coding, "invoke") as call:
-            ref = reference_coding.code_paper(row, Path("."), ["judge"])
+            ref = reference_coding.code_paper(row, Path("."), ["judge"], leak_judge=clean_judge)
             call.assert_not_called()
         self.assertIsNone(ref["prospective"])
         self.assertEqual(ref["requests"], {})
@@ -179,7 +183,7 @@ class SealedOutcomeScreenTests(unittest.TestCase):
                 screen_outcomes=True,
             )
 
-            def screen(packet, _root, *, cached_only):
+            def screen(packet, _root, *, cached_only, leak_judge):
                 self.assertTrue(cached_only)
                 text = packet["proposal"]
                 kept = {

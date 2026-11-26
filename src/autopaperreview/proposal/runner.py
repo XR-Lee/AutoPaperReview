@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
-from .leak_audit import apply_leak_audit
+from .leak_audit import require_leak_judge
 from .sanitized import seal
 from .stages import PROMPTS, audit_packet, invoke, proposal_text, validate
 
@@ -20,6 +20,7 @@ def run_batch(
     split: str | None = None,
     leak_judge=None,
 ):
+    require_leak_judge(leak_judge)
     manifest = read(root / "manifest.json")
     if jobs < 1 or timeout <= 0:
         raise ValueError("jobs and timeout must be positive")
@@ -39,9 +40,7 @@ def run_batch(
             previous = stage_result(root, case, "compress")
             packet = proposal_text(previous["output"])
         packet = seal(packet)
-        if leak_judge is not None:
-            apply_leak_audit(packet, leak_judge)
-        path = invoke(stage, packet, root / "cache", model, command, timeout)
+        path = invoke(stage, packet, root / "cache", model, command, timeout, leak_judge=leak_judge)
         write(
             target / f"{stage}.json",
             {"bundle": case["bundle"], "cache": str(path.relative_to(root))},

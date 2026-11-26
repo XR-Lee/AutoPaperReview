@@ -1,17 +1,15 @@
-"""The only proposal object a model call may receive.
-
-Construction copies an allowlist of source fields into a flat mapping.
-A raw dict, a nested object, or a score field is rejected here, so it cannot
-be serialized to a model. Factual leaks are refused after normalization.
-Paraphrase and cross-field implication are not decided in this module.
-"""
+"""Validate and freeze the proposal payloads sent to models."""
 
 from __future__ import annotations
 
 import math
 import re
 import unicodedata
+from collections.abc import Mapping
+from html import unescape
+from types import MappingProxyType
 from typing import Any
+from urllib.parse import unquote
 
 # Source fields a proposal may carry. Score, decision, and identity keys are absent.
 PROPOSAL_FIELDS = frozenset(
@@ -45,6 +43,9 @@ SCORE_FIELDS = frozenset(
     {
         "rating",
         "ratings",
+        "score",
+        "scores",
+        "grade",
         "recommendation",
         "recommendations",
         "decision",
@@ -54,19 +55,60 @@ SCORE_FIELDS = frozenset(
         "presentation",
         "award",
         "awards",
+        "author",
         "authors",
+        "author(s)",
+        "author_name",
+        "author_list",
+        "corresponding_author",
         "authorids",
         "author_ids",
+        "byline",
+        "signature",
+        "reviewer_name",
         "email",
         "emails",
         "venue",
         "venueid",
         "final_rating",
+        "final_score",
+        "overall_rating",
+        "overall_score",
+        "reviewer_mean",
+        "prospective_grade",
+        "forum",
+        "forum_id",
+        "note_id",
+        "openreview_id",
+        "arxiv",
+        "arxiv_id",
         "accept",
         "meta_review",
     }
 )
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+_BIDI = re.compile(r"[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_BIDI_OVERRIDE = re.compile(r"[\u202d\u202e]")
+# A small Cyrillic/Greek lookalike table is enough to recover the vocabulary
+# of the rules below without changing the text ultimately shown to a model.
+_CONFUSABLES = {
+    "а": "a", "в": "b", "с": "c", "е": "e", "һ": "h", "і": "i",
+    "ј": "j", "к": "k", "ӏ": "l", "м": "m", "о": "o", "р": "p",
+    "ѕ": "s", "т": "t", "х": "x", "у": "y", "ԁ": "d", "ԛ": "q",
+    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v",
+    "ο": "o", "ρ": "p", "τ": "t", "υ": "y", "χ": "x",
+    "꞉": ":", "⁄": "/", "∕": "/",
+}
+_CONFUSABLE_TRANSLATION = str.maketrans(_CONFUSABLES)
+_KEY_SEPARATOR = re.compile(r"[\s_-]+")
+_LATEX_COMMAND = re.compile(
+    r"\\(?:textbf|textit|textrm|textnormal|texttt|textsf|textsc|text|"
+    r"mathbf|mathrm|mathit|mathsf|mathtt|emph|underline|bfseries|itshape|bf|it|rm)"
+    r"(?=[\s{]|$)\s*"
+)
+_HTML_TAG = re.compile(r"</?(?:b|strong|i|em|s|span|code|u)(?:\s[^<>]*?)?\s*>")
+_MARKDOWN_LINK = re.compile(r"!?\[([^\[\]\n]{1,160})\]\([^\s()]{1,2048}\)")
+_MARKUP_DELIMITER = re.compile(r"\\(?=[*_\x60~{}$])|[*_\x60~{}$]")
 _NUMBER_WORDS = {
     "zero": "0",
     "one": "1",
@@ -90,101 +132,162 @@ _SPELLED_EMAIL = re.compile(
     r"\b([a-z0-9._%+\-]+)\s+at\s+([a-z0-9\-]+)\s+dot\s+([a-z]{2,})\b"
 )
 _EMAIL = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}")
-# Host and path are split so the source does not contain a live forum URL.
 _OPENREVIEW = re.compile(
-    r"openreview\s*\.\s*net\s*/\s*(?:forum|pdf|note)\s*\?\s*id\s*=\s*[a-z0-9]{10}"
-    r"|forum\s*\?\s*id\s*=\s*[a-z0-9]{10}"
+    r"(?<![\w-])openreview\s*\.\s*net\s*/\s*(?:forum|pdf|notes?)(?![\w-])"
+    r"|\bforum\s*\?\s*id\s*=\s*[a-z0-9]{10}"
 )
 _ARXIV = re.compile(
-    r"(?:export\s*\.\s*)?arxiv\s*\.\s*org\s*/\s*(?:abs|pdf|html|ftp)\s*/\s*\d{4}\s*\.\s*\d{4,5}"
-    r"|arxiv\s*:\s*\d{4}\s*\.\s*\d{4,5}"
+    r"(?<![\w.])\d{4}\s*\.\s*\d{4,5}(?:v\d+)?(?!\w)"
+    r"|\barxiv\s*\.\s*org\s*/\s*(?:abs|pdf|html|ftp)\s*/"
+    r"|\barxiv\s*:\s*[a-z]+(?:-[a-z]+)*(?:\.[a-z]{2})?/\d{7}(?:v\d+)?\b"
+    r"|\b(?:astro-ph|cond-mat|cs|eess|gr-qc|hep-(?:ex|lat|ph|th)|math(?:-ph)?|"
+    r"nlin|nucl-(?:ex|th)|physics|q-bio|q-fin|quant-ph|stat)(?:\.[a-z]{2})?"
+    r"/\d{7}(?:v\d+)?\b"
 )
 _SCORE = re.compile(
-    r"\b(?:overall|final|meta|reviewer|my|our|average)\s+(?:ratings?|scores?|recommendations?)\b"
-    r"|\b(?:ratings?|scores?)\s*(?::\s*|\sof\s+)\d+"
-    r"|\b\d+\s+out\s+of\s+10\b"
+    r"\b(?:overall|final|meta|reviewer|my|our)\s+(?:ratings?|scores?|recommendations?)\b"
+    r"|\b(?:ratings?|scores?|grades?|recommendations?)\s*[:=]\s*[+-]?\d"
+    r"|\b(?:ratings?|scores?|grades?|recommendations?)\s+(?:is|of)\s+[+-]?\d+(?:\.\d+)?"
+    r"(?=$|\s*[.!?,;)/]|\s+(?:out\s+of|(?:for|to)\s+(?:the\s+)?(?:submission|paper|proposal))\b)"
+)
+_BARE_SCORE = re.compile(
+    r"(?:^|(?<=\n)|(?<=[.!?;])\s+)\s*[+-]?(?:10|\d)(?:\.\d+)?"
+    r"(?:\s*(?:/|out\s+of)\s*(?:10|\d))?\s*(?:[.!?;\n]|$)"
+    r"|(?<![\w./])[+-]?(?:10|\d)(?:\.\d+)?\s*(?:/|out\s+of)\s*10(?=\s*(?:[,!.?;)]|$))"
 )
 _DECISION = re.compile(
-    r"\bdecision\s*:\s*(?:accept|reject)\w*"
+    r"\b(?:decision|recommendation)\s*[:=]\s*(?:\w+\s+){0,2}(?:accept|reject)\w*"
     r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
     r"|\b(?:strong|weak|clear|marginal)\s+(?:accept|reject)(?:ance)?\b"
     r"|\bcamera[\s\-]*ready\b"
     r"|\brecommend(?:ation)?\s+(?:to\s+)?(?:accept|reject)\w*"
     r"|\bvote\s+to\s+(?:accept|reject)\b"
+    r"|(?:决定|建议)\s*[:=]\s*(?:录用|拒稿)"
 )
 _AWARD = re.compile(r"\b(?:best|outstanding)\s+paper\b|\bpaper\s+award\b")
-_KEY_ID = re.compile(r"[a-z0-9]{10}")
+_BARE_ID = re.compile(r"(?<![\w-])[a-z0-9]{10}(?![\w-])")
+_BARE_ALPHA_ID = re.compile(r"(?<![\w-])[A-Za-z]{10}(?![\w-])")
+_BARE_ALPHA_CASE_CHANGES = 5
+_ID_LABEL = re.compile(r"\b(?:forum|note|submission|openreview)\s+(?:identifier|id)\s*[:=]\s*[a-z0-9]{10}\b")
+_IDENTITY = re.compile(
+    r"\b(?:(?:corresponding|lead|first|senior)\s+)?(?:authors?|author\s+(?:list|name)|byline)"
+    r"\s*[:=]\s*[^\W\d_]"
+    r"|\b(?:written|authored|submitted|signed)\s+by\s+"
+    r"(?!(?:a|an|the|our|their|this|each|any|anonymous|hand|code)\b)"
+    r"[^\W\d_]+\s+[^\W\d_]+"
+    r"|\\author\s*\{\s*[^\W\d_]"
+    r"|(?:作者|通讯作者|投稿人|署名)\s*[:=]\s*[^\W\d_]"
+)
+_BYLINE = re.compile(r"(?:^|\n)[ \t]*(?i:by)[ \t]+([^\W\d_]+)[ \t]+([^\W\d_]+)\b")
+_SOURCE_UNIT = re.compile(r"[su]\d+\Z")
+_AUDIT_ITEM = re.compile(r"r\d+\.(importance|novelty|potential_value|community_impact)\Z")
+_CONTRAST_ALIAS = re.compile(r"pair[1-3][ab]\Z")
+_EXAMPLE_ALIAS = re.compile(r"ex[1-4]\Z")
 LEAK_MESSAGE = "contains a rating, decision, award, acceptance, or identity leak"
 
 
-class SanitizedProposal(dict):
-    """Immutable JSON object that has already passed the structural and factual gates."""
+class SanitizedProposal(Mapping[str, Any]):
+    """Read-only model data created by the sanitizing factories in this module."""
 
-    def __init__(self, fields: dict):
-        super().__init__()
-        dict.update(self, fields)
-        self._sealed = True
+    __slots__ = ("_items",)
 
-    def __setitem__(self, key, value):
-        if getattr(self, "_sealed", False):
-            raise TypeError("sanitized proposal cannot be modified")
-        dict.__setitem__(self, key, value)
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("use sanitize_proposal or seal to build a SanitizedProposal")
 
-    def __delitem__(self, key):
+    def __setattr__(self, key, value):
         raise TypeError("sanitized proposal cannot be modified")
 
-    def update(self, *args, **kwargs):
+    def __delattr__(self, key):
         raise TypeError("sanitized proposal cannot be modified")
 
-    def pop(self, *args, **kwargs):
-        raise TypeError("sanitized proposal cannot be modified")
+    def __getitem__(self, key):
+        return self._items[key]
 
-    def clear(self):
-        raise TypeError("sanitized proposal cannot be modified")
+    def __iter__(self):
+        return iter(self._items)
 
-    def setdefault(self, *args, **kwargs):
-        raise TypeError("sanitized proposal cannot be modified")
+    def __len__(self):
+        return len(self._items)
+
+
+def to_json_data(value: Any) -> dict:
+    """Encode an immutable proposal mapping in ordinary JSON serialization."""
+    if isinstance(value, (SanitizedProposal, MappingProxyType)):
+        return dict(value)
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def normalize_text(text: str) -> str:
-    """NFKC, strip zero-width characters, then casefold."""
+    """NFKC, strip invisible formatting characters, then casefold."""
     folded = unicodedata.normalize("NFKC", text)
-    folded = _ZERO_WIDTH.sub("", folded)
+    folded = _BIDI.sub("", _ZERO_WIDTH.sub("", folded))
     return folded.casefold()
 
 
-def fold_facts(text: str) -> str:
-    """Normalize, then assemble obfuscated emails and spelled-out score words."""
-    folded = normalize_text(text)
+def _decode(text: str) -> str:
+    while True:
+        normalized = _ZERO_WIDTH.sub("", unicodedata.normalize("NFKC", text))
+        decoded = unescape(unquote(normalized))
+        if decoded == text:
+            return decoded
+        text = decoded
+
+
+def _plain_text(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", normalize_text(text))
+    folded = "".join(c for c in folded if not unicodedata.category(c).startswith("M"))
+    return folded.translate(_CONFUSABLE_TRANSLATION)
+
+
+def _without_markup(text: str) -> str:
+    text = _HTML_TAG.sub("", _LATEX_COMMAND.sub("", text))
+    text = _MARKDOWN_LINK.sub(r"\1", text)
+    return _MARKUP_DELIMITER.sub("", text)
+
+
+def fold_facts(folded: str) -> str:
+    """Assemble obfuscated emails and spelled-out score words."""
     folded = _OBFUSCATED_EMAIL.sub(r"\1@\2.\3", folded)
     folded = _SPELLED_EMAIL.sub(r"\1@\2.\3", folded)
     return _SPELLED_NUMBER.sub(lambda match: _NUMBER_WORDS[match.group(0)], folded)
 
 
 def score_field(key: object) -> bool:
-    return str(key).strip().casefold().replace(" ", "_") in SCORE_FIELDS
+    name = _plain_text(_decode(str(key)))
+    return any(
+        _KEY_SEPARATOR.sub("_", variant.strip()) in SCORE_FIELDS
+        for variant in (name, _without_markup(name))
+    )
 
 
 def factual_leak(text: str, *, key: bool = False) -> bool:
-    """True for an email, paper id, explicit score, decision keyword, or award name.
-
-    Indirect wording such as "should be accepted" is not a fact. A mixed
-    ten-character key is treated as an OpenReview id. A ten-letter word is not.
-    """
+    """Recognize explicit outcome and identity facts through common text encodings."""
     if not isinstance(text, str) or not text:
         return False
-    folded = fold_facts(text)
-    if (
-        _EMAIL.search(folded)
-        or _OPENREVIEW.search(folded)
-        or _ARXIV.search(folded)
-        or _SCORE.search(folded)
-        or _DECISION.search(folded)
-        or _AWARD.search(folded)
+    decoded = _decode(text)
+    if _BIDI_OVERRIDE.search(decoded) or any(
+        match[1][0].isupper() and match[2][0].isupper()
+        for match in _BYLINE.finditer(decoded)
     ):
         return True
-    if key and _KEY_ID.fullmatch(folded) and not folded.isalpha():
-        return True
+    for match in _BARE_ALPHA_ID.finditer(_without_markup(unicodedata.normalize("NFKC", decoded))):
+        word = match[0]
+        if sum(a.isupper() != b.isupper() for a, b in zip(word, word[1:])) >= _BARE_ALPHA_CASE_CHANGES:
+            return True
+    plain = _plain_text(decoded)
+    for variant in dict.fromkeys((plain, _without_markup(plain))):
+        if _IDENTITY.search(variant) or _ID_LABEL.search(variant):
+            return True
+        if any(
+            any(c.isdigit() for c in match[0]) and (key or any(c.isalpha() for c in match[0]))
+            for match in _BARE_ID.finditer(variant)
+        ):
+            return True
+        folded = fold_facts(variant)
+        if any(rule.search(folded) for rule in (
+            _EMAIL, _OPENREVIEW, _ARXIV, _SCORE, _BARE_SCORE, _DECISION, _AWARD
+        )):
+            return True
     return False
 
 
@@ -192,7 +295,7 @@ def contains_factual_leak(value: Any) -> bool:
     """Walk keys and values. A leak in a key is the same failure as a leak in text."""
     if isinstance(value, str):
         return factual_leak(value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return any(
             score_field(key) or factual_leak(str(key), key=True) or contains_factual_leak(item)
             for key, item in value.items()
@@ -202,14 +305,44 @@ def contains_factual_leak(value: Any) -> bool:
     return False
 
 
-def factual_patterns() -> dict[str, str]:
+def factual_patterns() -> dict[str, Any]:
     return {
-        "email": _EMAIL.pattern,
-        "openreview": _OPENREVIEW.pattern,
-        "arxiv": _ARXIV.pattern,
-        "score": _SCORE.pattern,
-        "decision": _DECISION.pattern,
-        "award": _AWARD.pattern,
+        "normalization": (
+            "nfkc-strip-zero-width-percent-html-to-stability,"
+            "strip-bidi,casefold,nfkd,strip-marks,confusables"
+        ),
+        "confusables": dict(_CONFUSABLES),
+        "number_words": dict(_NUMBER_WORDS),
+        "blocked_fields": sorted(SCORE_FIELDS),
+        "bare_alpha_id_case_changes": _BARE_ALPHA_CASE_CHANGES,
+        "patterns": {
+            key: {"pattern": rule.pattern, "flags": rule.flags}
+            for key, rule in {
+                "zero_width": _ZERO_WIDTH,
+                "bidi": _BIDI,
+                "bidi_override": _BIDI_OVERRIDE,
+                "key_separator": _KEY_SEPARATOR,
+                "latex": _LATEX_COMMAND,
+                "html_tags": _HTML_TAG,
+                "markdown_links": _MARKDOWN_LINK,
+                "markup": _MARKUP_DELIMITER,
+                "spelled_number": _SPELLED_NUMBER,
+                "obfuscated_email": _OBFUSCATED_EMAIL,
+                "spelled_email": _SPELLED_EMAIL,
+                "email": _EMAIL,
+                "openreview": _OPENREVIEW,
+                "arxiv": _ARXIV,
+                "score": _SCORE,
+                "bare_score": _BARE_SCORE,
+                "decision": _DECISION,
+                "award": _AWARD,
+                "bare_id": _BARE_ID,
+                "bare_alpha_id": _BARE_ALPHA_ID,
+                "id_label": _ID_LABEL,
+                "identity": _IDENTITY,
+                "byline": _BYLINE,
+            }.items()
+        },
     }
 
 
@@ -224,12 +357,23 @@ def _flat_proposal(value: SanitizedProposal) -> bool:
     )
 
 
+def _proposal_fields(value: Mapping) -> dict:
+    fields = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise ValueError("provide proposal fields only")
+        canonical = normalize_text(str.__str__(key))
+        if canonical in fields:
+            raise ValueError("duplicate normalized proposal field")
+        fields[canonical] = item
+    return fields
+
+
 def sanitize_proposal(source: Any) -> SanitizedProposal:
     """Build the flat proposal object from an allowlist.
 
-    A string becomes the ``proposal`` field. One ``{"text": ...}`` section
-    wrapper is flattened. Any other nested object, unknown key, or factual
-    leak raises. An existing sanitized flat proposal is returned as-is.
+    A string becomes the ``proposal`` field. Compressor section wrappers
+    contribute their text only. Other nesting, unknown keys and facts raise.
     """
     if isinstance(source, SanitizedProposal):
         if _flat_proposal(source):
@@ -237,28 +381,36 @@ def sanitize_proposal(source: Any) -> SanitizedProposal:
         raise TypeError("model input must be a sanitized proposal")
     if isinstance(source, str):
         source = {"proposal": source.strip()}
-    if not isinstance(source, dict):
+    if not isinstance(source, Mapping):
         raise TypeError("expected proposal text or JSON object")
+    source = _proposal_fields(source)
     # A proposal key holds the document: a string, a field map, or None after
     # a screen removed the only sentence. Sibling record keys such as id are
     # not proposal fields and are not copied.
-    if isinstance(source.get("proposal"), dict):
-        fields = source["proposal"]
+    if isinstance(source.get("proposal"), Mapping):
+        fields = _proposal_fields(source["proposal"])
     elif isinstance(source.get("proposal"), str):
         fields = {"proposal": source["proposal"].strip()}
     elif set(source) == {"proposal"} and source.get("proposal") is None:
         fields = {"proposal": None}
     else:
         fields = source
-    if not isinstance(fields, dict):
-        raise TypeError("invalid proposal object")
     flat: dict[str, str | None] = {}
     for key, value in fields.items():
-        if not isinstance(key, str) or not _allowed_key(key):
+        if not _allowed_key(key):
             raise ValueError("provide proposal fields only")
-        if isinstance(value, dict):
-            if set(value) - {"text"}:
+        if isinstance(value, Mapping):
+            value = _proposal_fields(value)
+            if set(value) - {"text", "evidence"}:
                 raise ValueError("nested proposal field")
+            if "evidence" in value:
+                refs = value["evidence"]
+                if (
+                    "text" not in value
+                    or not isinstance(refs, (list, tuple))
+                    or any(not isinstance(ref, str) or not _SOURCE_UNIT.fullmatch(ref) for ref in refs)
+                ):
+                    raise ValueError("invalid compressed evidence references")
             value = value.get("text")
         if value is None:
             flat[key] = None
@@ -268,52 +420,103 @@ def sanitize_proposal(source: Any) -> SanitizedProposal:
         if factual_leak(key, key=True) or factual_leak(value):
             raise ValueError(f"proposal {LEAK_MESSAGE}")
         flat[key] = value
-    return SanitizedProposal(flat)
+    return seal(flat)
 
 
-def _copy_checked(value: Any) -> Any:
+def _numeric_field(path: tuple, row: Mapping, key: str, value: Any) -> bool:
+    """Permit only protocol metadata, with the shape and bounds of that stage."""
+    if path and path[0] == "payload":
+        path = path[1:]
+    if key == "score" and len(path) == 1:
+        match = _AUDIT_ITEM.fullmatch(path[0]) if isinstance(path[0], str) else None
+        return (
+            match is not None
+            and row.keys() == {"dimension", "score", "units"}
+            and row["dimension"] == match[1]
+            and isinstance(row["units"], (list, tuple))
+            and bool(row["units"])
+            and all(isinstance(unit, str) for unit in row["units"])
+            and type(value) is int
+            and 1 <= value <= 5
+        )
+    if len(path) != 2:
+        return False
+    kind, member = path
+    if key == "year" and kind in {"prior_work", "earlier_research"}:
+        return (
+            type(member) is int
+            and row.keys() in ({"title", "abstract", "year"}, {"title", "abstract", "year", "earlier_peer_opinions"})
+            and type(value) is int
+            and 1 <= value <= 9999
+        )
+    if kind == "examples" and isinstance(member, str) and type(value) in (int, float):
+        if key == "prospective_grade":
+            valid_row = (
+                _CONTRAST_ALIAS.fullmatch(member)
+                and row.keys() == {"proposal", "prospective_grade", "reviewer_excerpts"}
+            )
+        elif key == "reviewer_mean":
+            valid_row = (
+                _EXAMPLE_ALIAS.fullmatch(member)
+                and row.keys() == {"idea", "reviewer_mean", "example_opinions"}
+            )
+        else:
+            return False
+        return bool(valid_row) and 1 <= value <= 5
+    return False
+
+
+def _copy_checked(value: Any, *, frozen: bool, path: tuple = ()) -> Any:
     if isinstance(value, str):
-        if factual_leak(value):
+        text = str.__str__(value)
+        if factual_leak(text):
             raise ValueError(f"model input {LEAK_MESSAGE}")
-        return value
-    if isinstance(value, dict):
+        return text
+    if isinstance(value, Mapping):
         copied = {}
+        normalized = set()
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("model input keys must be strings")
+            key = str.__str__(key)
+            canonical = normalize_text(key)
+            if canonical in normalized:
+                raise ValueError("duplicate normalized model input key")
+            normalized.add(canonical)
+            if _numeric_field(path, value, key, item):
+                copied[key] = item
+                continue
             if score_field(key) or factual_leak(key, key=True):
                 raise ValueError(f"model input {LEAK_MESSAGE}")
-            copied[key] = _copy_checked(item)
-        return copied
+            copied[key] = _copy_checked(item, frozen=frozen, path=(*path, key))
+        return MappingProxyType(copied) if frozen else copied
     if isinstance(value, (list, tuple)):
-        return [_copy_checked(item) for item in value]
-    if value is None or type(value) is bool:
+        items = (
+            _copy_checked(item, frozen=frozen, path=(*path, index))
+            for index, item in enumerate(value)
+        )
+        return tuple(items) if frozen else list(items)
+    if value is None:
         return value
-    if type(value) is int:
-        return value
-    if type(value) is float:
-        if not math.isfinite(value):
-            raise ValueError("model input has a non-finite number")
-        return value
+    if type(value) is float and not math.isfinite(value):
+        raise ValueError("model input has a non-finite number")
+    if type(value) in (bool, int, float):
+        raise ValueError("model input contains unexpected numeric or Boolean data")
     raise TypeError("model input must be JSON data")
 
 
 def seal(document: Any) -> SanitizedProposal:
-    """Copy a composed model payload. Keys and values are both checked.
-
-    A plain dict is not returned. ``invoke`` accepts only the sealed object.
-    """
-    if isinstance(document, SanitizedProposal):
-        return document
-    if not isinstance(document, (dict, list)):
-        raise TypeError("model input must be a SanitizedProposal")
-    copied = _copy_checked(document)
-    if not isinstance(copied, dict):
+    """Validate a composed JSON object and freeze every child."""
+    if not isinstance(document, Mapping):
         raise TypeError("model input must be a JSON object")
-    return SanitizedProposal(copied)
-
-
-def require_model_input(value: Any) -> SanitizedProposal:
-    if not isinstance(value, SanitizedProposal):
-        raise TypeError("model input must be a SanitizedProposal")
+    copied = _copy_checked(document, frozen=True)
+    value = object.__new__(SanitizedProposal)
+    object.__setattr__(value, "_items", copied)
     return value
+
+
+def require_model_input(value: Any) -> dict:
+    """Check the final payload again and return the JSON snapshot to send."""
+    if type(value) is not SanitizedProposal:
+        raise TypeError("model input must be a SanitizedProposal")
+    return _copy_checked(value, frozen=False)

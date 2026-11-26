@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Rewrite external proposal-row identifiers with HMAC-SHA256.
 
-Reads APR_PROPOSAL_REPRO_DIR and APR_PROPOSAL_REPRO_SALT. Writes a new
-directory given by --output. The originals are not modified, so the
-checksums in benchmarks/proposal/repro/external-sha256.json still match.
+Reads APR_PROPOSAL_REPRO_DIR and APR_PROPOSAL_REPRO_SALT. Writes to the
+independent directory given by --output. Use --published-only for the files
+required by the official reproduction script.
 
 Identifier fields, including nlp84 row keys and a mapping.csv ID column,
 are replaced. The salt is not written. Raw identifiers are not printed.
@@ -16,10 +16,14 @@ import csv
 import io
 import json
 import os
+import stat
 import sys
 from pathlib import Path
+from uuid import uuid4
 
-from autopaperreview.proposal.repro_metrics import SALT_ENV, identifier_key
+from autopaperreview.proposal.data import digest
+from autopaperreview.proposal.fixed_benchmark import cohort_cases
+from autopaperreview.proposal.repro_metrics import SALT_ENV, identifier_key, published_external_files
 
 DIR_ENV = "APR_PROPOSAL_REPRO_DIR"
 _ID_FIELDS = frozenset(
@@ -43,6 +47,7 @@ _ID_LISTS = frozenset(
         "forum_ids",
     }
 )
+_EXTENSIONS = {".json", ".jsonl", ".csv", ".tsv"}
 
 
 def _keyed(value: str, salt: str, cache: dict[str, str]) -> str:
@@ -58,9 +63,15 @@ def _walk(value, salt: str, cache: dict[str, str]):
             name = str(key).strip().lower()
             if name in _ID_FIELDS and isinstance(item, str) and item.strip():
                 rewritten[key] = _keyed(item, salt, cache)
+            elif name in _ID_FIELDS and isinstance(item, dict) and isinstance(item.get("value"), str):
+                rewritten[key] = _walk(item, salt, cache)
+                if item["value"].strip():
+                    rewritten[key]["value"] = _keyed(item["value"], salt, cache)
             elif name in _ID_LISTS and isinstance(item, list):
                 rewritten[key] = [
-                    _keyed(entry, salt, cache) if isinstance(entry, str) and entry.strip() else entry
+                    _keyed(entry, salt, cache)
+                    if isinstance(entry, str) and entry.strip()
+                    else _walk(entry, salt, cache)
                     for entry in item
                 ]
             else:
@@ -71,16 +82,14 @@ def _walk(value, salt: str, cache: dict[str, str]):
     return value
 
 
-def _rekey_csv(text: str, salt: str, cache: dict[str, str]) -> str:
-    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
-    header = cleaned.split("\n", 1)[0]
-    delimiter = "\t" if header.count("\t") > header.count(",") else ","
-    rows = list(csv.reader(io.StringIO(cleaned), delimiter=delimiter))
-    if not rows:
+def _rekey_csv(text: str, delimiter: str, salt: str, cache: dict[str, str]) -> str:
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff")), delimiter=delimiter, strict=True))
+    header = next((i for i, row in enumerate(rows) if any(cell.strip() for cell in row)), None)
+    if header is None:
         return text
-    names = [cell.strip().lower() for cell in rows[0]]
-    columns = [index for index, name in enumerate(names) if name in {"id", "key", "forum", "forum_id"}]
-    for row in rows[1:]:
+    names = [cell.strip().lower() for cell in rows[header]]
+    columns = [index for index, name in enumerate(names) if name in _ID_FIELDS]
+    for row in rows[header + 1 :]:
         for index in columns:
             if index < len(row) and row[index].strip():
                 row[index] = _keyed(row[index].strip(), salt, cache)
@@ -90,35 +99,127 @@ def _rekey_csv(text: str, salt: str, cache: dict[str, str]) -> str:
     return buffer.getvalue()
 
 
-def rekey_tree(source: Path, output: Path, salt: str) -> int:
-    if output.resolve() == source.resolve():
-        raise ValueError("write the rekeyed rows to a different directory")
-    cache: dict[str, str] = {}
-    files = 0
-    for path in sorted(source.rglob("*")):
-        if not path.is_file():
+def _rekey_json(value, salt, cache):
+    rewritten = _walk(value, salt, cache)
+    if isinstance(value, dict) and "ids_sha256" in value and "cases" in value:
+        test_ids = cohort_cases(value)
+        rewritten["ids_sha256"] = digest(sorted(_keyed(key, salt, cache) for key in test_ids))
+    return rewritten
+
+
+def _rekey_text(path, salt, cache):
+    text = path.read_text(encoding="utf-8")
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        value = _rekey_json(json.loads(text), salt, cache)
+        return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    if suffix == ".jsonl":
+        return "".join(
+            json.dumps(_rekey_json(json.loads(line), salt, cache), ensure_ascii=False) + "\n"
+            for line in text.split("\n")
+            if line.strip()
+        )
+    return _rekey_csv(text, "\t" if suffix == ".tsv" else ",", salt, cache)
+
+
+def _check_directory(path):
+    for directory in (*reversed(path.parents), path):
+        try:
+            mode = directory.lstat().st_mode
+        except FileNotFoundError:
             continue
-        relative = path.relative_to(source)
-        dest = output / relative
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        suffix = path.suffix.lower()
-        if suffix == ".json":
-            dest.write_text(
-                json.dumps(_walk(json.loads(path.read_text(encoding="utf-8")), salt, cache), ensure_ascii=False, indent=2)
-                + "\n",
-                encoding="utf-8",
-            )
-            files += 1
-        elif suffix in {".csv", ".tsv"}:
-            dest.write_text(_rekey_csv(path.read_text(encoding="utf-8"), salt, cache), encoding="utf-8")
-            files += 1
-    return files
+        if not stat.S_ISDIR(mode):
+            raise ValueError("output directory and its parents must be real directories")
+
+
+def _check_destination(info):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("output files must be regular files without other links")
+
+
+def _open_output_directory(path):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(path.anchor, flags)
+    try:
+        for part in path.parts[1:]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            child = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+    except BaseException:
+        os.close(directory)
+        raise
+    return directory
+
+
+def _write_output(dest, content):
+    directory = _open_output_directory(dest.parent)
+    temp_name = f".rekey-{uuid4().hex}"
+    try:
+        try:
+            info = os.stat(dest.name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            _check_destination(info)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        fd = os.open(temp_name, flags, 0o600, dir_fd=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temp_name, dest.name, src_dir_fd=directory, dst_dir_fd=directory)
+        finally:
+            try:
+                os.unlink(temp_name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(directory)
+
+
+def rekey_tree(source: Path, output: Path, salt: str, *, published_only: bool = False) -> int:
+    source = source.resolve()
+    output = output.absolute()
+    _check_directory(output)
+    output = output.resolve()
+    if output.is_relative_to(source) or source.is_relative_to(output):
+        raise ValueError("input and output directories must not overlap")
+    if not isinstance(salt, str) or not salt:
+        raise ValueError("an HMAC salt is required")
+    if published_only:
+        paths = [source / name for name in published_external_files()]
+    else:
+        paths = [path for path in source.rglob("*") if path.suffix.lower() in _EXTENSIONS and path.is_file()]
+
+    plan = []
+    for path in sorted(paths):
+        if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(source):
+            raise ValueError("input must contain all required regular files within its directory")
+        dest = output / path.relative_to(source)
+        _check_directory(dest.parent)
+        try:
+            info = dest.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            _check_destination(info)
+        plan.append((path, dest))
+
+    cache: dict[str, str] = {}
+    rewritten = [(dest, _rekey_text(path, salt, cache)) for path, dest in plan]
+    for dest, content in rewritten:
+        _write_output(dest, content)
+    return len(rewritten)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=None)
+    parser.add_argument("--published-only", action="store_true")
     args = parser.parse_args(argv)
     root = args.root or (Path(os.environ[DIR_ENV]) if os.environ.get(DIR_ENV) else None)
     salt = os.environ.get(SALT_ENV, "")
@@ -128,7 +229,11 @@ def main(argv: list[str] | None = None) -> int:
     if not salt:
         print(f"Set {SALT_ENV}. The salt is not stored.", file=sys.stderr)
         return 2
-    count = rekey_tree(root, args.output, salt)
+    try:
+        count = rekey_tree(root, args.output, salt, published_only=args.published_only)
+    except (csv.Error, KeyError, OSError, RuntimeError, TypeError, ValueError):
+        print("Could not safely rekey the external files. Check the input files and output path.", file=sys.stderr)
+        return 2
     print(f"rewrote {count} files")
     return 0
 

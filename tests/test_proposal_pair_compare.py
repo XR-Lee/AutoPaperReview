@@ -9,6 +9,10 @@ from autopaperreview.proposal import pair_compare
 from autopaperreview.proposal.data import read, write
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class TestProposalPairCompare(unittest.TestCase):
     def test_orders_and_invalid_candidates(self):
         items = [{"id": "one"}, {"id": "two"}]
@@ -28,9 +32,10 @@ class TestProposalPairCompare(unittest.TestCase):
             write(source, data)
             cmd = ["compare", str(source), "--left", "two", "--right", "one", "--model-dir", str(root)]
             args = parser.parse_args([*cmd, "--output", str(output)])
-            with patch.object(pair_compare, "evaluate", return_value={"direction": "unresolved"}) as call:
+            with (patch.object(pair_compare, "evaluate", return_value={"direction": "unresolved"}) as call,
+                  patch.object(pair_compare, "model_leak_judge", return_value=clean_judge)):
                 self.assertEqual(args.func(args), 0)
-            call.assert_called_once_with(root.resolve(), data[1], data[0])
+            call.assert_called_once_with(root.resolve(), data[1], data[0], leak_judge=clean_judge)
             self.assertEqual(read(output), {"direction": "unresolved"})
             self.assertEqual(read(source), data)
             for path in [source, root / "model.json", root / "stability-models.npy"]:
@@ -44,12 +49,12 @@ class TestProposalPairCompare(unittest.TestCase):
                 for n in pair_compare.MODEL_FILES:
                     target.writestr(n, "synthetic")
                 target.writestr("../ignored", "extra")
-            def fake(directory, left, right):
+            def fake(directory, left, right, *, leak_judge):
                 self.assertEqual({p.name for p in directory.iterdir()}, pair_compare.MODEL_FILES)
                 return left, right
             with patch.object(pair_compare, "evaluate", side_effect=fake):
-                self.assertEqual(pair_compare.evaluate_bundle(bundle, "a", "b"), ("a", "b"))
+                self.assertEqual(pair_compare.evaluate_bundle(bundle, "a", "b", leak_judge=clean_judge), ("a", "b"))
             with zipfile.ZipFile(bundle, "a") as target:
                 target.writestr("stability-model.json", "{}")
             with self.assertRaises(ValueError):
-                pair_compare.evaluate_bundle(bundle, "a", "b")
+                pair_compare.evaluate_bundle(bundle, "a", "b", leak_judge=clean_judge)

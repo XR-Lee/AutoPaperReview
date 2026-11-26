@@ -8,6 +8,10 @@ from autopaperreview.proposal.data import read, write
 from autopaperreview.proposal.stages import validate
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class OutcomeScreenTests(unittest.TestCase):
     def test_explicit_provider_enables_screening_and_separates_cached_judgments(self):
         import argparse
@@ -25,7 +29,8 @@ class OutcomeScreenTests(unittest.TestCase):
             args = parser.parse_args(["prioritize", str(inp), "--work", str(root), "--profile",
                                       str(profile), "--output", str(dst), "--outcome-screen-provider", "claude"])
             raw = '{"exclude":[{"unit":"u1","quote":"observed a benefit","kind":"empirical"}]}'
-            with patch("autopaperreview.proposal.stages.run_command", return_value=(raw, 0.1)) as calls:
+            with (patch("autopaperreview.proposal.stages.run_command", return_value=(raw, 0.1)) as calls,
+                  patch.object(priority, "model_leak_judge", return_value=clean_judge)):
                 self.assertEqual(args.func(args), 0)
                 result = read(dst)
                 self.assertIsNone(result["overall"])
@@ -35,10 +40,10 @@ class OutcomeScreenTests(unittest.TestCase):
                 self.assertEqual(actual["request"]["model"], receipt["screen_model"])
                 self.assertEqual(calls.call_count, 1)
                 packet = {"proposal": "We observed a benefit in the archive."}
-                clean, cached = priority.screen_packet(packet, root, cached_only=True, provider="claude")
+                clean, cached = priority.screen_packet(packet, root, cached_only=True, provider="claude", leak_judge=clean_judge)
                 self.assertEqual(cached, receipt)
                 with self.assertRaisesRegex(ValueError, "missing cached outcome_screen"):
-                    priority.screen_packet(packet, root, cached_only=True, provider="grok")
+                    priority.screen_packet(packet, root, cached_only=True, provider="grok", leak_judge=clean_judge)
                 self.assertEqual(calls.call_count, 1)
 
     def test_preserves_future_and_removes_only_complete_unit_in_english_and_chinese(
@@ -109,7 +114,7 @@ class OutcomeScreenTests(unittest.TestCase):
                 ],
             )
 
-            def invoke(stage, source, cache, model, argv, timeout):
+            def invoke(stage, source, cache, model, argv, timeout, *, cached_only, leak_judge):
                 self.assertEqual(stage, "outcome_screen")
                 source_text = next(iter(source.values()))["text"]
                 flags = (
@@ -183,11 +188,11 @@ class OutcomeScreenTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
 
-            def judge(stage, data, cache, model, argv, timeout, *, cached_only):
+            def judge(stage, data, cache, model, argv, timeout, *, cached_only, leak_judge):
                 self.assertTrue(cached_only)
                 flags = []
                 if stage == "outcome_attribution":
-                    self.assertEqual(data["candidates"], ["u2", "u3"])
+                    self.assertEqual(list(data["candidates"]), ["u2", "u3"])
                     self.assertIn("u1", data["context"])
                     flags = [
                         {
@@ -211,13 +216,13 @@ class OutcomeScreenTests(unittest.TestCase):
                             data,
                         )
                 if stage == "outcome_context":
-                    self.assertEqual(data["candidates"], ["u4"])
+                    self.assertEqual(list(data["candidates"]), ["u4"])
                 dest = cache / (stage + ".json")
                 write(dest, {"output": {"exclude": flags}})
                 return dest
 
             with patch.object(priority, "invoke", side_effect=judge) as called:
-                clean, audit = priority.screen_packet(packet, root, cached_only=True)
+                clean, audit = priority.screen_packet(packet, root, cached_only=True, leak_judge=clean_judge)
             self.assertEqual(called.call_count, 3)
             self.assertEqual(
                 clean["proposal"],
@@ -232,7 +237,7 @@ class OutcomeScreenTests(unittest.TestCase):
             profile = {"ranker": {"names": []}}
             # Outcome-bearing packets require the exact screen receipt bound to their content.
             with self.assertRaisesRegex(ValueError, "remove reported outcomes"):
-                priority.rank(clean, root, profile, root)
+                priority.rank(clean, root, profile, root, leak_judge=clean_judge)
             with self.assertRaisesRegex(ValueError, "remove reported outcomes"):
                 priority.rank(
                     {"proposal": "不同结果优于之前。"},
@@ -240,6 +245,7 @@ class OutcomeScreenTests(unittest.TestCase):
                     profile,
                     root,
                     screen_receipt=audit,
+                    leak_judge=clean_judge,
                 )
 
 

@@ -16,6 +16,7 @@ from autopaperreview.proposal.data import digest, iclr_case, label_leak, officia
 from autopaperreview.proposal.fixed_benchmark import blind_inputs, evaluate_fixed
 from autopaperreview.proposal.overall_rank import STRATIFIED_DRAWS, stratified_ci
 from autopaperreview.proposal.prior_index import build, retrieve
+from autopaperreview.proposal.sanitized import require_model_input, to_json_data
 from autopaperreview.public_calibration import latest_official_reviews
 from autopaperreview.rating_scales import scale_for_key, scale_for_year
 
@@ -27,6 +28,10 @@ def _proposal_profile(stage, feature):
         "prompts": {stage: digest(stages.PROMPTS[stage])},
         "routes": {stage: {"model": model, "command_sha256": digest(command)}},
     }
+
+
+def clean_judge(_):
+    return {"verdict": "clean"}
 
 
 class ScalePropagationTests(unittest.TestCase):
@@ -49,8 +54,8 @@ class ScalePropagationTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp)
 
-            def invoke(stage, source, folder, model, command, timeout, *, cached_only):
-                blob = json.dumps(source)
+            def invoke(stage, source, folder, model, command, timeout, *, cached_only, leak_judge):
+                blob = json.dumps(source, default=to_json_data)
                 self.assertNotIn("Overall Rating", blob)
                 self.assertNotIn("Accept as Oral", blob)
                 self.assertIn("The proposed test is explicit.", blob)
@@ -63,7 +68,7 @@ class ScalePropagationTests(unittest.TestCase):
                 return path
 
             with patch.object(reference_coding, "invoke", side_effect=invoke):
-                coded = reference_coding.code_paper(row, cache, ["judge"])
+                coded = reference_coding.code_paper(row, cache, ["judge"], leak_judge=clean_judge)
         self.assertEqual(coded["year"], 2026)
         self.assertEqual(coded["rating_scale"], "iclr2026")
         self.assertEqual(coded["final_rating"], 0)
@@ -127,8 +132,8 @@ class ScalePropagationTests(unittest.TestCase):
         seen = []
         with TemporaryDirectory() as tmp:
 
-            def invoke(stage, source, folder, model, command, timeout, *, cached_only):
-                seen.append(source)
+            def invoke(stage, source, folder, model, command, timeout, *, cached_only, leak_judge):
+                seen.append(require_model_input(source))
                 output = (
                     {"r1": [{"id": "u", "quote": "The proposed test is explicit."}]}
                     if stage == "ref_extract"
@@ -139,7 +144,7 @@ class ScalePropagationTests(unittest.TestCase):
                 return path
 
             with patch.object(reference_coding, "invoke", side_effect=invoke):
-                reference_coding.code_paper(row, Path(tmp), ["judge"])
+                reference_coding.code_paper(row, Path(tmp), ["judge"], leak_judge=clean_judge)
         self.assertEqual(list(seen[0]), ["r1"])
         self.assertNotIn("8/10", json.dumps(seen))
         self.assertNotIn("Oral", json.dumps(seen))
@@ -156,11 +161,11 @@ class LeakGuardTests(unittest.TestCase):
         profile = {"ranker": {"names": []}}
         leaked = {"proposal": "Index the archive. Overall Rating: 8/10. Decision: Accept as Oral."}
         with self.assertRaisesRegex(ValueError, "identity leak"):
-            priority.rank(leaked, Path("."), profile, Path("."), call=call)
+            priority.rank(leaked, Path("."), profile, Path("."), call=call, leak_judge=clean_judge)
         clean = {"proposal": "Index the archive labels for a planned catalogue."}
         legacy = {"proposal": "Write to ada.example@nowhere.edu. Best paper award."}
         with self.assertRaisesRegex(ValueError, "identity leak"):
-            priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call)
+            priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call, leak_judge=clean_judge)
         with self.assertRaisesRegex(ValueError, "identity leak"):
             priority.rank(
                 leaked,
@@ -169,6 +174,7 @@ class LeakGuardTests(unittest.TestCase):
                 Path("."),
                 screen_receipt={"cleared_packet": digest(leaked)},
                 call=call,
+                leak_judge=clean_judge,
             )
         self.assertEqual(calls, [])
 
@@ -185,6 +191,7 @@ class LeakGuardTests(unittest.TestCase):
                     Path(tmp),
                     legacy=legacy,
                     call=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("called")),
+                    leak_judge=clean_judge,
                 )
 
 
@@ -248,8 +255,9 @@ class RetrievalExclusionTests(unittest.TestCase):
         for row in bank:
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
+            row.setdefault("revision_ms", 10)
         leaked, _scores = contrast.packet(target, bank)
-        self.assertIn("SECRET-LABEL", json.dumps(leaked))
+        self.assertIn("SECRET-LABEL", json.dumps(leaked, default=to_json_data))
         for kwargs in (
             {"exclude_key": "target-key"},
             {"exclude_forum": "target-forum"},
@@ -257,7 +265,7 @@ class RetrievalExclusionTests(unittest.TestCase):
             {"exclude_title": "the paper"},
         ):
             hidden, _scores = contrast.packet(target, bank, **kwargs)
-            self.assertNotIn("SECRET-LABEL", json.dumps(hidden), kwargs)
+            self.assertNotIn("SECRET-LABEL", json.dumps(hidden, default=to_json_data), kwargs)
 
     def test_rank_passes_exclude_key_and_retrieval_cutoffs(self) -> None:
         captured = {}
@@ -266,6 +274,7 @@ class RetrievalExclusionTests(unittest.TestCase):
             captured["exclude_key"] = kwargs.get("exclude_key")
             captured["exclude_forum"] = kwargs.get("exclude_forum")
             captured["exclude_title"] = kwargs.get("exclude_title")
+            captured["contrast_cutoff_ms"] = kwargs.get("cutoff_ms")
             raise RuntimeError("captured contrast")
 
         def stop_retrieve(*args, **kwargs):
@@ -288,7 +297,9 @@ class RetrievalExclusionTests(unittest.TestCase):
                         exclude_key="target-key",
                         forum="target-forum",
                         title="The Paper",
+                        cutoff_ms=50,
                         call=lambda *args, **kwargs: None,
+                        leak_judge=clean_judge,
                     )
             with patch.object(priority, "retrieve", side_effect=stop_retrieve):
                 with self.assertRaisesRegex(RuntimeError, "captured retrieve"):
@@ -304,10 +315,12 @@ class RetrievalExclusionTests(unittest.TestCase):
                         cutoff_ms=50,
                         title="The Paper",
                         call=lambda *args, **kwargs: None,
+                        leak_judge=clean_judge,
                     )
         self.assertEqual(captured["exclude_key"], "target-key")
         self.assertEqual(captured["exclude_forum"], "target-forum")
         self.assertEqual(captured["exclude_title"], "The Paper")
+        self.assertEqual(captured["contrast_cutoff_ms"], 50)
         self.assertEqual(captured["retrieve"]["exclude_forum"], "target-forum")
         self.assertEqual(captured["retrieve"]["exclude_arxiv"], "2099.00001v3")
         self.assertEqual(captured["retrieve"]["target_year"], 2024)
@@ -465,14 +478,14 @@ class AuditAndCohortTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp)
 
-            def invoke(stage, body, folder, model, command, timeout, *, cached_only=False):
+            def invoke(stage, body, folder, model, command, timeout, *, cached_only=False, leak_judge):
                 path = cache / "audit.json"
                 visible = {key: ["stated", "s1"] for key in body["claims"]}
                 write(path, {"output": visible})
                 return path
 
             with patch.object(stages, "invoke", side_effect=invoke):
-                audited = source_evidence.audit(source, proposal, cache)
+                audited = source_evidence.audit(source, proposal, cache, leak_judge=clean_judge)
         text = audited["proposal"]["mechanism"]
         self.assertEqual(text, "Gather the tokens.")
         self.assertNotIn("Oral", text)
@@ -679,6 +692,7 @@ class AdversarialRegressionTests(unittest.TestCase):
                     profile,
                     Path("."),
                     call=call,
+                    leak_judge=clean_judge,
                 )
         for text in paraphrases:
             self.assertFalse(label_leak(text))
@@ -699,12 +713,12 @@ class AdversarialRegressionTests(unittest.TestCase):
                 profile,
                 Path("."),
                 call=call,
-                leak_judge=lambda _proposal: "clean",
+                leak_judge=clean_judge,
             )
         legacy = {"proposal": "Our experiments show a higher accuracy on the planned task."}
         clean = {"proposal": "Index archive labels for a planned catalogue of names."}
         with self.assertRaisesRegex(ValueError, "reported outcomes"):
-            priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call)
+            priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call, leak_judge=clean_judge)
         with self.assertRaisesRegex(ValueError, "nested proposal field"):
             priority.rank(
                 {"problem": {"text": "Index the archive.", "decision": "Accept"}},
@@ -712,6 +726,7 @@ class AdversarialRegressionTests(unittest.TestCase):
                 profile,
                 Path("."),
                 call=call,
+                leak_judge=clean_judge,
             )
         self.assertEqual(calls, [])
 
@@ -723,6 +738,7 @@ class AdversarialRegressionTests(unittest.TestCase):
                 "key": key,
                 "split": "dev",
                 "year": 2020,
+                "revision_ms": 10,
                 "target": extra.pop("target", 4.8),
                 "proposal": {
                     "problem": extra.pop(
@@ -761,7 +777,7 @@ class AdversarialRegressionTests(unittest.TestCase):
             example("wood-b", "wood-b", target=4.0, problem="Map spruce wood grain in a quiet workshop."),
         ]
         hidden, _scores = contrast.packet(target, bank, exclude_arxiv="2099.00001")
-        text = json.dumps(hidden)
+        text = json.dumps(hidden, default=to_json_data)
         for blocked in (
             "QUERY-PAPER",
             "FUTURE-DEV",
@@ -955,8 +971,8 @@ class AdversarialRegressionTests(unittest.TestCase):
         }
         with TemporaryDirectory() as tmp:
 
-            def invoke(stage, source, folder, model, command, timeout, *, cached_only):
-                blob = json.dumps(source)
+            def invoke(stage, source, folder, model, command, timeout, *, cached_only, leak_judge):
+                blob = json.dumps(source, default=to_json_data)
                 self.assertNotIn("Accept", blob)
                 self.assertIn(quote, blob)
                 output = (
@@ -969,7 +985,7 @@ class AdversarialRegressionTests(unittest.TestCase):
                 return path
 
             with patch.object(reference_coding, "invoke", side_effect=invoke):
-                coded = reference_coding.code_paper(row, Path(tmp), ["judge"])
+                coded = reference_coding.code_paper(row, Path(tmp), ["judge"], leak_judge=clean_judge)
         evidence = coded["reviewers"][0]["evidence"][0]
         self.assertGreater(evidence["start"], 0)
         self.assertEqual(original[evidence["start"] : evidence["end"]], quote)
@@ -1104,10 +1120,13 @@ class AdversarialRegressionTests(unittest.TestCase):
     def test_duplicate_excerpts_use_each_original_offset(self) -> None:
         original = "The plan is concrete. The plan is concrete."
         quote = "The plan is concrete."
-        result = reference_coding.reviewer_result(
-            {"id": "n", "units": {"u": original}},
-            {},
+        bound = reference_coding.bind_evidence(
+            reference_coding.coding_units({"u": original}),
             [{"id": "u", "quote": quote}, {"id": "u", "quote": quote}],
+        )
+        result = reference_coding.reviewer_result(
+            {"id": "n"},
+            bound,
             {"score": 4, "used": [0, 1]},
         )
         spans = result["evidence"]

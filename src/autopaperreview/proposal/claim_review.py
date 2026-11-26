@@ -15,9 +15,11 @@ from .claim_prompts import FORECAST, GROUND, PROSPECTIVE
 from .clarification import plan_units
 from .clarification_protocol import outside_scope
 from .data import digest, read, write
+from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
 from .material import ORDER, material
 from .outcome_screen import units
 from .priority import route
+from .sanitized import require_model_input, seal
 from .stages import claude_argv
 
 FIELDS = (*ORDER, "unclassified")
@@ -59,7 +61,10 @@ def validate(stage, output, body):
             raise ValueError("return a literal substring of the cited source")
 
 
-def request(stage, body, cache, offline):
+def request(stage, body, cache, offline, *, leak_judge=None):
+    require_leak_judge(leak_judge)
+    body = require_model_input(seal(body))
+    apply_leak_audit(body, leak_judge)
     model, command = route("outcome_screen") if stage == "prospective" else ("claude-sonnet-5-5", claude_argv())
     prompt = PROMPTS[stage]
     descriptor = {"model": model, "command": digest(command), "input": digest(body), "prompt": digest(prompt)}
@@ -82,9 +87,10 @@ def request(stage, body, cache, offline):
     feedback = ""
     result = {"request": descriptor, "state": "invalid", "output": {}}
     for _ in range(3):
+        message = audited_prompt(body, leak_judge, feedback)
         try:
             raw, _ = run_command(command, model=model, system=prompt,
-                                 prompt=json.dumps(body, ensure_ascii=False) + feedback, timeout=240)
+                                 prompt=message, timeout=240)
         except RuntimeError as exc:
             if re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 result["state"] = "refusal"
@@ -97,8 +103,8 @@ def request(stage, body, cache, offline):
         try:
             parsed = json.loads(recover_json(text))
             validate(stage, parsed, body)
-        except (ValueError, TypeError, KeyError) as exc:
-            feedback = "\nReturn the entire corrected JSON. " + str(exc)[:110]
+        except (ValueError, TypeError, KeyError):
+            feedback = "\nReturn the complete JSON again, following the required schema."
             continue
         result.update(state="response", output=parsed)
         break
@@ -147,13 +153,14 @@ def priority_view(key, original, available, ratings):
     return [g[i] for i in range(max(map(len, groups), default=0)) for g in groups if i < len(g)]
 
 
-def select_sources(item, cache, offline):
+def select_sources(item, cache, offline, *, leak_judge=None):
+    require_leak_judge(leak_judge)
     original, extra, source = candidates(item)
     selected = original
     metadata = {"ground_request": None, "pool_request": None, "supported_additions": 0}
     if extra and source:
         body = {"candidates": {f"x{i}": v["text"] for i, v in enumerate(extra, 1)}, "sources": source}
-        metadata["ground_request"], ground = request("ground", body, cache, offline)
+        metadata["ground_request"], ground = request("ground", body, cache, offline, leak_judge=leak_judge)
         additions = []
         for tag, ref in sorted(ground["output"].items(), key=lambda t: int(t[0][1:])):
             text = source[ref["source"]]
@@ -164,7 +171,9 @@ def select_sources(item, cache, offline):
         if additions:
             merged = sorted(original + additions, key=lambda v: digest(["blind-pool", item["id"], v["text"]]))
             pool = {f"s{i}": v for i, v in enumerate(merged, 1)}
-            metadata["pool_request"], ratings = request("forecast", {t: v["text"] for t, v in pool.items()}, cache, offline)
+            metadata["pool_request"], ratings = request(
+                "forecast", {t: v["text"] for t, v in pool.items()}, cache, offline, leak_judge=leak_judge,
+            )
             if ratings["state"] == "response":
                 selected = priority_view(item["id"], original, pool, ratings["output"])
     extras = [v for v in selected if v["origin"] == "additional"]
@@ -172,7 +181,7 @@ def select_sources(item, cache, offline):
     if not extras:
         return original, metadata, audit
     body = {f"a{i}": {"claim": v["text"], "source": source[v["source"]]} for i, v in enumerate(extras, 1)}
-    audit["request"], second = request("prospective", body, cache, offline)
+    audit["request"], second = request("prospective", body, cache, offline, leak_judge=leak_judge)
     audit["state"] = second["state"]
     accepted = {}
     for tag, row in zip(body, extras, strict=True):
@@ -220,18 +229,19 @@ def estimate(statement, bins, coef):
                 estimated_linked_objection=o, independent_review_opposition=2*s*o)
 
 
-def evaluate(rows, profile, cache, offline):
+def evaluate(rows, profile, cache, offline, *, leak_judge=None):
+    require_leak_judge(leak_judge)
     coef = coefficients(profile)
     if (not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) for r in rows)
             or len({r["id"] for r in rows}) != len(rows)):
         raise ValueError("expected audited proposals with unique string IDs")
     output = []
     for row in rows:
-        statements, source, audit = select_sources(row, cache, offline)
+        statements, source, audit = select_sources(row, cache, offline, leak_judge=leak_judge)
         view = dict(forecast_request=None, state="insufficient_material", deployed_score=row.get("overall"), statements=[])
         if statements:
             body = {f"s{i}": r["text"] for i, r in enumerate(statements, 1)}
-            view["forecast_request"], result = request("forecast", body, cache, offline)
+            view["forecast_request"], result = request("forecast", body, cache, offline, leak_judge=leak_judge)
             if result["state"] == "response":
                 view["state"] = "available"
                 view["statements"] = [estimate(r, result["output"][t], coef) for t, r in zip(body, statements, strict=True)]
@@ -250,12 +260,15 @@ def dispatch(args):
     if target and (target in (source, profile) or target.is_relative_to(cache)):
         raise ValueError("choose an output separate from inputs, fitted parameters and model receipts")
     rows, fitted = read(source), read(profile)
+    judge = require_leak_judge(model_leak_judge(
+        cache, "claude-sonnet-5-5", claude_argv(), 240, cached_only=args.cached_only,
+    ))
     if args.cached_only:
-        results = evaluate(rows, fitted, cache, True)
+        results = evaluate(rows, fitted, cache, True, leak_judge=judge)
     else:
         cache.mkdir(parents=True, exist_ok=True)
         with run_lock(cache):
-            results = evaluate(rows, fitted, cache, False)
+            results = evaluate(rows, fitted, cache, False, leak_judge=judge)
     if target:
         write(target, results)
     else:

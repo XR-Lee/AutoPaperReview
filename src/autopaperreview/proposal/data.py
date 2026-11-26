@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from itertools import chain
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -19,7 +20,13 @@ from ..public_calibration import (
     parse_rating,
 )
 from ..rating_scales import RatingScale, classic_scale, scale_for_key, scale_for_year
-from .sanitized import SCORE_FIELDS, contains_factual_leak, factual_leak, factual_patterns
+from .sanitized import (
+    contains_factual_leak,
+    factual_leak,
+    factual_patterns,
+    score_field,
+    to_json_data,
+)
 
 
 def read(path: Path) -> Any:
@@ -28,14 +35,15 @@ def read(path: Path) -> Any:
 
 def digest(value: Any) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
+        json.dumps(value, sort_keys=True, ensure_ascii=False, default=to_json_data).encode()
     ).hexdigest()
 
 
 def write(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(
-        path, json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+        path,
+        json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False, default=to_json_data) + "\n",
     )
 
 
@@ -46,7 +54,9 @@ OUTCOME = re.compile(
     r"(?:experiments?|evaluations?|results?|benchmarks?) (?:on .{0,75}? )?(?:show|confirm|demonstrat|reveal|indicat)|"
     r"(?:we|authors|paper) (?:also )?(?:demonstrate|prove|show|establish|find that)|"
     r"state.of.the.art (?:performance|results)|(?:was|were) (?:accept|reject)ed|rebuttal|camera.ready|"
-    r"acceptance|recommend (?:accept|reject)|my (?:rating|score)|after (?:the )?(?:discussion|response))\b|"
+    r"acceptance (?:for publication|(?:at|to|by) (?:(?:a|the) )?(?:venue|conference|journal|workshop|iclr|cvpr))|"
+    r"recommend (?:accept|reject)|"
+    r"my (?:rating|score)|after (?:the )?(?:discussion|response))\b|"
     r"\d\s*(?:%|percentage points)|实验(?:结果|表明|显示)|取得了|优于|提升了|录用|拒稿",
     re.IGNORECASE,
 )
@@ -74,6 +84,8 @@ _LABEL_SPLIT = re.compile(
     r"|(?=\b(?:Final|Meta|Reviewer|My|Our)\s+(?:Rating|Score)s?\b)",
     re.IGNORECASE,
 )
+_LABEL_TRIM = " \t-*"
+_LABEL_JOIN = " "
 # Score and identity fields are never copied into a model packet. "contribution"
 # is not listed: APD uses that key for prose, and the ICLR numeric score is
 # excluded by the review-prose allowlist below.
@@ -85,19 +97,18 @@ _REVIEW_PROSE = (
 )
 
 
-def _score_field(key: object) -> bool:
-    return str(key).strip().lower().replace(" ", "_") in SCORE_FIELDS
-
-
-def cleaning_rules() -> dict[str, str]:
+def cleaning_rules() -> dict[str, Any]:
     """Patterns that define prospective-text cleaning. Included in protocol digests.
 
     The factual patterns are defense in depth. Paraphrase is not one of them.
     """
     return {
         **factual_patterns(),
-        "outcome": OUTCOME.pattern,
-        "reported_finding": REPORTED_FINDING.pattern,
+        "sentence_boundary": {"pattern": _LABEL_SPLIT.pattern, "flags": _LABEL_SPLIT.flags},
+        "trim_chars": _LABEL_TRIM,
+        "sentence_join": _LABEL_JOIN,
+        "outcome": {"pattern": OUTCOME.pattern, "flags": OUTCOME.flags},
+        "reported_finding": {"pattern": REPORTED_FINDING.pattern, "flags": REPORTED_FINDING.flags},
     }
 
 
@@ -121,16 +132,46 @@ def assert_no_label_leak(value: Any, *, where: str) -> None:
         )
 
 
+def _retained_label_spans(text: str):
+    if not isinstance(text, str) or not text.strip():
+        return
+    start = 0
+    for separator in chain(_LABEL_SPLIT.finditer(text), (None,)):
+        end = separator.start() if separator is not None else len(text)
+        part = text[start:end]
+        sentence = part.strip(_LABEL_TRIM)
+        if sentence and not label_leak(sentence):
+            left = start + len(part) - len(part.lstrip(_LABEL_TRIM))
+            yield left, left + len(sentence)
+        if separator is not None:
+            start = separator.end()
+
+
 def neutralize_label_text(text: str) -> str:
     """Drop rating, decision, award, acceptance, and identity sentences."""
-    if not isinstance(text, str) or not text.strip():
-        return ""
-    kept = []
-    for part in _LABEL_SPLIT.split(text):
-        sentence = part.strip(" \t-*")
-        if sentence and not label_leak(sentence):
-            kept.append(sentence)
-    return " ".join(kept).strip()
+    return _LABEL_JOIN.join(
+        text[start:end] for start, end in _retained_label_spans(text)
+    ).strip()
+
+
+def retained_label_text(text: str) -> tuple[str, tuple[int | None, ...]]:
+    """Clean a review unit and map each retained character to the source."""
+    parts = []
+    offsets: list[int | None] = []
+    previous_end = None
+    for start, end in _retained_label_spans(text):
+        if previous_end is not None:
+            # A join is part of a verbatim quote only if it already existed
+            # between these two retained source fragments.
+            original = previous_end if text[previous_end:start] == _LABEL_JOIN else None
+            offsets.append(original)
+        parts.append(text[start:end])
+        offsets.extend(range(start, end))
+        previous_end = end
+    joined = _LABEL_JOIN.join(parts)
+    stripped = joined.strip()
+    start = len(joined) - len(joined.lstrip())
+    return stripped, tuple(offsets[start : start + len(stripped)])
 
 
 def filter_conclusion_sentences(text: str) -> str:
@@ -139,7 +180,7 @@ def filter_conclusion_sentences(text: str) -> str:
         return ""
     kept = []
     for part in _LABEL_SPLIT.split(text):
-        sentence = part.strip(" \t-*")
+        sentence = part.strip(_LABEL_TRIM)
         if sentence and not label_leak(sentence) and not reported_result(sentence):
             kept.append(sentence)
     return " ".join(kept).strip()
@@ -184,35 +225,48 @@ def anonymized_submission_text(text: Any) -> str:
     return "\n".join(kept).strip() if seen else ""
 
 
-def scale_for_reference(row: dict) -> RatingScale:
-    """Scale for an already-averaged official mean on a reference record.
-
-    When both ``year`` and ``rating_scale`` are set they must resolve to the
-    same scale. A 2026 mean of 0 is legal on ``iclr2026`` and illegal on the
-    2024 bins.
-    """
-    key = row.get("rating_scale")
+def declared_rating_scale(row: dict) -> RatingScale | None:
+    """Resolve scale metadata when a year or an explicit scale is present."""
     named = None
-    if isinstance(key, str) and key:
+    if "rating_scale" in row:
+        key = row["rating_scale"]
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("rating_scale must be a non-empty string")
         try:
             named = scale_for_key(key)
         except KeyError as exc:
-            raise ValueError(f"unknown rating scale {key!r}") from exc
+            raise ValueError("unknown rating_scale") from exc
     year = row.get("year")
-    yearly = None
-    if year is not None:
-        if type(year) is not int:
-            raise ValueError("year must be an integer venue year")
-        yearly = scale_for_year(year)
+    yearly = scale_for_year(year) if year is not None else None
     if named is not None and yearly is not None and named.key != yearly.key:
         raise ValueError(
             f"year {year} resolves to {yearly.key}, which does not match rating_scale {named.key}"
         )
-    if named is not None:
-        return named
-    if yearly is not None:
-        return yearly
-    return classic_scale()
+    return named or yearly
+
+
+def scale_for_reference(row: dict, *, lock: dict | None = None) -> RatingScale:
+    """Resolve the scale for an official mean, inheriting a cohort lock."""
+    reference = declared_rating_scale(row)
+    if lock is None:
+        return reference or classic_scale()
+    locked = declared_rating_scale(lock)
+    year, locked_year = row.get("year"), lock.get("year")
+    if year is not None and locked_year is not None and year != locked_year:
+        raise ValueError("reference year disagrees with the cohort lock")
+    if reference is not None and locked is not None and reference.key != locked.key:
+        raise ValueError("reference rating_scale disagrees with the cohort lock")
+    return locked or reference or classic_scale()
+
+
+def require_finite_number(value: Any, field: str) -> None:
+    if type(value) in (int, float):
+        try:
+            if math.isfinite(value):
+                return
+        except OverflowError:
+            pass
+    raise ValueError(f"{field} must be a finite number")
 
 
 def require_official_mean(value: Any, scale: RatingScale) -> None:
@@ -222,14 +276,9 @@ def require_official_mean(value: Any, scale: RatingScale) -> None:
     scores is not itself a scale point, so 7 is allowed on the 2024 scale and
     0 is allowed on the 2026 scale.
     """
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-    ):
-        raise ValueError("final_rating must be a finite number")
-    if not scale.minimum <= float(value) <= scale.maximum:
-        raise ValueError(f"final_rating {value} is outside {scale.label()}")
+    require_finite_number(value, "final_rating")
+    if not scale.minimum <= value <= scale.maximum:
+        raise ValueError(f"final_rating is outside {scale.label()}")
 
 
 def official_rating_summary(reviews: list[dict], year: int | None) -> dict[str, Any]:
@@ -279,7 +328,7 @@ def units(fields: dict) -> dict[str, str]:
     lines = [
         sentence
         for key, value in fields.items()
-        if isinstance(value, str) and not _score_field(key)
+        if isinstance(value, str) and not score_field(key)
         for sentence in sentences(value)
     ]
     return {f"s{i}": s for i, s in enumerate(dict.fromkeys(lines), 1)}
@@ -309,7 +358,7 @@ def prospective_comments(comments: dict) -> dict:
         raise TypeError("comments must be an object")
     cleaned: dict = {}
     for reviewer, body in comments.items():
-        if _score_field(reviewer):
+        if score_field(reviewer):
             continue
         if isinstance(body, str):
             text = neutralize_label_text(body)
@@ -320,7 +369,7 @@ def prospective_comments(comments: dict) -> dict:
             continue
         kept = {}
         for key, value in body.items():
-            if _score_field(key) or not isinstance(value, str):
+            if score_field(key) or not isinstance(value, str):
                 continue
             text = neutralize_label_text(value)
             if text and not label_leak(text):

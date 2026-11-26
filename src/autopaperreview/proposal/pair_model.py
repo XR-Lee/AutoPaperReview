@@ -9,6 +9,7 @@ from tokenizers import Tokenizer
 from ..hashing import sha256_file
 from .material import ORDER, material
 from .data import digest, read
+from .leak_audit import apply_leak_audit
 
 
 
@@ -56,8 +57,10 @@ class PairEvaluator:
             if self.replicates.shape != (meta['bootstrap'], len(self.coefficient)) or not np.isfinite(self.replicates).all():
                 raise ValueError('invalid stability weight dimensions')
 
-    def encode_pair(self, left, right):
-        a, b = [self.tokenizer.encode('\n'.join(x), add_special_tokens=False).ids for x in (left, right)]
+    def encode_pair(self, left, right, *, leak_judge=None):
+        body = {"left": '\n'.join(left), "right": '\n'.join(right)}
+        apply_leak_audit(body, leak_judge)
+        a, b = [self.tokenizer.encode(text, add_special_tokens=False).ids for text in body.values()]
         n = min(96, len(a), len(b))
         if n == 0:
             return None, 0
@@ -71,13 +74,13 @@ class PairEvaluator:
         feature = np.concatenate(((cls[0] - cls[1]) * .5, (contrast[0] - contrast[1]) * .5))
         return feature.astype(float), n
 
-    def preference(self, left, right):
-        feature, n = self.encode_pair(left, right)
+    def preference(self, left, right, *, leak_judge=None):
+        feature, n = self.encode_pair(left, right, leak_judge=leak_judge)
         return (float(expit((feature / self.scale) @ self.coefficient)) if feature is not None else None), n
 
-    def compare(self, first, second):
+    def compare(self, first, second, *, leak_judge=None):
         left, right = material(first), material(second)
-        feature, n = self.encode_pair(left, right)
+        feature, n = self.encode_pair(left, right, leak_judge=leak_judge)
         p = None
         bounds = None
         direction = 'insufficient_material'

@@ -8,6 +8,10 @@ from autopaperreview.proposal import clarification, clarification_protocol
 from autopaperreview.proposal.data import digest
 
 
+def clean_judge(_):
+    return {"verdict": "clean"}
+
+
 class ProposalClarificationTest(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -48,7 +52,7 @@ class ProposalClarificationTest(unittest.TestCase):
             clarification_protocol.validate(stage, value, data)
             return stage, value
         with patch.object(clarification, "judgment", side_effect=fake):
-            result = clarification.clarify(self.item, self.cache)
+            result = clarification.clarify(self.item, self.cache, leak_judge=clean_judge)
         self.assertEqual(stages, ["question", "source-screen", "resolve", "resolve", "verify"])
         self.assertEqual(result["source"]["evidence"]["original_passage_ids"], ["author-a"])
         self.assertEqual(result["state"], "resolved_from_source")
@@ -72,10 +76,10 @@ class ProposalClarificationTest(unittest.TestCase):
         bad = copy.deepcopy(self.item)
         bad["proposal"]["problem"] = "A different toy question."
         with self.assertRaisesRegex(ValueError, "fingerprints"):
-            clarification.clarify(bad, self.cache, cached_only=True)
-        self.assertEqual(clarification.clarify({"proposal": {}}, self.cache)["state"], "insufficient_prospective_text")
+            clarification.clarify(bad, self.cache, cached_only=True, leak_judge=clean_judge)
+        self.assertEqual(clarification.clarify({"proposal": {}}, self.cache, leak_judge=clean_judge)["state"], "insufficient_prospective_text")
         with self.assertRaisesRegex(ValueError, "missing cached question"):
-            clarification.clarify(self.item, self.cache, cached_only=True)
+            clarification.clarify(self.item, self.cache, cached_only=True, leak_judge=clean_judge)
 
     def test_single_object_and_empty_batch_preserve_input_shape(self):
         from types import SimpleNamespace
@@ -92,8 +96,8 @@ class ProposalClarificationTest(unittest.TestCase):
 
     def test_refusal_is_cached_and_not_retried(self):
         with patch.object(clarification, "run_command", side_effect=RuntimeError('{"stop_reason":"refusal"}')) as run:
-            first = clarification.clarify(self.item, self.cache)
-            second = clarification.clarify(self.item, self.cache, cached_only=True)
+            first = clarification.clarify(self.item, self.cache, leak_judge=clean_judge)
+            second = clarification.clarify(self.item, self.cache, cached_only=True, leak_judge=clean_judge)
         self.assertEqual(run.call_count, 1)
         self.assertEqual(first, second)
         self.assertEqual(first["state"], "no_material_question")
