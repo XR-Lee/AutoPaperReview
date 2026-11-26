@@ -110,6 +110,13 @@ class TestProposalPriority(unittest.TestCase):
                     "revision_ms": 2,
                     "forum": "two",
                 },
+                {
+                    "title": "Descriptive mark catalogues",
+                    "abstract": "Adaptive indexing supports map keys for grouping painted symbols.",
+                    "year": 2022,
+                    "revision_ms": 3,
+                    "forum": "three",
+                },
             ] + [
                 {
                     "title": f"Other fixture {i}",
@@ -129,6 +136,8 @@ class TestProposalPriority(unittest.TestCase):
                 {"problem": "Adaptive indexing in archives"},
                 rows[0]["title"],
                 rows[0]["abstract"],
+                target_year=2024,
+                cutoff_ms=20,
             )
             self.assertNotIn("one", [h["forum"] for h in hits])
             self.assertIn("two", [h["forum"] for h in hits])
@@ -280,10 +289,11 @@ class TestPriorityBundle(unittest.TestCase):
                 {
                     "opinion": "A useful way to compare names.",
                     "note": "training-example",
+                    "opinion_ms": 10,
                 }
             ]
         }
-        out = merit.field_packet(proposal, earlier, database)
+        out = merit.field_packet(proposal, earlier, database, cutoff_ms=20)
         self.assertNotIn("training-example", str(out))
         self.assertNotIn("earlier_peer_opinions", out["proposal"])
         self.assertEqual(
@@ -331,7 +341,8 @@ class TestContrastiveProposalReview(unittest.TestCase):
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
             row.setdefault("revision_ms", 10)
-        packet, scores = contrast.packet(target, bank)
+            row.setdefault("opinion_ms", 11)
+        packet, scores = contrast.packet(target, bank, target_year=2024, cutoff_ms=20)
         self.assertNotIn("HELD-OUT", str(packet))
         self.assertEqual(len(scores), 6)
         self.assertEqual(
@@ -372,7 +383,8 @@ class TestContrastiveProposalReview(unittest.TestCase):
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
             row.setdefault("revision_ms", 10)
-        matched, _ = contrast.packet(target, bank, {"query": "pollen microscope grain"})
+            row.setdefault("opinion_ms", 11)
+        matched, _ = contrast.packet(target, bank, {"query": "pollen microscope grain"}, target_year=2024, cutoff_ms=20)
         self.assertEqual(matched["target"], target)
         self.assertTrue(
             all(

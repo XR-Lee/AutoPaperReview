@@ -21,13 +21,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from autopaperreview.proposal.data import read  # noqa: E402
+from autopaperreview.pipeline import _atomic_write  # noqa: E402
+from autopaperreview.proposal.data import read, require_distinct_output  # noqa: E402
 from autopaperreview.proposal.fixed_benchmark import evaluate_fixed  # noqa: E402
 from autopaperreview.proposal.repro_metrics import (  # noqa: E402
     EXTERNAL_DIR_ENV,
     PUBLISHED,
     committed_aggregates,
     headlines_match,
+    published_external_files,
+    repo_repro_dir,
     reproduce_headlines,
 )
 
@@ -55,11 +58,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if all(path is not None for path in supplied):
+        inputs = supplied
         missing = [str(path) for path in supplied if not path.is_file()]
         if missing:
             print("missing cohort artifact: " + ", ".join(missing), file=sys.stderr)
             return 2
         try:
+            if args.output is not None:
+                require_distinct_output(args.output, *inputs)
+            if args.bootstrap < 0 or args.stratified_draws < 0:
+                raise ValueError("resampling draws must be non-negative")
             result = evaluate_fixed(
                 read(args.manifest),
                 read(args.predictions),
@@ -67,13 +75,27 @@ def main(argv: list[str] | None = None) -> int:
                 bootstrap=args.bootstrap,
                 stratified_draws=args.stratified_draws,
             )
-        except (OSError, ValueError) as exc:
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
             print(f"invalid cohort artifact: {exc}", file=sys.stderr)
             return 2
     else:
         external = args.root
         if external is None and os.environ.get(EXTERNAL_DIR_ENV):
             external = Path(os.environ[EXTERNAL_DIR_ENV])
+        try:
+            folder = repo_repro_dir()
+            inputs = (folder / "aggregates.json",)
+            if external is not None:
+                inputs += (
+                    folder / "external-sha256.json",
+                    folder / "external-hmac-sha256.json",
+                    *(external / name for name in published_external_files()),
+                )
+            if args.output is not None:
+                require_distinct_output(args.output, *inputs)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"invalid reproduction output or manifest: {exc}", file=sys.stderr)
+            return 2
         if external is None:
             result = committed_aggregates()
         else:
@@ -97,9 +119,14 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(text)
                 return 1
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text, encoding="utf-8")
+    if args.output is not None:
+        try:
+            require_distinct_output(args.output, *inputs)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(args.output, text)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"could not write reproduction result: {exc}", file=sys.stderr)
+            return 2
     sys.stdout.write(text)
     return 0
 

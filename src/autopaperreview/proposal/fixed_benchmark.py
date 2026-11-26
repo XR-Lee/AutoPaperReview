@@ -6,12 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..public_calibration import assert_local_only
-from .cohort import index_by_forum, validate_manifest, validate_predictions, validate_references
-from .data import digest, read, require_official_mean, scale_for_reference, write
+from .cohort import case_split, index_by_forum, validate_manifest, validate_predictions, validate_references
+from .data import digest, read, require_distinct_output, require_official_mean, scale_for_reference, write
 from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
 from .leak_audit import model_leak_judge, require_leak_judge
-from .priority import add_screen_provider, claude_argv, load_profile, rank, screen_rank_inputs, text_packet
-from .prior_index import norm_arxiv
+from .priority import (
+    add_screen_provider, claude_argv, load_profile, needs_historical_bounds, rank, screen_rank_inputs, text_packet,
+)
+from .prior_index import historical_bounds, norm_arxiv
 
 
 def _present(source, field):
@@ -57,7 +59,7 @@ def cohort_cases(manifest):
     """Any locked test list. The digest is the sorted forum ids, not a fixed n."""
     validate_manifest(manifest, allow_legacy=True)
     all_ids = index_by_forum(manifest["cases"], "manifest cases")
-    test = {fid: c for fid, c in all_ids.items() if c.get("split", "test") == "test"}
+    test = {fid: c for fid, c in all_ids.items() if case_split(c, legacy="version" not in manifest) == "test"}
     if not test:
         raise ValueError("manifest has no test cases")
     expected = manifest.get("ids_sha256")
@@ -215,10 +217,15 @@ def blind_inputs(manifest, proposals):
 
 
 def predict_dispatch(args):
+    output = assert_local_only(args.output)
+    require_distinct_output(output, args.manifest, args.proposals, args.profile)
     inputs = blind_inputs(read(args.manifest), read(args.proposals))
     profile, folder = load_profile(args.profile)
+    require_distinct_output(output, *(folder / name for name in profile.get("assets", {})))
+    if needs_historical_bounds(profile):
+        for _, _, metadata in inputs:
+            historical_bounds(metadata.get("year"), metadata.get("cutoff_ms"))
     root = assert_local_only(args.work)
-    output = assert_local_only(args.output)
     judge = require_leak_judge(model_leak_judge(
         root / "cache", "claude-opus-5-5", claude_argv(), 240, cached_only=args.cached_only,
     ))
@@ -269,8 +276,10 @@ def predict_dispatch(args):
 
 
 def dispatch(args):
+    output = assert_local_only(args.output)
+    require_distinct_output(output, args.manifest, args.predictions, args.references)
     result = evaluate_fixed(
         read(args.manifest), read(args.predictions), read(args.references)
     )
-    write(assert_local_only(args.output), result)
+    write(output, result)
     return 0

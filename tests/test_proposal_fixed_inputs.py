@@ -1,12 +1,15 @@
+import io
 import subprocess
 import sys
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from autopaperreview.cli import main
 from autopaperreview.proposal.data import digest, write
-from autopaperreview.proposal.fixed_benchmark import blind_inputs, evaluate_fixed
+from autopaperreview.proposal.fixed_benchmark import blind_inputs, cohort_cases, evaluate_fixed
 from autopaperreview.proposal.reference_coding import code_paper, validate_cases
 from autopaperreview.rating_scales import scale_for_key
 
@@ -62,7 +65,7 @@ class ProposalFixedInputTests(unittest.TestCase):
             self.evaluate(lock, self.reference(rating_scale="range:-4-4"))
 
     def test_malformed_scale_rejected_for_lock_and_reference_before_model(self):
-        for value in (None, "", " \t", [], {}, 4, False):
+        for value in ("", " \t", [], {}, 4, False):
             with self.subTest(value=value):
                 ref = self.reference(rating_scale=value)
                 row = {**ref, "reviews": []}
@@ -76,6 +79,71 @@ class ProposalFixedInputTests(unittest.TestCase):
                     self.evaluate(self.manifest(), ref)
                 with self.assertRaisesRegex(ValueError, "rating_scale"):
                     self.evaluate(self.manifest(rating_scale=value), self.reference())
+
+    def test_null_reference_scale_uses_the_lock_but_null_lock_scale_is_invalid(self):
+        ref = self.reference(rating_scale=None, final_rating=0)
+        validate_cases([{**ref, "year": 2026, "reviews": []}])
+        self.assertEqual(self.evaluate(self.manifest(year=2026), ref)["n"], 1)
+        with self.assertRaisesRegex(ValueError, "rating_scale"):
+            self.evaluate(self.manifest(rating_scale=None), self.reference())
+
+    def test_non_string_manifest_and_reference_strata_are_rejected(self):
+        for value in (None, [], {}, 3, True):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "stratum"):
+                self.evaluate(self.manifest(stratum=value), self.reference())
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "stratum"):
+                self.evaluate(self.manifest(), self.reference(stratum=value))
+
+    def test_versionless_partition_alias_cannot_enter_as_a_test_case(self):
+        lock = self.manifest()
+        del lock["version"]
+        lock["cases"].append({"forum": "synthetic-sealed", "partition": "holdout"})
+        self.assertEqual(set(cohort_cases(lock)), {self.forum})
+        lock["cases"][1]["split"] = "test"
+        with self.assertRaisesRegex(ValueError, "conflicting cohort split"):
+            cohort_cases(lock)
+
+    def test_evaluate_rank_rejects_output_alias_of_input(self):
+        with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            paths = {name: root / f"{name}.json" for name in ("manifest", "predictions", "references")}
+            write(paths["manifest"], self.manifest())
+            write(paths["predictions"], [{"forum": self.forum, "overall": 3}])
+            write(paths["references"], [self.reference()])
+            original = {path: path.read_bytes() for path in paths.values()}
+            output = root / "output.json"
+            output.hardlink_to(paths["predictions"])
+            options = [arg for name, path in paths.items() for arg in (f"--{name}", str(path))]
+            run = subprocess.run([
+                sys.executable, "-m", "autopaperreview", "proposal-review", "evaluate-rank",
+                *options, "--output", str(output),
+            ], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 2, run.stderr)
+            self.assertIn("output must be distinct", run.stderr)
+            self.assertEqual({path: path.read_bytes() for path in paths.values()}, original)
+
+    def test_predict_rank_requires_historical_dates_on_the_lock(self):
+        with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            ids = [f"synthetic-locked-{i}" for i in range(100)]
+            cases = [{"forum": forum, "split": "test", "year": 2024, "cutoff_ms": 20} for forum in ids]
+            write(root / "proposals.json", [{"forum": forum, "proposal": "Study routing patterns."} for forum in ids])
+            write(root / "profile.json", {"ranker": {"names": ["field_priority"]}})
+            arguments = ["proposal-review", "predict-rank", "--screen-outcomes"]
+            for name in ("manifest", "proposals", "profile", "output", "work"):
+                arguments.extend([f"--{name}", str(root / f"{name}.json")])
+            for field, message in (("year", "target year"), ("cutoff_ms", "cutoff")):
+                first = dict(cases[0])
+                del first[field]
+                write(root / "manifest.json", {"version": 1, "cases": [first, *cases[1:]],
+                                              "ids_sha256": digest(sorted(ids))})
+                stderr = io.StringIO()
+                with (self.subTest(field=field), redirect_stderr(stderr), redirect_stdout(io.StringIO()),
+                      patch("autopaperreview.proposal.fixed_benchmark.model_leak_judge") as judge):
+                    self.assertEqual(main(arguments), 2)
+                    self.assertIn(message, stderr.getvalue())
+                    judge.assert_not_called()
+            self.assertFalse((root / "output.json").exists())
 
     def test_locked_stratum_controls_resampling_and_decision_bit_is_strict(self):
         lock = self.manifest(stratum="locked-tier")

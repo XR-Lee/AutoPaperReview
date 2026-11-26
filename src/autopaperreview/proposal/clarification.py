@@ -8,8 +8,8 @@ from ..command_transport import recover_json, reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
-from .data import digest, read, reported_result, write
-from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
+from .data import digest, read, reported_result, require_distinct_output, write
+from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .outcome_screen import units
 from .sanitized import require_model_input, seal
 from .stages import claude_argv
@@ -28,10 +28,10 @@ STAGES = {
 def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
     require_leak_judge(leak_judge)
     data = require_model_input(seal(data))
-    apply_leak_audit(data, leak_judge)
+    message = apply_leak_audit(data, leak_judge)
     model, system, abstention = STAGES[stage]
     command = claude_argv()
-    request = dict(stage=stage, model=model, prompt=digest(system), command=digest(command), input=digest(data))
+    request = dict(stage=stage, model=model, prompt=digest(system), command=digest(command), input=payload_sha256(message))
     key = digest(request)
     path = cache / stage / (key + ".json")
     if path.exists():
@@ -42,10 +42,8 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
         return key, entry["output"]
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {key}")
-    feedback = ""
     disposition = "response"
     for attempt in range(3):
-        message = audited_prompt(data, leak_judge, feedback)
         try:
             raw, _ = run_command(command, system=system, model=model, prompt=message, timeout=timeout)
         except RuntimeError as exc:
@@ -65,6 +63,7 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
                 output, disposition = abstention, "invalid"
                 break
             feedback = "\nReturn the requested JSON and valid identifiers."
+            message = apply_leak_audit(data, leak_judge, feedback=feedback)
             continue
         if stage == "question" and not output.get("abstain") and protocol.outside_scope(" ".join(protocol.interpretations(output).values())):
             output, disposition = abstention, "scope"
@@ -179,8 +178,9 @@ def register(sub):
 
 def dispatch(args):
     root, output = assert_local_only(args.work), assert_local_only(args.output)
-    if output == args.input.resolve() or not protocol.finite_number(args.timeout) or args.timeout <= 0:
-        raise ValueError("use a separate output path and positive finite timeout")
+    require_distinct_output(output, args.input)
+    if not protocol.finite_number(args.timeout) or args.timeout <= 0:
+        raise ValueError("use a positive finite timeout")
     document = read(args.input)
     batch = isinstance(document, list)
     items = document if batch else [document]

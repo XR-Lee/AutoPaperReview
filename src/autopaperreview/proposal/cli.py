@@ -10,7 +10,7 @@ from ..hashing import sha256_file
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import evaluation
-from .data import apd_cases, prepare, read, reported_result, snapshot_cases, write
+from .data import apd_cases, prepare, read, reported_result, require_distinct_output, snapshot_cases, write
 from .fetch import SNAPSHOTS, download, live_cases
 from .runner import run_batch, stage_result
 from .leak_audit import model_leak_judge
@@ -195,6 +195,13 @@ def with_calibration(result, record, path):
 
 def dispatch(args):
     root = assert_local_only(args.work)
+    output = assert_local_only(args.output) if getattr(args, "output", None) else None
+    if output is not None:
+        inputs = tuple(
+            path for name in ("proposal", "calibration", "document", "papers", "forums", "holdout_after")
+            if (path := getattr(args, name, None)) is not None
+        )
+        require_distinct_output(output, root / "manifest.json", *inputs)
     root.mkdir(parents=True, exist_ok=True)
     if args.action in ("fetch", "import-apd"):
         with run_lock(root):
@@ -287,8 +294,8 @@ def dispatch(args):
         )
         record = read(path)
         result = with_calibration({"review": scored(record)}, record, args.calibration)
-    if getattr(args, "output", None):
-        write(assert_local_only(args.output), result)
+    if output is not None:
+        write(output, result)
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

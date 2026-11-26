@@ -8,7 +8,7 @@ from statistics import mean
 import argparse
 import sys
 import numpy as np
-from autopaperreview.proposal.data import digest, read, write
+from autopaperreview.proposal.data import digest, read, require_distinct_output, write
 from autopaperreview.proposal.overall_rank import evaluate
 from autopaperreview.proposal.priority import route
 from autopaperreview.public_calibration import spearman
@@ -335,8 +335,25 @@ if __name__ == "__main__":
         judge(args.workers)
     else:
         if args.action == "replay":
+            if args.rows is None:
+                parser.error("replay requires --rows")
+            try:
+                require_distinct_output(args.out, args.rows)
+            except (OSError, RuntimeError, ValueError) as exc:
+                parser.error(str(exc))
             rows = read(args.rows)
         else:
+            development = P / "development-rows.json"
+            inputs = (
+                Path("work/source-check/lock.json"),
+                Path("work/scale/development.json"),
+                *(P / "transfer").glob("*.json"),
+            )
+            try:
+                require_distinct_output(development, *inputs)
+                require_distinct_output(args.out, development, *inputs)
+            except (OSError, RuntimeError, ValueError) as exc:
+                parser.error(str(exc))
             rows = join()
-            write(P / "development-rows.json", rows)
+            write(development, rows)
         write(args.out, assess(rows))

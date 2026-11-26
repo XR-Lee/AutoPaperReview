@@ -11,8 +11,8 @@ from ..command_transport import recover_json, reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .clarification_protocol import outside_scope
-from .data import digest, read, reported_result, write
-from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
+from .data import digest, read, reported_result, require_distinct_output, write
+from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .material import material
 from .panel_prompts import FORECAST, SOURCE
 from .sanitized import require_model_input, seal
@@ -67,11 +67,11 @@ def validate_forecast(output, statements):
 def request(stage, body, cache, offline, *, leak_judge=None):
     require_leak_judge(leak_judge)
     body = require_model_input(seal(body))
-    apply_leak_audit(body, leak_judge)
+    message = apply_leak_audit(body, leak_judge)
     source_stage = stage == "source-review"
     prompt, validate = (SOURCE, validate_source) if source_stage else (FORECAST, validate_forecast)
     model, command = "claude-sonnet-5-5", claude_argv()
-    descriptor = dict(model=model, command=digest(command), input=digest(body), prompt=digest(prompt))
+    descriptor = dict(model=model, command=digest(command), input=payload_sha256(message), prompt=digest(prompt))
     if not source_stage:
         descriptor["version"] = 1
     key = digest(descriptor)
@@ -100,9 +100,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         if not offline:
             write(path, r)
         return key, r
-    feedback = ""
-    for _ in range(3):
-        message = audited_prompt(body, leak_judge, feedback)
+    for attempt in range(3):
         try:
             raw, _ = run_command(command, model=model, system=prompt, prompt=message, timeout=240)
         except RuntimeError as exc:
@@ -118,7 +116,9 @@ def request(stage, body, cache, offline, *, leak_judge=None):
             answer = json.loads(recover_json(text))
             validate(answer, body)
         except (ValueError, KeyError, TypeError):
-            feedback = "\nReturn the entire corrected JSON with valid references."
+            if attempt < 2:
+                feedback = "\nReturn the entire corrected JSON with valid references."
+                message = apply_leak_audit(body, leak_judge, feedback=feedback)
             continue
         r.update(state="response", output=answer)
         break
@@ -185,8 +185,10 @@ def evaluate(row, cache, offline, *, leak_judge=None):
 def dispatch(args):
     source, cache = assert_local_only(args.input), assert_local_only(args.work)
     dest = assert_local_only(args.output) if args.output else None
-    if dest and (dest == source or dest.is_relative_to(cache)):
+    if dest is not None and dest.is_relative_to(cache):
         raise ValueError("choose an output separate from input and cache")
+    if dest is not None:
+        require_distinct_output(dest, source)
     rows = read(source)
     if not isinstance(rows, list) or any(not isinstance(r, dict) or not isinstance(r.get("id"), str) for r in rows):
         raise ValueError("expected audited proposals with string IDs")

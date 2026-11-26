@@ -2,10 +2,16 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from autopaperreview.proposal import reference_coding, stages
-from autopaperreview.proposal.data import neutralize_label_text, retained_label_text
+from autopaperreview.proposal import data, reference_coding, stages
+from autopaperreview.proposal.data import (
+    neutralize_label_text,
+    reported_result,
+    retained_label_text,
+)
+from autopaperreview.proposal.leak_audit import REFERENCE_PROMPT, model_leak_judge
 
 
 class ProposalReferenceOffsetTests(unittest.TestCase):
@@ -28,7 +34,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
                 result = {"r1": {"score": 4, "used": list(reversed(range(len(quotes))))}}
             return json.dumps(result), 0.0
 
-        with TemporaryDirectory(prefix="apr-pr70-fix-r1-") as tmp:
+        with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
             with patch.object(stages, "run_command", side_effect=transport):
                 return reference_coding.code_paper(
                     row,
@@ -78,3 +84,97 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
         self.assertEqual(clean, neutralize_label_text(original))
         self.assertEqual(len(clean), len(offsets))
         self.assertTrue(all(pos is None or clean[i] == original[pos] for i, pos in enumerate(offsets)))
+
+    def test_completed_experimental_review_units_cannot_supply_a_reference(self):
+        reports = (
+            "Our experiments demonstrate that violet bands speed up sorting.",
+            "The pilot revealed fewer searches through the box ledger.",
+            "The authors measured fewer errors with the new shelf tags.",
+            "试验显示紫色标记缩短了清点时间。",
+        )
+        for report in reports:
+            with self.subTest(report=report):
+                self.assertTrue(reported_result(report))
+                coded = self.code(report, [report], include_independent=True)
+                self.assertEqual(self.calls, [])
+                self.assertIsNone(coded["prospective"])
+                self.assertEqual(coded["reviewers"][0]["evidence"], [])
+                self.assertIsNone(coded["independent_reference"]["prospective"])
+
+    def test_reference_extract_and_grade_receive_only_retained_prospective_text(self):
+        opinion = "The proposed layout makes the search assumptions testable."
+        report = "The trial showed that violet tags sped up sorting."
+        original = f"{report}\n{opinion}"
+        coded = self.code(original, [opinion], include_independent=True)
+        self.assertEqual([stage for stage, _ in self.calls], ["ref_extract", "ref_grade"])
+        self.assertEqual(self.calls[0][1], {"r1": {"u": opinion}})
+        self.assertEqual(self.calls[1][1], {"r1": [{"excerpt": opinion, "context": opinion}]})
+        for result in (coded, coded["independent_reference"]):
+            evidence = result["reviewers"][0]["evidence"][0]
+            self.assertEqual(original[evidence["start"] : evidence["end"]], opinion)
+            self.assertEqual(evidence["start"], original.index(opinion))
+
+    def test_reference_semantic_audit_blocks_completed_result_paraphrase(self):
+        text = "The violet tags made the boxes easier to find during the trial."
+        self.assertFalse(reported_result(text))
+        row = {
+            "forum": "synthetic-paraphrase",
+            "reviews": [{"id": "synthetic-observation", "units": {"u": text}}],
+        }
+        calls = []
+
+        def transport(command, *, system, prompt, model, timeout):
+            calls.append(system)
+            self.assertEqual(system, REFERENCE_PROMPT)
+            self.assertIn("experiment", system.casefold())
+            self.assertEqual(json.loads(prompt), {"r1": {"u": text}})
+            return '{"verdict":"leak"}', 0.0
+
+        with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            cache = Path(tmp)
+            command = ["synthetic-command"]
+            judge = model_leak_judge(cache, "synthetic-judge", command, 10)
+            with patch.object(stages, "run_command", side_effect=transport):
+                with self.assertRaisesRegex(ValueError, "leak audit blocked"):
+                    reference_coding.code_paper(row, cache, command, leak_judge=judge)
+        self.assertEqual(calls, [REFERENCE_PROMPT])
+
+    def test_same_quote_can_bind_distinct_overlapping_retained_spans(self):
+        original = "violet tags violet tags violet tags"
+        quote = "violet tags violet tags"
+        units = reference_coding.coding_units({"u": original})
+        item = {"id": "u", "quote": quote}
+        spans = reference_coding.bind_evidence(units, [item, item])
+        self.assertEqual([span["start"] for span in spans], [0, len("violet tags ")])
+        self.assertTrue(all(original[span["start"] : span["end"]] == quote for span in spans))
+        with self.assertRaisesRegex(ValueError, "contiguous retained review span"):
+            reference_coding.bind_evidence(units, [item, item, item])
+
+    def test_reference_protocol_binds_the_cleaning_algorithm_version(self):
+        command = ["synthetic-command"]
+        previous = reference_coding.protocol(command)
+        with patch.object(data, "REVIEW_CLEANING_VERSION", data.REVIEW_CLEANING_VERSION + 1):
+            current = reference_coding.protocol(command)
+        self.assertNotEqual(previous["text_cleaning_sha256"], current["text_cleaning_sha256"])
+
+    def test_reference_output_rejects_aliases_of_the_input(self):
+        with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            source = root / "reviews.json"
+            data.write(source, [{
+                "forum": "synthetic-input",
+                "reviews": [{"id": "synthetic-note", "units": {"u": "The plan is clear."}}],
+            }])
+            original = source.read_bytes()
+            symbolic = root / "symbolic.json"
+            symbolic.symlink_to(source)
+            linked = root / "linked.json"
+            linked.hardlink_to(source)
+            for output in (source, symbolic, linked):
+                with self.subTest(output=output.name):
+                    args = SimpleNamespace(jobs=1, timeout=1, inputs=source, output=output, work=root / "work")
+                    with patch.object(reference_coding, "model_leak_judge") as judge:
+                        with self.assertRaises(ValueError):
+                            reference_coding.dispatch(args)
+                    judge.assert_not_called()
+                    self.assertEqual(source.read_bytes(), original)

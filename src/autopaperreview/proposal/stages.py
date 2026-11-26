@@ -20,7 +20,15 @@ from .data import (
     write,
 )
 from .leak_audit import PROMPT as LEAK_AUDIT
-from .leak_audit import REPLY_PROTOCOL, apply_leak_audit, audited_prompt, parse_reply, require_leak_judge, validate_verdict
+from .leak_audit import (
+    REPLY_PROTOCOL,
+    apply_leak_audit,
+    decode_json_object,
+    parse_reply,
+    payload_sha256,
+    require_leak_judge,
+    validate_verdict,
+)
 from .sanitized import require_model_input
 
 SECTIONS = ("problem", "approach", "difference", "intended_value", "validation_plan")
@@ -288,29 +296,15 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
     require_leak_judge(leak_judge)
     if stage == "leak_audit":
         raise ValueError("use the configured leak audit judge")
-    return _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_only)
-
-
-def _invoke_leak_judge(source, cache, model, command, timeout, *, cached_only):
-    # The judge is the only command allowed to inspect data before its verdict.
-    return _invoke("leak_audit", source, cache, model, command, timeout, None, cached_only)
-
-
-def _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_only):
-    source = require_model_input(source)
-    is_judge = stage == "leak_audit"
-    if not is_judge:
-        apply_leak_audit(source, leak_judge)
-    # Include prompt and caller identity so a changed input, rubric or backend cannot reuse a judgment.
+    source = require_model_input(source, stage=stage)
+    prompt = apply_leak_audit(source, leak_judge, stage=stage)
     descriptor = {
         "stage": stage,
         "system_sha256": digest(PROMPTS[stage]),
-        "input_sha256": digest(source),
+        "input_sha256": payload_sha256(prompt),
         "model": model,
         "command_sha256": digest(command),
     }
-    if is_judge:
-        descriptor["reply_protocol"] = REPLY_PROTOCOL
     path = cache / stage / (digest(descriptor) + ".json")
     if path.exists():
         old = read(path)
@@ -319,23 +313,19 @@ def _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_on
         return path
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")
-    feedback = ""
-    for attempt in range(1 if is_judge else 3):
-        prompt = audited_prompt(source, leak_judge, feedback)
+    for attempt in range(3):
         raw, latency = run_command(
             command, system=PROMPTS[stage], prompt=prompt, model=model, timeout=timeout
         )
-        if is_judge:
-            result = parse_reply(raw)
-        else:
-            body, _ = reply_text(raw)
-            try:
-                result = validate(stage, json.loads(recover_json(body)), source)
-            except (KeyError, TypeError, ValueError) as exc:
-                if attempt == 2:
-                    raise ValueError(f"{stage} invalid after three calls: {exc}") from exc
-                feedback = "\nGenerate the complete JSON again, following the required schema."
-                continue
+        body, _ = reply_text(raw)
+        try:
+            result = validate(stage, json.loads(recover_json(body)), source)
+        except (KeyError, TypeError, ValueError) as exc:
+            if attempt == 2:
+                raise ValueError(f"{stage} invalid after three calls: {exc}") from exc
+            feedback = "\nGenerate the complete JSON again, following the required schema."
+            prompt = apply_leak_audit(source, leak_judge, stage=stage, feedback=feedback)
+            continue
         try:
             resolved_models = list(json.loads(raw).get("modelUsage", {}))
         except (AttributeError, ValueError):
@@ -351,6 +341,34 @@ def _invoke(stage, source, cache, model, command, timeout, leak_judge, cached_on
             },
         )
         return path
+
+
+def _invoke_leak_judge(prompt, system, cache, model, command, timeout, *, cached_only):
+    # The judge receives the same serialized user message as the business command.
+    descriptor = {
+        "stage": "leak_audit",
+        "system_sha256": digest(system),
+        "input_sha256": payload_sha256(prompt),
+        "model": model,
+        "command_sha256": digest(command),
+        "reply_protocol": REPLY_PROTOCOL,
+    }
+    path = cache / "leak_audit" / (digest(descriptor) + ".json")
+    if path.exists():
+        old = decode_json_object(path.read_text(encoding="utf-8"))
+        check(old.keys() == {"request", "output", "reply", "reply_sha256"}, "invalid cache receipt")
+        check(old["request"] == descriptor, "cache request mismatch")
+        reply = old["reply"]
+        check(isinstance(reply, str) and payload_sha256(reply) == old["reply_sha256"], "invalid cached reply digest")
+        result = parse_reply(reply)
+        check(validate_verdict(old["output"]) == result, "cached verdict mismatch")
+        return result
+    if cached_only:
+        raise ValueError(f"missing cached leak audit judgment for request {path.stem}")
+    raw, _ = run_command(command, system=system, prompt=prompt, model=model, timeout=timeout)
+    result = parse_reply(raw)
+    write(path, {"request": descriptor, "output": result, "reply": raw, "reply_sha256": payload_sha256(raw)})
+    return result
 
 
 def calibrated(review, calibration):

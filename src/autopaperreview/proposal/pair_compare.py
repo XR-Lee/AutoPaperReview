@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 from ..public_calibration import assert_local_only
-from .data import read, write
+from .data import read, require_distinct_output, write
 from .leak_audit import model_leak_judge, require_leak_judge
 from .stages import claude_argv
 
@@ -80,8 +80,10 @@ def dispatch(args):
     source = assert_local_only(args.input)
     directory = assert_local_only(args.model_dir)
     output = assert_local_only(args.output) if args.output else None
-    if output and (output in {source, directory} or output.parent == directory and output.name in MODEL_FILES | STABILITY_FILES):
-        raise ValueError("use a separate output path")
+    if output is not None:
+        require_distinct_output(
+            output, source, directory, *(directory / name for name in MODEL_FILES | STABILITY_FILES)
+        )
     left, right = select(read(source), args.left, args.right)
     def compare(cache):
         judge = model_leak_judge(cache, "claude-opus-5-5", claude_argv(), 240, cached_only=args.cached_only)

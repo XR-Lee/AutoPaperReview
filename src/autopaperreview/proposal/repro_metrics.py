@@ -27,6 +27,7 @@ from typing import Any
 from ..public_calibration import roc_auc, spearman
 from .data import read
 from .fixed_benchmark import evaluate_fixed
+from .overall_rank import top_fraction
 
 PUBLISHED = "headline aggregates are committed; per-paper rows stay outside git"
 EXTERNAL_DIR_ENV = "APR_PROPOSAL_REPRO_DIR"
@@ -36,7 +37,6 @@ TIER_SEEDS = {"fixed": 241125, "fresh": 241126, "replications": 241127}
 NLP_SEED = 11752
 NLP_DRAWS = 2000
 NLP_THRESHOLD = 6.625
-_HEADLINE_FIELDS = ("n", "decision_n", "rho", "auc")
 _RAW_MANIFEST = "external-sha256.json"
 _HMAC_MANIFEST = "external-hmac-sha256.json"
 
@@ -149,7 +149,7 @@ def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
 
 def _near(left: Any, right: Any) -> bool:
     """Finite numbers within 1e-6. NaN and infinity do not match anything."""
-    if isinstance(left, bool) or isinstance(right, bool):
+    if type(left) not in (int, float) or type(right) not in (int, float):
         return False
     try:
         got = float(left)
@@ -179,29 +179,44 @@ def headlines_match(recomputed: dict[str, Any], committed: dict[str, Any] | None
 
 
 def _match_cohorts(recomputed, expected):
+    if recomputed["recomputed"] is not True or recomputed["published_headlines"] != expected["published_headlines"]:
+        return False
     for name in ("fixed100", "confirm100", "replications199"):
         got = recomputed[name]
         want = expected[name]
-        for field in _HEADLINE_FIELDS:
+        if not _integer_fields_match(got, want, "n", "decision_n", "draws", "seed"):
+            return False
+        for field in ("rho", "auc"):
             if not _near(got[field], want[field]):
                 return False
         if not _interval_matches(got["rho_ci95"], want["rho_ci95"]):
             return False
-        if got["top20"]["included_positive_range"] != want["top20"]["included_positive_range"]:
+        count_range = got["top20"]["included_positive_range"]
+        if (
+            not isinstance(count_range, list)
+            or not all(type(value) is int for value in count_range)
+            or count_range != want["top20"]["included_positive_range"]
+        ):
             return False
         if not _near(got["top20"]["random_expected"], want["top20"]["random_expected"]):
             return False
-    if recomputed["replications199"]["enrolled"] != expected["replications199"]["enrolled"]:
+    if not _integer_fields_match(recomputed["replications199"], expected["replications199"], "enrolled"):
         return False
     got_nlp = recomputed["nlp84"]
     want_nlp = expected["nlp84"]
-    for field in ("n", "rho", "auc", "same_topic_comparable_pairs", "same_topic_concordance"):
+    if not _integer_fields_match(got_nlp, want_nlp, "n", "same_topic_comparable_pairs", "draws", "seed"):
+        return False
+    for field in ("rho", "auc", "same_topic_concordance", "threshold"):
         if not _near(got_nlp[field], want_nlp[field]):
             return False
     for field in ("rho_ci95", "auc_ci95"):
         if not _interval_matches(got_nlp[field], want_nlp[field]):
             return False
     return True
+
+
+def _integer_fields_match(got, want, *fields):
+    return all(type(got[field]) is int and got[field] == want[field] for field in fields)
 
 
 def _numpy():
@@ -376,23 +391,15 @@ def _auc(scores, decisions, numpy) -> float:
 
 
 def _top_fifth(scores, positive, numpy) -> dict[str, Any]:
-    count = len(scores)
-    k = math.ceil(count / 5)
+    top = top_fraction(scores.tolist(), positive.tolist(), threshold=1)
+    k = top["k"]
     cutoff = float(numpy.sort(scores)[-k])
-    strict = scores > cutoff
-    tied = scores == cutoff
-    strict_hits = int(positive[strict].sum())
-    tied_hits = int(positive[tied].sum())
-    available = int(tied.sum())
-    picked = k - int(strict.sum())
-    low = strict_hits + max(0, picked - (available - tied_hits))
-    high = strict_hits + min(picked, tied_hits)
     return {
         "k": k,
         "cut": cutoff,
         "positive": int(positive.sum()),
-        "included_positive_range": [low, high],
-        "random_expected": float(k * positive.mean()),
+        "included_positive_range": top["included_positive_range"],
+        "random_expected": top["expected_random"],
     }
 
 

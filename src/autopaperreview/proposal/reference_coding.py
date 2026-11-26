@@ -14,13 +14,18 @@ from .data import (
     cleaning_rules,
     digest,
     read,
+    require_distinct_output,
     require_official_mean,
     retained_label_text,
     scale_for_reference,
     write,
 )
-from .leak_audit import PROMPT as AUDIT_PROMPT
-from .leak_audit import REPLY_PROTOCOL, model_leak_judge, require_leak_judge
+from .leak_audit import (
+    REFERENCE_PROMPT,
+    REPLY_PROTOCOL,
+    model_leak_judge,
+    require_leak_judge,
+)
 from .merit import reference_packet
 from .sanitized import seal
 from .stages import PROMPTS, claude_argv, invoke
@@ -30,14 +35,14 @@ MODELS = {"ref_extract": "claude-sonnet-5-5", "ref_grade": "claude-opus-5-5"}
 
 def protocol(command):
     return {
-        "version": 2,
+        "version": 3,
         "models": dict(MODELS),
         "prompt_hashes": {stage: digest(PROMPTS[stage]) for stage in MODELS},
         "command_sha256": digest(command),
         "aggregation": "mean_available_reviewers",
         "positive_threshold": 3.5,
         "evidence_binding": "contiguous_retained_source",
-        "audit_prompt_sha256": digest(AUDIT_PROMPT),
+        "audit_prompt_sha256": digest(REFERENCE_PROMPT),
         "audit_reply_protocol": REPLY_PROTOCOL,
         "text_cleaning_sha256": digest(cleaning_rules()),
     }
@@ -103,7 +108,7 @@ def bind_evidence(units, extracted):
             start = text.find(quote, start + 1)
         else:
             raise ValueError("evidence quote must match a contiguous retained review span")
-        cursor[occurrence] = start + len(quote)
+        cursor[occurrence] = start + 1
         spans.append(
             {"unit": unit, "start": original, "end": original + len(quote), "quote": quote}
         )
@@ -119,10 +124,10 @@ def reviewer_result(note, spans, grade):
 
 
 def coding_units(units):
-    """Remove label sentences while retaining each unit's source offsets."""
+    """Remove factual labels and reported results while preserving source offsets."""
     cleaned = {}
     for key, text in units.items():
-        kept, offsets = retained_label_text(text)
+        kept, offsets = retained_label_text(text, screen_results=True)
         if kept:
             cleaned[key] = (kept, offsets)
     return cleaned
@@ -235,8 +240,7 @@ def dispatch(args):
         raise ValueError("jobs and timeout must be positive")
     root = assert_local_only(args.work)
     output = assert_local_only(args.output)
-    if args.inputs.resolve() == output:
-        raise ValueError("use a separate output file for coded references")
+    require_distinct_output(output, args.inputs)
     rows = read(args.inputs)
     validate_cases(rows)
     command = claude_argv()

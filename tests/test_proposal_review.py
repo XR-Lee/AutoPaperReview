@@ -74,6 +74,19 @@ class TestProposalReview(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
+    def test_intake_rejects_fractional_and_boolean_times_with_valid_fallback(self):
+        sub, review, group = note_case(1)
+        for invalid in (1.5, True):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(iclr_case({**sub, "tmdate": invalid}, [review], group))
+                self.assertIsNone(iclr_case(sub, [{**review, "tcdate": invalid}], group))
+                case = iclr_case(
+                    {**sub, "tmdate": invalid, "mdate": " +1 "},
+                    [{**review, "tcdate": invalid, "cdate": "+2"}],
+                    group,
+                )
+                self.assertEqual(case["provenance"]["first_review_created_ms"], 2)
+                self.assertEqual(case["provenance"]["submission_modified_ms"], 1)
     def test_separation_and_dates(self):
         sub, review, group = note_case(1)
         cross = {**review, "id": "foreign", "forum": "different"}

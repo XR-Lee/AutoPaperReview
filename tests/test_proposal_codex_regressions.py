@@ -256,7 +256,8 @@ class RetrievalExclusionTests(unittest.TestCase):
             row.setdefault("split", "dev")
             row.setdefault("year", 2018)
             row.setdefault("revision_ms", 10)
-        leaked, _scores = contrast.packet(target, bank)
+            row.setdefault("opinion_ms", 11)
+        leaked, _scores = contrast.packet(target, bank, target_year=2024, cutoff_ms=20)
         self.assertIn("SECRET-LABEL", json.dumps(leaked, default=to_json_data))
         for kwargs in (
             {"exclude_key": "target-key"},
@@ -264,7 +265,7 @@ class RetrievalExclusionTests(unittest.TestCase):
             {"exclude_arxiv": "arxiv:2099.00001"},
             {"exclude_title": "the paper"},
         ):
-            hidden, _scores = contrast.packet(target, bank, **kwargs)
+            hidden, _scores = contrast.packet(target, bank, target_year=2024, cutoff_ms=20, **kwargs)
             self.assertNotIn("SECRET-LABEL", json.dumps(hidden, default=to_json_data), kwargs)
 
     def test_rank_passes_exclude_key_and_retrieval_cutoffs(self) -> None:
@@ -297,6 +298,7 @@ class RetrievalExclusionTests(unittest.TestCase):
                         exclude_key="target-key",
                         forum="target-forum",
                         title="The Paper",
+                        year=2024,
                         cutoff_ms=50,
                         call=lambda *args, **kwargs: None,
                         leak_judge=clean_judge,
@@ -338,6 +340,14 @@ class RetrievalExclusionTests(unittest.TestCase):
                     "revision_ms": 10,
                     "forum": "earlier",
                     "arxiv": "2099.00010",
+                },
+                {
+                    "title": "Ledger review",
+                    "abstract": "Adaptive indexing of archive transcripts to compare mixed names.",
+                    "year": 2019,
+                    "revision_ms": 9,
+                    "forum": "earlier-companion",
+                    "arxiv": "2099.00013",
                 },
                 {
                     "title": "Same forum rewrite",
@@ -739,6 +749,7 @@ class AdversarialRegressionTests(unittest.TestCase):
                 "split": "dev",
                 "year": 2020,
                 "revision_ms": 10,
+                "opinion_ms": 11,
                 "target": extra.pop("target", 4.8),
                 "proposal": {
                     "problem": extra.pop(
@@ -776,7 +787,7 @@ class AdversarialRegressionTests(unittest.TestCase):
             example("wood-a", "wood-a", target=1.4, problem="Map birch wood grain in a quiet workshop."),
             example("wood-b", "wood-b", target=4.0, problem="Map spruce wood grain in a quiet workshop."),
         ]
-        hidden, _scores = contrast.packet(target, bank, exclude_arxiv="2099.00001")
+        hidden, _scores = contrast.packet(target, bank, exclude_arxiv="2099.00001", target_year=2024, cutoff_ms=20)
         text = json.dumps(hidden, default=to_json_data)
         for blocked in (
             "QUERY-PAPER",
@@ -791,7 +802,7 @@ class AdversarialRegressionTests(unittest.TestCase):
             self.assertNotIn(blocked, text)
         self.assertIn("low-note", text)
 
-    def test_prior_index_without_cutoff_skips_future_and_bad_timestamps(self) -> None:
+    def test_prior_index_with_explicit_cutoff_skips_future_and_bad_timestamps(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             rows = [
@@ -871,9 +882,11 @@ class AdversarialRegressionTests(unittest.TestCase):
                 retrieve(
                     database,
                     {"problem": "Adaptive indexing of archive transcripts"},
+                    target_year=2024,
                     cutoff_ms=float("inf"),
                 )
-            hits = retrieve(database, {"problem": "Adaptive indexing of archive transcripts"})
+            hits = retrieve(database, {"problem": "Adaptive indexing of archive transcripts"},
+                            target_year=2024, cutoff_ms=20)
             forums = [hit["forum"] for hit in hits]
             self.assertIn("earlier", forums)
             self.assertNotIn("year-2099", forums)

@@ -7,11 +7,9 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 
 from ..hashing import sha256_file
-from .material import ORDER, material
+from .material import material
 from .data import digest, read
-from .leak_audit import apply_leak_audit
-
-
+from .leak_audit import apply_leak_audit, require_leak_judge
 
 def expit(value):
     return np.exp(-np.logaddexp(0.0, -value))
@@ -58,14 +56,18 @@ class PairEvaluator:
                 raise ValueError('invalid stability weight dimensions')
 
     def encode_pair(self, left, right, *, leak_judge=None):
-        body = {"left": '\n'.join(left), "right": '\n'.join(right)}
-        apply_leak_audit(body, leak_judge)
-        a, b = [self.tokenizer.encode(text, add_special_tokens=False).ids for text in body.values()]
+        require_leak_judge(leak_judge)
+        a, b = [self.tokenizer.encode('\n'.join(side), add_special_tokens=False).ids for side in (left, right)]
         n = min(96, len(a), len(b))
         if n == 0:
             return None, 0
         a, b = truncate(a, n), truncate(b, n)
-        ids = np.array([[101, *a, 102, *b, 102], [101, *b, 102, *a, 102]], dtype='int64')
+        orders = [[101, *a, 102, *b, 102], [101, *b, 102, *a, 102]]
+        apply_leak_audit({
+            name: self.tokenizer.decode(order, skip_special_tokens=False)
+            for name, order in zip(("left_first", "right_first"), orders)
+        }, leak_judge)
+        ids = np.array(orders, dtype='int64')
         segments = np.zeros_like(ids)
         segments[:, n+2:] = 1
         h = self.net.run(None, dict(input_ids=ids, attention_mask=(ids != 0).astype('int64'), token_type_ids=segments))[0]

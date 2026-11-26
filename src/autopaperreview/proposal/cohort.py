@@ -48,6 +48,24 @@ def index_by_forum(doc: Any, label: str) -> dict:
     return indexed
 
 
+def case_split(row: dict, *, legacy: bool) -> str:
+    fields = ("split", "partition", "cohort") if legacy else ("split",)
+    values = [row[field] for field in fields if field in row]
+    if legacy and not values:
+        return "test"
+    allowed = CASE_SPLITS | {"val"} if legacy else CASE_SPLITS
+    if not values or any(not isinstance(value, str) or value not in allowed for value in values):
+        raise ValueError("split must be test, dev, or holdout")
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError("conflicting cohort split fields")
+    return values[0]
+
+
+def _validate_stratum(row: dict) -> None:
+    if "stratum" in row and not isinstance(row["stratum"], str):
+        raise ValueError("stratum must be a string")
+
+
 def validate_manifest(doc: Any, *, allow_legacy: bool = False) -> dict:
     """Validate a strict lock, or a versionless published or legacy lock."""
     manifest = _object(doc, "manifest")
@@ -64,9 +82,8 @@ def validate_manifest(doc: Any, *, allow_legacy: bool = False) -> dict:
     if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise ValueError("ids_sha256 must be a SHA-256 hex digest")
     for row in index_by_forum(manifest.get("cases"), "manifest cases").values():
-        split = row.get("split", "test" if legacy else None)
-        if not isinstance(split, str) or (split not in CASE_SPLITS and not (legacy and split == "val")):
-            raise ValueError("split must be test, dev, or holdout")
+        case_split(row, legacy=legacy)
+        _validate_stratum(row)
         case_allowed = {
             "forum",
             "split",
@@ -130,5 +147,6 @@ def validate_references(doc: Any, *, allow_legacy: bool = False) -> list:
         for field in ("prospective", "final_rating"):
             require_finite_number(row.get(field), field)
         validate_decision(row.get("accept"))
-        declared_rating_scale(row)
+        _validate_stratum(row)
+        declared_rating_scale(row, allow_null=True)
     return doc

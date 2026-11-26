@@ -11,6 +11,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import unquote
 
+from .confusables import ASCII_LOOKALIKES
+
 # Source fields a proposal may carry. Score, decision, and identity keys are absent.
 PROPOSAL_FIELDS = frozenset(
     {
@@ -89,24 +91,26 @@ SCORE_FIELDS = frozenset(
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
 _BIDI = re.compile(r"[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _BIDI_OVERRIDE = re.compile(r"[\u202d\u202e]")
-# A small Cyrillic/Greek lookalike table is enough to recover the vocabulary
-# of the rules below without changing the text ultimately shown to a model.
 _CONFUSABLES = {
-    "а": "a", "в": "b", "с": "c", "е": "e", "һ": "h", "і": "i",
-    "ј": "j", "к": "k", "ӏ": "l", "м": "m", "о": "o", "р": "p",
-    "ѕ": "s", "т": "t", "х": "x", "у": "y", "ԁ": "d", "ԛ": "q",
-    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v",
-    "ο": "o", "ρ": "p", "τ": "t", "υ": "y", "χ": "x",
-    "꞉": ":", "⁄": "/", "∕": "/",
+    char: target for target, characters in ASCII_LOOKALIKES.items() for char in characters
 }
-_CONFUSABLE_TRANSLATION = str.maketrans(_CONFUSABLES)
-_KEY_SEPARATOR = re.compile(r"[\s_-]+")
+_CASE_LOOKALIKES = {
+    char.lower(): target.lower() for char, target in _CONFUSABLES.items()
+    if char.lower() != char and len(char.lower()) == 1
+}
+_CONFUSABLE_TRANSLATION = str.maketrans(_CASE_LOOKALIKES | _CONFUSABLES)
+_KEY_SEPARATOR = re.compile(r"[\s_.-]+")
+_COMPACT_SCORE_FIELDS = frozenset(_KEY_SEPARATOR.sub("", key) for key in SCORE_FIELDS)
 _LATEX_COMMAND = re.compile(
-    r"\\(?:textbf|textit|textrm|textnormal|texttt|textsf|textsc|text|"
-    r"mathbf|mathrm|mathit|mathsf|mathtt|emph|underline|bfseries|itshape|bf|it|rm)"
-    r"(?=[\s{]|$)\s*"
+    r"\\(?:[a-z]+(?=\s*\{)|(?:protect|bfseries|itshape|rmfamily|sffamily|bf|it|rm)"
+    r"(?=[\s\\]|$))\s*"
+)
+_LATEX_FORMAT_ARGUMENT = re.compile(
+    r"\\(?:textcolor|colorbox|href|foreignlanguage)\s*\{[^{}]*\}\s*(?=\{)"
+    r"|\\color\s*\{[^{}]*\}"
 )
 _HTML_TAG = re.compile(r"</?(?:b|strong|i|em|s|span|code|u)(?:\s[^<>]*?)?\s*>")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _MARKDOWN_LINK = re.compile(r"!?\[([^\[\]\n]{1,160})\]\([^\s()]{1,2048}\)")
 _MARKUP_DELIMITER = re.compile(r"\\(?=[*_\x60~{}$])|[*_\x60~{}$]")
 _NUMBER_WORDS = {
@@ -133,30 +137,40 @@ _SPELLED_EMAIL = re.compile(
 )
 _EMAIL = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}")
 _OPENREVIEW = re.compile(
-    r"(?<![\w-])openreview\s*\.\s*net\s*/\s*(?:forum|pdf|notes?)(?![\w-])"
+    r"(?<![\w-])openreview\s*\.\s*net\.?\s*/\s*"
+    r"(?:forum|pdf|notes?|attachment|revisions|group)(?![\w-])"
     r"|\bforum\s*\?\s*id\s*=\s*[a-z0-9]{10}"
 )
 _ARXIV = re.compile(
     r"(?<![\w.])\d{4}\s*\.\s*\d{4,5}(?:v\d+)?(?!\w)"
-    r"|\barxiv\s*\.\s*org\s*/\s*(?:abs|pdf|html|ftp)\s*/"
+    r"|\barxiv\s*\.\s*org\.?\s*/\s*(?:abs|pdf|html|ftp)\s*/"
+    r"|\barxiv\s*:\s*\d{4}\s*\.\s*\d{4,5}\b"
     r"|\barxiv\s*:\s*[a-z]+(?:-[a-z]+)*(?:\.[a-z]{2})?/\d{7}(?:v\d+)?\b"
     r"|\b(?:astro-ph|cond-mat|cs|eess|gr-qc|hep-(?:ex|lat|ph|th)|math(?:-ph)?|"
     r"nlin|nucl-(?:ex|th)|physics|q-bio|q-fin|quant-ph|stat)(?:\.[a-z]{2})?"
     r"/\d{7}(?:v\d+)?\b"
 )
+_MEASUREMENT_VALUE = re.compile(
+    r"(?<![\w.])\d{4}\.\d{4,5}(?=\s+(?:nm|mm|cm|km|ms|kg|hz|khz|mhz|ghz|"
+    r"nanomet(?:er|re)s?|micromet(?:er|re)s?|millimet(?:er|re)s?|millisecond[s]?|"
+    r"second[s]?|kelvin|angstrom[s]?)\b)"
+)
+_DECIMAL_SCORE = r"[+-]?\d+(?:\.\d+)?"
+_SCORE_VALUE = rf"(?:{_DECIMAL_SCORE}|(?=[ivx])x{{0,3}}(?:ix|iv|v?i{{0,3}}))"
+_FACT_SEPARATOR = r"[:=\-\u2010-\u2015\u2212]"
 _SCORE = re.compile(
-    r"\b(?:overall|final|meta|reviewer|my|our)\s+(?:ratings?|scores?|recommendations?)\b"
-    r"|\b(?:ratings?|scores?|grades?|recommendations?)\s*[:=]\s*[+-]?\d"
-    r"|\b(?:ratings?|scores?|grades?|recommendations?)\s+(?:is|of)\s+[+-]?\d+(?:\.\d+)?"
-    r"(?=$|\s*[.!?,;)/]|\s+(?:out\s+of|(?:for|to)\s+(?:the\s+)?(?:submission|paper|proposal))\b)"
+    r"\b(?:meta|reviewer|my)\s+(?:ratings?|scores?|recommendations?)\b"
+    rf"|\b(?:ratings?|scores?|grades?|recommendations?)\s*"
+    rf"(?:{_FACT_SEPARATOR}\s*{_SCORE_VALUE}|(?:is|of)\s+{_DECIMAL_SCORE})"
+    r"(?=$|\s*[.!?,;()/\n\u2013\u2014-]|\s+(?:out\s+of|(?:for|to)\s+(?:the\s+)?(?:submission|paper|proposal))\b)"
 )
 _BARE_SCORE = re.compile(
-    r"(?:^|(?<=\n)|(?<=[.!?;])\s+)\s*[+-]?(?:10|\d)(?:\.\d+)?"
-    r"(?:\s*(?:/|out\s+of)\s*(?:10|\d))?\s*(?:[.!?;\n]|$)"
-    r"|(?<![\w./])[+-]?(?:10|\d)(?:\.\d+)?\s*(?:/|out\s+of)\s*10(?=\s*(?:[,!.?;)]|$))"
+    rf"(?:^|(?<=\n)|(?<=[.!?;])\s+)\s*{_SCORE_VALUE}"
+    rf"(?:\s*(?:/|out\s+of)\s*{_SCORE_VALUE})?\s*(?:[.!?;\n]|$)"
+    rf"|(?<=[,:])\s*{_SCORE_VALUE}\s*(?:/|out\s+of)\s*(?:10|x)(?=\s*(?:[,!.?;)]|$))"
 )
 _DECISION = re.compile(
-    r"\b(?:decision|recommendation)\s*[:=]\s*(?:\w+\s+){0,2}(?:accept|reject)\w*"
+    rf"\b(?:decision|recommendation)\s*{_FACT_SEPARATOR}\s*(?:\w+\s+){{0,2}}(?:accept|reject)\w*"
     r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
     r"|\b(?:strong|weak|clear|marginal)\s+(?:accept|reject)(?:ance)?\b"
     r"|\bcamera[\s\-]*ready\b"
@@ -170,15 +184,23 @@ _BARE_ALPHA_ID = re.compile(r"(?<![\w-])[A-Za-z]{10}(?![\w-])")
 _BARE_ALPHA_CASE_CHANGES = 5
 _ID_LABEL = re.compile(r"\b(?:forum|note|submission|openreview)\s+(?:identifier|id)\s*[:=]\s*[a-z0-9]{10}\b")
 _IDENTITY = re.compile(
-    r"\b(?:(?:corresponding|lead|first|senior)\s+)?(?:authors?|author\s+(?:list|name)|byline)"
-    r"\s*[:=]\s*[^\W\d_]"
-    r"|\b(?:written|authored|submitted|signed)\s+by\s+"
-    r"(?!(?:a|an|the|our|their|this|each|any|anonymous|hand|code)\b)"
-    r"[^\W\d_]+\s+[^\W\d_]+"
+    r"\b(?:(?:corresponding|lead|first|senior)\s+)?(?:author(?:s|\(s\))?|author\s+(?:list|names?)|byline|"
+    r"(?:written|authored|submitted|signed|prepared|created)\s+by|signature)"
+    rf"\s*(?:{_FACT_SEPARATOR}|(?<=\w)\s+(?:is|are|include)\b)\s*[^\W\d_]"
     r"|\\author\s*\{\s*[^\W\d_]"
     r"|(?:作者|通讯作者|投稿人|署名)\s*[:=]\s*[^\W\d_]"
 )
 _BYLINE = re.compile(r"(?:^|\n)[ \t]*(?i:by)[ \t]+([^\W\d_]+)[ \t]+([^\W\d_]+)\b")
+_ATTRIBUTION = re.compile(
+    r"\b(?i:(?:written|authored|submitted|signed|prepared|created)\s+by)\s+"
+    r"([^\W\d_]+)[ \t]+([^\W\d_]+)\b"
+)
+_SIGNED_LINE = re.compile(
+    rf"(?:^|\n)[ \t]*{_FACT_SEPARATOR}[ \t]+([^\W\d_]+)[ \t]+([^\W\d_]+)[ \t]*[.!]?(?=\n|$)"
+)
+_ACCESSION = re.compile(
+    r"(?i:\b(?:accession|gene|protein|catalog)\s+(?:id\s+)?)[A-Z]{1,5}_?\d{4,10}\b"
+)
 _SOURCE_UNIT = re.compile(r"[su]\d+\Z")
 _AUDIT_ITEM = re.compile(r"r\d+\.(importance|novelty|potential_value|community_impact)\Z")
 _CONTRAST_ALIAS = re.compile(r"pair[1-3][ab]\Z")
@@ -236,11 +258,12 @@ def _decode(text: str) -> str:
 def _plain_text(text: str) -> str:
     folded = unicodedata.normalize("NFKD", normalize_text(text))
     folded = "".join(c for c in folded if not unicodedata.category(c).startswith("M"))
-    return folded.translate(_CONFUSABLE_TRANSLATION)
+    return folded
 
 
 def _without_markup(text: str) -> str:
-    text = _HTML_TAG.sub("", _LATEX_COMMAND.sub("", text))
+    text = _HTML_TAG.sub("", _HTML_COMMENT.sub("", text))
+    text = _LATEX_COMMAND.sub("", _LATEX_FORMAT_ARGUMENT.sub("", text))
     text = _MARKDOWN_LINK.sub(r"\1", text)
     return _MARKUP_DELIMITER.sub("", text)
 
@@ -253,9 +276,9 @@ def fold_facts(folded: str) -> str:
 
 
 def score_field(key: object) -> bool:
-    name = _plain_text(_decode(str(key)))
+    name = _plain_text(_decode(str(key)).translate(_CONFUSABLE_TRANSLATION))
     return any(
-        _KEY_SEPARATOR.sub("_", variant.strip()) in SCORE_FIELDS
+        _KEY_SEPARATOR.sub("", variant.strip()) in _COMPACT_SCORE_FIELDS
         for variant in (name, _without_markup(name))
     )
 
@@ -265,30 +288,43 @@ def factual_leak(text: str, *, key: bool = False) -> bool:
     if not isinstance(text, str) or not text:
         return False
     decoded = _decode(text)
+    without_comments = _HTML_COMMENT.sub("", decoded)
     if _BIDI_OVERRIDE.search(decoded) or any(
         match[1][0].isupper() and match[2][0].isupper()
-        for match in _BYLINE.finditer(decoded)
+        for pattern in (_BYLINE, _SIGNED_LINE, _ATTRIBUTION)
+        for match in pattern.finditer(without_comments)
     ):
         return True
     for match in _BARE_ALPHA_ID.finditer(_without_markup(unicodedata.normalize("NFKC", decoded))):
         word = match[0]
         if sum(a.isupper() != b.isupper() for a, b in zip(word, word[1:])) >= _BARE_ALPHA_CASE_CHANGES:
             return True
-    plain = _plain_text(decoded)
+    # An explicitly labeled scientific accession can have the shape of a
+    # submission identifier. Remove it only from the identifier check.
+    for text_variant in dict.fromkeys((decoded, decoded.translate(_CONFUSABLE_TRANSLATION))):
+        plain = _plain_text(text_variant)
+        if _has_facts(plain, _plain_text(_ACCESSION.sub("", text_variant)), key=key):
+            return True
+    return False
+
+
+def _has_facts(plain: str, without_accessions: str, *, key: bool) -> bool:
     for variant in dict.fromkeys((plain, _without_markup(plain))):
         if _IDENTITY.search(variant) or _ID_LABEL.search(variant):
             return True
-        if any(
-            any(c.isdigit() for c in match[0]) and (key or any(c.isalpha() for c in match[0]))
-            for match in _BARE_ID.finditer(variant)
-        ):
-            return True
         folded = fold_facts(variant)
+        if _ARXIV.search(_MEASUREMENT_VALUE.sub("", folded)):
+            return True
         if any(rule.search(folded) for rule in (
-            _EMAIL, _OPENREVIEW, _ARXIV, _SCORE, _BARE_SCORE, _DECISION, _AWARD
+            _EMAIL, _OPENREVIEW, _SCORE, _BARE_SCORE, _DECISION, _AWARD
         )):
             return True
-    return False
+    identifiers = plain if key else without_accessions
+    return any(
+        any(c.isdigit() for c in match[0]) and (key or any(c.isalpha() for c in match[0]))
+        for variant in dict.fromkeys((identifiers, _without_markup(identifiers)))
+        for match in _BARE_ID.finditer(variant)
+    )
 
 
 def contains_factual_leak(value: Any) -> bool:
@@ -311,7 +347,8 @@ def factual_patterns() -> dict[str, Any]:
             "nfkc-strip-zero-width-percent-html-to-stability,"
             "strip-bidi,casefold,nfkd,strip-marks,confusables"
         ),
-        "confusables": dict(_CONFUSABLES),
+        "ascii_lookalikes_unicode_version": "16.0",
+        "confusables": _CASE_LOOKALIKES | _CONFUSABLES,
         "number_words": dict(_NUMBER_WORDS),
         "blocked_fields": sorted(SCORE_FIELDS),
         "bare_alpha_id_case_changes": _BARE_ALPHA_CASE_CHANGES,
@@ -323,7 +360,9 @@ def factual_patterns() -> dict[str, Any]:
                 "bidi_override": _BIDI_OVERRIDE,
                 "key_separator": _KEY_SEPARATOR,
                 "latex": _LATEX_COMMAND,
+                "latex_format_argument": _LATEX_FORMAT_ARGUMENT,
                 "html_tags": _HTML_TAG,
+                "html_comments": _HTML_COMMENT,
                 "markdown_links": _MARKDOWN_LINK,
                 "markup": _MARKUP_DELIMITER,
                 "spelled_number": _SPELLED_NUMBER,
@@ -332,6 +371,7 @@ def factual_patterns() -> dict[str, Any]:
                 "email": _EMAIL,
                 "openreview": _OPENREVIEW,
                 "arxiv": _ARXIV,
+                "measurement_value": _MEASUREMENT_VALUE,
                 "score": _SCORE,
                 "bare_score": _BARE_SCORE,
                 "decision": _DECISION,
@@ -341,6 +381,9 @@ def factual_patterns() -> dict[str, Any]:
                 "id_label": _ID_LABEL,
                 "identity": _IDENTITY,
                 "byline": _BYLINE,
+                "attribution": _ATTRIBUTION,
+                "signed_line": _SIGNED_LINE,
+                "scientific_accession": _ACCESSION,
             }.items()
         },
     }
@@ -423,11 +466,11 @@ def sanitize_proposal(source: Any) -> SanitizedProposal:
     return seal(flat)
 
 
-def _numeric_field(path: tuple, row: Mapping, key: str, value: Any) -> bool:
+def _numeric_field(stage: str | None, path: tuple, row: Mapping, key: str, value: Any) -> bool:
     """Permit only protocol metadata, with the shape and bounds of that stage."""
     if path and path[0] == "payload":
         path = path[1:]
-    if key == "score" and len(path) == 1:
+    if stage == "audit" and key == "score" and len(path) == 1:
         match = _AUDIT_ITEM.fullmatch(path[0]) if isinstance(path[0], str) else None
         return (
             match is not None
@@ -442,7 +485,10 @@ def _numeric_field(path: tuple, row: Mapping, key: str, value: Any) -> bool:
     if len(path) != 2:
         return False
     kind, member = path
-    if key == "year" and kind in {"prior_work", "earlier_research"}:
+    if key == "year" and (
+        (kind == "prior_work" and stage in {"challenge", "delta", "peer"})
+        or (kind == "earlier_research" and stage == "field")
+    ):
         return (
             type(member) is int
             and row.keys() in ({"title", "abstract", "year"}, {"title", "abstract", "year", "earlier_peer_opinions"})
@@ -450,12 +496,12 @@ def _numeric_field(path: tuple, row: Mapping, key: str, value: Any) -> bool:
             and 1 <= value <= 9999
         )
     if kind == "examples" and isinstance(member, str) and type(value) in (int, float):
-        if key == "prospective_grade":
+        if stage == "contrast" and key == "prospective_grade":
             valid_row = (
                 _CONTRAST_ALIAS.fullmatch(member)
                 and row.keys() == {"proposal", "prospective_grade", "reviewer_excerpts"}
             )
-        elif key == "reviewer_mean":
+        elif stage == "match" and key == "reviewer_mean":
             valid_row = (
                 _EXAMPLE_ALIAS.fullmatch(member)
                 and row.keys() == {"idea", "reviewer_mean", "example_opinions"}
@@ -466,7 +512,7 @@ def _numeric_field(path: tuple, row: Mapping, key: str, value: Any) -> bool:
     return False
 
 
-def _copy_checked(value: Any, *, frozen: bool, path: tuple = ()) -> Any:
+def _copy_checked(value: Any, *, frozen: bool, stage: str | None, path: tuple = ()) -> Any:
     if isinstance(value, str):
         text = str.__str__(value)
         if factual_leak(text):
@@ -483,16 +529,16 @@ def _copy_checked(value: Any, *, frozen: bool, path: tuple = ()) -> Any:
             if canonical in normalized:
                 raise ValueError("duplicate normalized model input key")
             normalized.add(canonical)
-            if _numeric_field(path, value, key, item):
+            if _numeric_field(stage, path, value, key, item):
                 copied[key] = item
                 continue
             if score_field(key) or factual_leak(key, key=True):
                 raise ValueError(f"model input {LEAK_MESSAGE}")
-            copied[key] = _copy_checked(item, frozen=frozen, path=(*path, key))
+            copied[key] = _copy_checked(item, frozen=frozen, stage=stage, path=(*path, key))
         return MappingProxyType(copied) if frozen else copied
     if isinstance(value, (list, tuple)):
         items = (
-            _copy_checked(item, frozen=frozen, path=(*path, index))
+            _copy_checked(item, frozen=frozen, stage=stage, path=(*path, index))
             for index, item in enumerate(value)
         )
         return tuple(items) if frozen else list(items)
@@ -505,18 +551,18 @@ def _copy_checked(value: Any, *, frozen: bool, path: tuple = ()) -> Any:
     raise TypeError("model input must be JSON data")
 
 
-def seal(document: Any) -> SanitizedProposal:
+def seal(document: Any, *, stage: str | None = None) -> SanitizedProposal:
     """Validate a composed JSON object and freeze every child."""
     if not isinstance(document, Mapping):
         raise TypeError("model input must be a JSON object")
-    copied = _copy_checked(document, frozen=True)
+    copied = _copy_checked(document, frozen=True, stage=stage)
     value = object.__new__(SanitizedProposal)
     object.__setattr__(value, "_items", copied)
     return value
 
 
-def require_model_input(value: Any) -> dict:
+def require_model_input(value: Any, *, stage: str | None = None) -> dict:
     """Check the final payload again and return the JSON snapshot to send."""
     if type(value) is not SanitizedProposal:
         raise TypeError("model input must be a SanitizedProposal")
-    return _copy_checked(value, frozen=False)
+    return _copy_checked(value, frozen=False, stage=stage)

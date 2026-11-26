@@ -6,10 +6,14 @@ from statistics import mean
 
 from .data import digest, filter_conclusion_sentences
 from .prior_index import (
+    REVISION_FIELDS,
     arxiv_identifiers,
+    available_before,
     development_row,
     earlier_record,
     historical_bounds,
+    historical_opinions,
+    latest_stamp,
     norm_arxiv,
     norm_title,
     words,
@@ -23,19 +27,6 @@ def terms(proposal):
     return set(words(" ".join(v for v in proposal.values() if isinstance(v, str))))
 
 
-def _excerpts(opinions):
-    if isinstance(opinions, str):
-        opinions = [opinions]
-    kept = []
-    for item in opinions or []:
-        if not isinstance(item, str):
-            continue
-        text = filter_conclusion_sentences(item)
-        if text:
-            kept.append(text)
-    return kept
-
-
 def _blocked(
     example,
     exclude_key,
@@ -47,7 +38,7 @@ def _blocked(
     if exclude_key and str(example.get("key") or "") == str(exclude_key):
         return True
     if not development_row(example) or not earlier_record(
-        example.get("year"), example.get("revision_ms"), bounds
+        example.get("year"), latest_stamp(example.get(field) for field in REVISION_FIELDS), bounds
     ):
         return True
     forum = example.get("forum")
@@ -80,8 +71,10 @@ def packet(
     bounds = historical_bounds(target_year, cutoff_ms)
     query = terms(target)
     items = []
+    keys = set()
+    excerpts = {}
     for example in bank:
-        if "target" not in example:
+        if "target" not in example or example["key"] in keys:
             continue
         if _blocked(
             example,
@@ -95,6 +88,18 @@ def packet(
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:
             continue
+        opinions = example.get("opinions")
+        dated = historical_opinions(opinions, bounds[1], snapshot_ms=example.get("opinion_ms"))
+        grade_ms = example.get("target_ms", example.get("opinion_ms"))
+        if grade_ms is not None:
+            if not available_before(grade_ms, bounds[1]):
+                continue
+        elif not dated or len(dated) != (len(opinions) if isinstance(opinions, list) else 1):
+            # Without a locked grade snapshot, each supplied excerpt must predate the target.
+            continue
+        key = example["key"]
+        keys.add(key)
+        excerpts[key] = [text for item in dated if (text := filter_conclusion_sentences(item))]
         items.append((example, tokens))
     vocab = Counter(k for _, xs in items for k in xs)
     weights = {k: log((len(items) + 1) / (v + 0.5)) ** 2 for k, v in vocab.items()}
@@ -151,7 +156,7 @@ def packet(
             examples[alias] = {
                 "proposal": proposal,
                 "prospective_grade": round(d["target"], 2),
-                "reviewer_excerpts": _excerpts(d.get("opinions")),
+                "reviewer_excerpts": excerpts[d["key"]],
             }
             scores[alias] = d["target"]
     return {"target": dict(target), "examples": examples}, scores

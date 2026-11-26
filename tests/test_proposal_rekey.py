@@ -10,6 +10,7 @@ from unittest.mock import patch
 from autopaperreview.proposal import repro_metrics
 from autopaperreview.proposal.data import digest
 from autopaperreview.proposal.fixed_benchmark import cohort_cases
+from scripts import rekey_external_repro
 from scripts.rekey_external_repro import rekey_tree
 
 
@@ -76,6 +77,82 @@ class ProposalRekeyTests(unittest.TestCase):
             rekey_tree(self.source, self.output, SALT)
         self.assertFalse((self.output / "a.json").exists())
         self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_rekey_detects_output_directory_replaced_by_source_after_reading(self):
+        self.output.mkdir()
+        displaced = self.root / "displaced-output"
+        convert = rekey_external_repro._rekey_text
+
+        def move_after_read(*args):
+            result = convert(*args)
+            self.output.rename(displaced)
+            self.source.rename(self.output)
+            return result
+
+        with patch.object(rekey_external_repro, "_rekey_text", side_effect=move_after_read):
+            with self.assertRaisesRegex(ValueError, "directory changed"):
+                rekey_tree(self.source, self.output, SALT)
+        self.assertEqual((self.output / self.original.name).read_text(encoding="utf-8"), self.payload)
+        self.assertEqual(list(displaced.iterdir()), [])
+
+    def test_rekey_rejects_directory_swap_during_output_preflight(self):
+        self.output.mkdir()
+        displaced = self.root / "displaced-output"
+        check_directory = rekey_external_repro._check_directory
+        swapped = False
+
+        def swap_on_first_check(path):
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                self.output.rename(displaced)
+                self.source.rename(self.output)
+                displaced.rename(self.source)
+            return check_directory(path)
+
+        with patch.object(rekey_external_repro, "_check_directory", side_effect=swap_on_first_check):
+            with self.assertRaisesRegex(ValueError, "aliases an input directory"):
+                rekey_tree(self.source, self.output, SALT)
+        self.assertEqual((self.output / self.original.name).read_text(encoding="utf-8"), self.payload)
+        self.assertEqual(list(self.source.iterdir()), [])
+
+    def test_rekey_staging_failure_leaves_all_existing_destinations_intact(self):
+        (self.source / "z.json").write_text(self.payload, encoding="utf-8")
+        self.output.mkdir()
+        saved = self.output / "a.json"
+        saved.write_text("previous output", encoding="utf-8")
+        stage = rekey_external_repro._stage_output
+        attempts = 0
+
+        def fail_second(*args):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 2:
+                raise OSError("synthetic staging failure")
+            return stage(*args)
+
+        with patch.object(rekey_external_repro, "_stage_output", side_effect=fail_second):
+            with self.assertRaisesRegex(OSError, "synthetic staging failure"):
+                rekey_tree(self.source, self.output, SALT)
+        self.assertEqual(saved.read_text(encoding="utf-8"), "previous output")
+        self.assertEqual(list(self.output.iterdir()), [saved])
+        self.assertEqual(self.original.read_text(encoding="utf-8"), self.payload)
+
+    def test_rekey_publish_uses_pinned_directory_after_check(self):
+        self.output.mkdir()
+        displaced = self.root / "displaced-output"
+        replace = os.replace
+
+        def move_on_publish(*args, **kwargs):
+            self.output.rename(displaced)
+            self.source.rename(self.output)
+            return replace(*args, **kwargs)
+
+        with patch.object(rekey_external_repro.os, "replace", side_effect=move_on_publish):
+            with self.assertRaisesRegex(ValueError, "directory changed"):
+                rekey_tree(self.source, self.output, SALT)
+        self.assertEqual((self.output / self.original.name).read_text(encoding="utf-8"), self.payload)
+        self.assertTrue((displaced / self.original.name).is_file())
 
     def test_rekey_updates_cohort_digest_and_verifies_complete_manifests(self):
         lock = {

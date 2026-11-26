@@ -21,8 +21,11 @@ from autopaperreview.fixed_eval import (
     assert_model_recorded,
     dev_ids,
     load_baseline_cache,
+    manifest_path,
 )
 from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
+from autopaperreview.pipeline import _atomic_write
+from autopaperreview.proposal.data import require_distinct_output
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
@@ -195,6 +198,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cache = assert_local_only(Path(args.cache))
     output = assert_local_only(Path(args.output))
+    inputs = [Path(value) for value in (args.ids, args.holdout_file) if value]
+    if args.fixed_set == "iclr-dev":
+        inputs.append(manifest_path())
+    inputs.append(cache / "fixed-eval-run.json")
+    inputs.extend(cache.glob("papers/*/project/our_score.json"))
+    inputs.extend(cache.glob("papers/*/heldout/human.json"))
+    if args.baseline_cache:
+        baseline = Path(args.baseline_cache).expanduser()
+        inputs.append(baseline / "metadata.json")
+        inputs.extend(baseline.glob("papers/*/our_score.json"))
+    try:
+        require_distinct_output(output, *inputs)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     fixed_meta: dict | None = None
     try:
         if args.fixed_set == "iclr-dev":
@@ -328,7 +346,12 @@ def main(argv: list[str] | None = None) -> int:
     if grounded_count:
         body["grounded_weaknesses_records"] = grounded_count
         body["forecast_prompt"] = "grounded-weaknesses" if grounded_count == len(records) else "mixed"
-    output.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        require_distinct_output(output, *inputs)
+        _atomic_write(output, json.dumps(body, ensure_ascii=False, indent=2) + "\n")
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(f"preregistered={LOCKED_CANDIDATE}")
     if fixed_meta is not None:
         print(

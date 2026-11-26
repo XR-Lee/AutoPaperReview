@@ -14,6 +14,7 @@ from typing import Any
 from ..iclr_anonymize import anonymize_iclr_submission
 from ..pipeline import _atomic_write
 from ..public_calibration import (
+    _finite_int,
     content_value,
     is_official_review,
     latest_official_reviews,
@@ -47,6 +48,19 @@ def write(path: Path, value: Any) -> None:
     )
 
 
+def require_distinct_output(output: Path, *inputs: Path) -> None:
+    """Refuse an output path that resolves to, or shares an inode with, an input."""
+    resolved = output.resolve()
+    for path in inputs:
+        if resolved == path.resolve():
+            raise ValueError("output must be distinct from every input file")
+        try:
+            if output.samefile(path):
+                raise ValueError("output must be distinct from every input file")
+        except FileNotFoundError:
+            continue
+
+
 # Conservative first pass. The compressor and label coder also check the meaning of every unit.
 OUTCOME = re.compile(
     r"\b(outperform\w*|achiev(?:e[ds]?|ing) (?:a |the )?(?:new |higher |better |state.of.the.art)|"
@@ -64,10 +78,12 @@ LINK = re.compile(r"https?://\S+|\b(?:github\.com|arxiv\.org)/\S+", re.IGNORECAS
 
 
 REPORTED_FINDING = re.compile(
-    r"\b(?:our |the )?(?:experiments?|results?|evaluations?)\s+(?:have |also )?"
+    r"\b(?:our |the )?(?:experiments?|results?|evaluations?|pilots?|trials?|benchmarks?)\s+(?:have |also )?"
     r"(?:demonstrat(?:e[ds]?|ing)|show(?:n|ed|s)?|confirm(?:ed|s)?|indicat(?:e[ds]?|ing)|reveal(?:ed|s)?)\b|"
     r"\b(?:achieved|obtained|attained)\s+(?:a |an |the )?(?:new |best |higher |lower |accuracy|score)|"
-    r"实验(?:证明|验证了)|结果(?:显示|表明)",
+    r"\b(?:we|(?:the )?authors)\s+(?:(?:have|had|also|then)\s+){0,3}(?:measured|observed|recorded)\b|"
+    r"\b(?:yielded|produced)\s+(?:a |an |the )?(?:measured|observed|empirical|statistically significant)\b|"
+    r"(?:实验|试验|测试)(?:证明|验证了|显示)|结果(?:显示|表明)|观察到|测得",
     re.IGNORECASE,
 )
 
@@ -86,6 +102,8 @@ _LABEL_SPLIT = re.compile(
 )
 _LABEL_TRIM = " \t-*"
 _LABEL_JOIN = " "
+# Bump when the review-span cleaning or offset mapping algorithm changes.
+REVIEW_CLEANING_VERSION = 2
 # Score and identity fields are never copied into a model packet. "contribution"
 # is not listed: APD uses that key for prose, and the ICLR numeric score is
 # excluded by the review-prose allowlist below.
@@ -104,6 +122,7 @@ def cleaning_rules() -> dict[str, Any]:
     """
     return {
         **factual_patterns(),
+        "review_cleaning_version": REVIEW_CLEANING_VERSION,
         "sentence_boundary": {"pattern": _LABEL_SPLIT.pattern, "flags": _LABEL_SPLIT.flags},
         "trim_chars": _LABEL_TRIM,
         "sentence_join": _LABEL_JOIN,
@@ -132,7 +151,7 @@ def assert_no_label_leak(value: Any, *, where: str) -> None:
         )
 
 
-def _retained_label_spans(text: str):
+def _retained_review_spans(text: str, *, screen_results: bool = False):
     if not isinstance(text, str) or not text.strip():
         return
     start = 0
@@ -140,7 +159,9 @@ def _retained_label_spans(text: str):
         end = separator.start() if separator is not None else len(text)
         part = text[start:end]
         sentence = part.strip(_LABEL_TRIM)
-        if sentence and not label_leak(sentence):
+        if sentence and not label_leak(sentence) and not (
+            screen_results and reported_result(sentence)
+        ):
             left = start + len(part) - len(part.lstrip(_LABEL_TRIM))
             yield left, left + len(sentence)
         if separator is not None:
@@ -150,16 +171,18 @@ def _retained_label_spans(text: str):
 def neutralize_label_text(text: str) -> str:
     """Drop rating, decision, award, acceptance, and identity sentences."""
     return _LABEL_JOIN.join(
-        text[start:end] for start, end in _retained_label_spans(text)
+        text[start:end] for start, end in _retained_review_spans(text)
     ).strip()
 
 
-def retained_label_text(text: str) -> tuple[str, tuple[int | None, ...]]:
+def retained_label_text(
+    text: str, *, screen_results: bool = False
+) -> tuple[str, tuple[int | None, ...]]:
     """Clean a review unit and map each retained character to the source."""
     parts = []
     offsets: list[int | None] = []
     previous_end = None
-    for start, end in _retained_label_spans(text):
+    for start, end in _retained_review_spans(text, screen_results=screen_results):
         if previous_end is not None:
             # A join is part of a verbatim quote only if it already existed
             # between these two retained source fragments.
@@ -225,11 +248,11 @@ def anonymized_submission_text(text: Any) -> str:
     return "\n".join(kept).strip() if seen else ""
 
 
-def declared_rating_scale(row: dict) -> RatingScale | None:
+def declared_rating_scale(row: dict, *, allow_null: bool = False) -> RatingScale | None:
     """Resolve scale metadata when a year or an explicit scale is present."""
     named = None
-    if "rating_scale" in row:
-        key = row["rating_scale"]
+    key = row.get("rating_scale")
+    if "rating_scale" in row and (key is not None or not allow_null):
         if not isinstance(key, str) or not key.strip():
             raise ValueError("rating_scale must be a non-empty string")
         try:
@@ -247,7 +270,7 @@ def declared_rating_scale(row: dict) -> RatingScale | None:
 
 def scale_for_reference(row: dict, *, lock: dict | None = None) -> RatingScale:
     """Resolve the scale for an official mean, inheriting a cohort lock."""
-    reference = declared_rating_scale(row)
+    reference = declared_rating_scale(row, allow_null=True)
     if lock is None:
         return reference or classic_scale()
     locked = declared_rating_scale(lock)
@@ -381,13 +404,9 @@ def prospective_comments(comments: dict) -> dict:
 
 def _millis(note: dict, *keys: str) -> int:
     for key in keys:
-        raw = note.get(key)
-        if raw in (None, ""):
-            continue
-        try:
-            return int(raw)
-        except (TypeError, ValueError, OverflowError):
-            continue
+        value = _finite_int(note.get(key))
+        if value is not None and value > 0:
+            return value
     return 0
 
 

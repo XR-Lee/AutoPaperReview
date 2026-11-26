@@ -8,13 +8,13 @@ from statistics import mean
 
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import apd_cases, assert_no_label_leak, digest, read, write
+from .data import apd_cases, assert_no_label_leak, digest, read, require_distinct_output, write
 from .leak_audit import apply_leak_audit, model_leak_judge, require_leak_judge
 from .sanitized import sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
-from .prior_index import retrieve, words
+from .prior_index import historical_bounds, retrieve, words
 from .stages import PROMPTS, SECTIONS, claude_argv, invoke, validate
 
 
@@ -97,6 +97,13 @@ def text_packet(doc):
     return sanitize_proposal(doc)
 
 
+_HISTORICAL_STAGES = {"challenge", "delta", "opinion", "field", "contrast"}
+
+
+def needs_historical_bounds(profile):
+    return any(stage_for_feature(name) in _HISTORICAL_STAGES for name in profile["ranker"]["names"])
+
+
 def rank(
     packet,
     root,
@@ -118,6 +125,8 @@ def rank(
     leak_judge=None,
 ):
     require_leak_judge(leak_judge)
+    if needs_historical_bounds(profile):
+        year, cutoff_ms = historical_bounds(year, cutoff_ms)
     packet = sanitize_proposal(packet)
     if legacy is not None:
         legacy = sanitize_proposal(legacy)
@@ -149,9 +158,9 @@ def rank(
         apply_leak_audit(legacy, leak_judge)
 
     def send(stage, body, model, command):
-        body = seal(body)
+        body = seal(body, stage=stage)
         if call is not None:
-            apply_leak_audit(body, leak_judge)
+            apply_leak_audit(body, leak_judge, stage=stage)
             return call(stage, body, root / "cache", model, command, timeout)
         return invoke(
             stage, body, root / "cache", model, command, timeout,
@@ -173,9 +182,7 @@ def rank(
                 f"model route or prompt differs from frozen {key} configuration"
             )
     query_packet = packet
-    uses_english_index = bool(
-        set(stages) & {"challenge", "delta", "opinion", "field", "contrast"}
-    )
+    uses_english_index = bool(set(stages) & _HISTORICAL_STAGES)
     if uses_english_index and len(words(" ".join(v for v in packet.values() if v))) < 5:
         qm, qa = route("search_terms")
         qp = send("search_terms", packet, qm, qa)
@@ -246,7 +253,7 @@ def rank(
             }
         if stage == "field":
             source = merit.field_packet(
-                packet, sources, read(folder / "prior-opinions.json")
+                packet, sources, read(folder / "prior-opinions.json"), cutoff_ms=cutoff_ms
             )
         if stage == "opinion":
             pm, pa = route("peer")
@@ -289,6 +296,8 @@ def register(sub):
     p.add_argument("--profile", type=Path, required=True)
     p.add_argument("--work", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--target-year", type=int, help="venue year required by historical retrieval profiles")
+    p.add_argument("--cutoff-ms", type=int, help="exclusive millisecond cutoff required by historical retrieval profiles")
     p.add_argument(
         "--screen-outcomes",
         action="store_true",
@@ -396,7 +405,13 @@ def screen_rank_inputs(packet, legacy, root, profile, *, cached_only=False, prov
 
 
 def dispatch(args):
+    output = assert_local_only(args.output)
+    require_distinct_output(output, args.proposal, args.profile)
     profile, folder = load_profile(args.profile)
+    require_distinct_output(output, *(folder / name for name in profile.get("assets", {})))
+    year, cutoff_ms = getattr(args, "target_year", None), getattr(args, "cutoff_ms", None)
+    if needs_historical_bounds(profile):
+        year, cutoff_ms = historical_bounds(year, cutoff_ms)
     root = assert_local_only(args.work)
     judge = require_leak_judge(model_leak_judge(root / "cache", "claude-opus-5-5", claude_argv(), 240))
     suffix = args.proposal.suffix.lower()
@@ -509,6 +524,8 @@ def dispatch(args):
             profile,
             folder,
             legacy=legacy,
+            year=year,
+            cutoff_ms=cutoff_ms,
             screen_receipt=evidence.get("proposal"),
             leak_judge=judge,
         )
@@ -534,5 +551,5 @@ def dispatch(args):
                 if row["overall"] is not None
                 else None
             )
-    write(assert_local_only(args.output), results if batch else results[0])
+    write(output, results if batch else results[0])
     return 0

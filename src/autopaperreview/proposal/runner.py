@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
-from .leak_audit import require_leak_judge
+from .leak_audit import payload_sha256, require_leak_judge, serialize_payload
 from .sanitized import seal
 from .stages import PROMPTS, audit_packet, invoke, proposal_text, validate
 
@@ -39,7 +39,7 @@ def run_batch(
         else:
             previous = stage_result(root, case, "compress")
             packet = proposal_text(previous["output"])
-        packet = seal(packet)
+        packet = seal(packet, stage=stage)
         path = invoke(stage, packet, root / "cache", model, command, timeout, leak_judge=leak_judge)
         write(
             target / f"{stage}.json",
@@ -88,7 +88,7 @@ def stage_result(root, case, stage):
     req = entry["request"]
     if (
         req["stage"] != stage
-        or req["input_sha256"] != digest(source)
+        or req["input_sha256"] != payload_sha256(serialize_payload(source))
         or req["system_sha256"] != digest(PROMPTS[stage])
     ):
         raise ValueError(f"stale {stage} result; rerun this stage")

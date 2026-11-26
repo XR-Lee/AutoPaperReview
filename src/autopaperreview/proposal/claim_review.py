@@ -14,8 +14,8 @@ from ..public_calibration import assert_local_only
 from .claim_prompts import FORECAST, GROUND, PROSPECTIVE
 from .clarification import plan_units
 from .clarification_protocol import outside_scope
-from .data import digest, read, write
-from .leak_audit import apply_leak_audit, audited_prompt, model_leak_judge, require_leak_judge
+from .data import digest, read, require_distinct_output, write
+from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .material import ORDER, material
 from .outcome_screen import units
 from .priority import route
@@ -64,10 +64,10 @@ def validate(stage, output, body):
 def request(stage, body, cache, offline, *, leak_judge=None):
     require_leak_judge(leak_judge)
     body = require_model_input(seal(body))
-    apply_leak_audit(body, leak_judge)
+    message = apply_leak_audit(body, leak_judge)
     model, command = route("outcome_screen") if stage == "prospective" else ("claude-sonnet-5-5", claude_argv())
     prompt = PROMPTS[stage]
-    descriptor = {"model": model, "command": digest(command), "input": digest(body), "prompt": digest(prompt)}
+    descriptor = {"model": model, "command": digest(command), "input": payload_sha256(message), "prompt": digest(prompt)}
     if stage == "forecast":
         descriptor.update(version=1, mode="forecast")
     key = digest(descriptor)
@@ -84,10 +84,8 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         return key, result
     if offline:
         raise ValueError(f"missing cached {stage} receipt {key}")
-    feedback = ""
     result = {"request": descriptor, "state": "invalid", "output": {}}
-    for _ in range(3):
-        message = audited_prompt(body, leak_judge, feedback)
+    for attempt in range(3):
         try:
             raw, _ = run_command(command, model=model, system=prompt,
                                  prompt=message, timeout=240)
@@ -104,7 +102,9 @@ def request(stage, body, cache, offline, *, leak_judge=None):
             parsed = json.loads(recover_json(text))
             validate(stage, parsed, body)
         except (ValueError, TypeError, KeyError):
-            feedback = "\nReturn the complete JSON again, following the required schema."
+            if attempt < 2:
+                feedback = "\nReturn the complete JSON again, following the required schema."
+                message = apply_leak_audit(body, leak_judge, feedback=feedback)
             continue
         result.update(state="response", output=parsed)
         break
@@ -257,8 +257,10 @@ def dispatch(args):
     profile = assert_local_only(args.model)
     cache = assert_local_only(args.work)
     target = assert_local_only(args.output) if args.output else None
-    if target and (target in (source, profile) or target.is_relative_to(cache)):
+    if target is not None and target.is_relative_to(cache):
         raise ValueError("choose an output separate from inputs, fitted parameters and model receipts")
+    if target is not None:
+        require_distinct_output(target, source, profile)
     rows, fitted = read(source), read(profile)
     judge = require_leak_judge(model_leak_judge(
         cache, "claude-sonnet-5-5", claude_argv(), 240, cached_only=args.cached_only,

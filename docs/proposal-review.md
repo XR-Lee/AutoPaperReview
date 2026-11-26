@@ -24,7 +24,7 @@ autopaperreview proposal-review export --work workdir/candidates --output workdi
 
 For the APR-style probabilistic forecast, run `run --stage forecast` after compression, then `export --reviewer forecast`. For a standalone file use `score --reviewer forecast`. One model call simulates a specialist, a reviewer from a neighboring area, and a prospective user. Each gives a distribution over scores 1–5 for each assessable dimension. The score averages their expected values. The raw distributions remain available in the export. These are simulated perspectives from one model.
 
-## Reproduce the public ICLR evaluation
+## Run a public ICLR evaluation
 
 The default intake downloads two SHA-256-pinned OpenReview API v2 snapshots from the [public dataset releases](https://github.com/ranpox/iclr2024-openreview-submissions/releases). Together they require about 1.3 GB. The October submission snapshot supplies abstracts and the November review snapshot supplies official reviewer comments. The default requires the stored submission modification time to precede the earliest official review creation time for that forum. The API v2 `--source api --year YEAR --pages N` alternative reads the current public notes through the shared OpenReview client. That client waits at least one second between calls. HTTP 403, or a browser check, stops the intake and does not fall through to search. Later revisions can leave few eligible forums. `--allow-late` opts into that retrospective setting and records it in the manifest. Follow the [OpenReview notes documentation](https://docs.openreview.net/how-to-guides/data-retrieval-and-modification/how-to-get-all-notes-for-submissions-reviews-rebuttals-etc) for the underlying data model.
 
@@ -78,9 +78,9 @@ autopaperreview proposal-review prioritize contribution.yaml --profile workdir/c
   --work workdir/priority --output workdir/priority/candidates.json
 ```
 
-Calibration banks require every supplied nonblank split alias to identify the development set. Contrast and prior retrieval also require candidates to precede the target year and cutoff. An unspecified year defaults to the current UTC year, and an unspecified cutoff defaults to the current time. Target forum, title, and normalized arXiv matches are excluded before ranking.
+Calibration banks require every supplied nonblank split alias to identify the development set. Historical retrieval requires both `--target-year` and `--cutoff-ms` for `prioritize`. The cutoff is an exclusive Unix timestamp in milliseconds. Prior and contrast candidates must precede both bounds. The prior index uses only eligible records to compute term frequencies and ranks, after excluding target forum, title, abstract, and normalized arXiv matches. Each historical opinion needs its own availability time, for example `opinion_ms`. Contrast banks may date a snapshot of plain-text excerpts with `opinion_ms`. A contrast grade needs a dated snapshot (`target_ms` or `opinion_ms`) or individually dated excerpts that all precede the cutoff.
 
-Each proposal model call uses a sealed packet. Authored sections have an allowlist, and assembled packets can include nested context and bounded calibration metadata. The sender rechecks the final packet for explicit scores, decisions, awards, and identifying material in keys and text. Before a screening, scoring, or evidence model call, the leak judge checks the complete packet for indirect and cross-field disclosures. The judge must return one well-formed JSON verdict object with the exact value `"clean"`. Route, prompt, and asset checks detect changes to a frozen profile's dependencies.
+Each proposal model call uses a sealed packet. Authored sections have an allowlist, and stages permit only their own nested context and bounded calibration metadata. The sender rechecks the packet for explicit scores, decisions, awards, and identifying material in keys and text. Screening, scoring, and evidence requests require a clean audit of their exact UTF-8 user payload, including any retry instructions. A receipt is reusable for that payload, judge prompt, model, and command. The accepted verdict is one JSON object with the exact value `"clean"`, either directly or in the `result` string of a supported successful CLI envelope. Route, prompt, and asset checks detect changes to a frozen profile's dependencies.
 
 ## Score a locked benchmark
 
@@ -88,7 +88,7 @@ Each proposal model call uses a sealed packet. Authored sections have an allowli
 
 `scripts/reproduce_proposal_rank.py` prints the committed aggregates by default. Set `APR_PROPOSAL_REPRO_DIR` or pass `--root` with a checksum-verified Raw or HMAC bundle to recompute the metrics and intervals. See [the reproduction README](../benchmarks/proposal/repro/README.md).
 
-Pass the array of anonymous proposal packets to `predict-rank`. Each record supplies a forum ID and proposal. Optional title and abstract identify self-matches in historical retrieval. Profiles using the short forecast can also take a `short_proposal` field. With `--cached-only`, each exact model request needs a matching judgment and a strict leak-audit receipt. Receipts from earlier audit protocols require a fresh audit. To obtain new judgments, omit `--cached-only`.
+Pass the array of anonymous proposal packets to `predict-rank`. Each record supplies a forum ID and proposal. Optional title and abstract identify self-matches in historical retrieval. For a profile using historical retrieval, the cohort lock must specify `year` and `cutoff_ms` for each test case. A locked `submission_ms` can supply the cutoff. Profiles using the short forecast can also take a `short_proposal` field. With `--cached-only`, each exact model request needs a matching judgment and a strict leak-audit receipt. The byte-based cache keys require fresh judgments and audits for workspaces created with earlier protocols. To obtain new judgments, omit `--cached-only`.
 
 ```bash
 autopaperreview proposal-review predict-rank --manifest benchmark/lock.json \
@@ -111,7 +111,7 @@ Use `proposal-review prioritize --screen-outcomes` when an input was reconstruct
 
 Use the same reference pipeline for training, qualification and fixed-test data. The command runs Sonnet extraction followed by Opus grading separately for each paper, with a leak audit of every coding packet. It averages the available reviewer grades. Each extracted quote must match one contiguous retained range of the original unit before grading.
 
-Prepare a local JSON array of records. Each record has a unique `forum` and an ordered `reviews` array. Each review contains its unique `id` and a `units` object mapping source unit identifiers to original initial-review sentences. Include `final_rating`, `accept`, `year`, and `rating_scale` when the references will also be used for an APR comparison. The coded output keeps those fields. Acceptance and overall-rating sentences are removed before either coding call. Preserve the release-time version of the review when building these inputs.
+Prepare a local JSON array of records. Each record has a unique `forum` and an ordered `reviews` array. Each review contains its unique `id` and a `units` object mapping source unit identifiers to original initial-review sentences. Include `final_rating`, `accept`, `year`, and `rating_scale` when the references will also be used for an APR comparison. The coded output keeps those fields. Before extracting or grading evidence, the reference route removes sentences flagged by the factual-label and reported-result rules. The leak judge also checks the remaining coding payloads for indirect disclosures of completed results. Preserve the release-time version of the review when building these inputs.
 
 ```bash
 autopaperreview proposal-review code-idea-references --inputs inputs.json --work workdir/reference-coding --output references.json
@@ -153,7 +153,7 @@ Install the `proposal-pair` extra and provide the local expert-preference model 
 autopaperreview proposal-review compare workdir/audited.json --left candidate-one --right candidate-two --model workdir/pair-model.zip --output workdir/comparison.json
 ```
 
-The leak judge checks both screened plans before the local model tokenizes them. Use `--work` to keep the audit receipts and add `--cached-only` to reuse them offline. The experimental model reads equal-length segments in both orders. `probability_prefer_left` estimates a preference between the two proposals. `training_stability90` gives the fifth and ninety-fifth percentiles across fits to resampled training topics. A range spanning one half yields `unresolved`. The output retains both original priority grades. See the model bundle for training provenance, evaluation, and license terms.
+The local tokenizer produces equal-length segments in both orders. The leak judge checks the decoded text of both final token sequences before local inference. Use `--work` to keep the audit receipts and add `--cached-only` to reuse them offline. `probability_prefer_left` estimates a preference between the two proposals. `training_stability90` gives the fifth and ninety-fifth percentiles across fits to resampled training topics. A range spanning one half yields `unresolved`. The output retains both original priority grades. See the model bundle for training provenance, evaluation, and license terms.
 
 ### Review the claims in an audited APD proposal
 

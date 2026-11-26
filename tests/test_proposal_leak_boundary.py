@@ -2,6 +2,7 @@
 
 import io
 import json
+from hashlib import sha256
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,7 +15,7 @@ from autopaperreview.proposal import (
     pair_compare, priority, reference_coding, reviewer_panel, stages,
 )
 from autopaperreview.proposal.data import digest, write
-from autopaperreview.proposal.leak_audit import PROMPT, apply_leak_audit
+from autopaperreview.proposal.leak_audit import PROMPT, REFERENCE_PROMPT, apply_leak_audit
 from autopaperreview.proposal.sanitized import require_model_input, sanitize_proposal
 
 PLAN = "Could violet tags index archival baskets by location?"
@@ -93,6 +94,12 @@ class ProposalLeakBoundaryTests(TestCase):
             json.dumps({"type": "result", "status": "refused", "result": CLEAN}),
             json.dumps({"type": "result", "subtype": "error", "result": CLEAN}),
             json.dumps({"type": "result", "is_error": True, "result": CLEAN}),
+            json.dumps({"type": "result", "terminal_reason": "aborted_streaming", "result": CLEAN}),
+            json.dumps({"type": "result", "safety_stops": 1, "result": CLEAN}),
+            json.dumps({"type": "result", "permission_denials": ["refusal"], "result": CLEAN}),
+            json.dumps({"type": "result", "usage": {"content": "refusal"}, "result": CLEAN}),
+            json.dumps({"type": "result", "usage": {"input_tokens": "refusal"}, "result": CLEAN}),
+            json.dumps({"type": "result", "structured_output": {"verdict": "leak"}, "result": CLEAN}),
             json.dumps({"type": "result", "result": "Sorry, " + CLEAN}),
             '{"type":"result","stop_reason":"refusal","stop_reason":"stop","result":' + json.dumps(CLEAN) + '}',
             "I cannot comply. A hypothetical reply would be " + CLEAN,
@@ -102,6 +109,11 @@ class ProposalLeakBoundaryTests(TestCase):
             '{"verdict":"clean","refusal":"unavailable"}',
             '"clean"', "[" + CLEAN + "]", CLEAN + " trailing text", "",
         ]
+        invalid.extend(json.dumps({"type": "result", "result": CLEAN, field: blocked}) for field, blocked in (
+            ("content", "I cannot comply."), ("message", {"refusal": "unavailable"}),
+            ("errors", ["request refused"]), ("refusal", None), ("refusal", False),
+            ("additional_text", "I cannot comply."),
+        ))
         for raw in invalid:
             with self.subTest(raw=raw), patch.object(stages, "run_command", return_value=(raw, 0)) as transport:
                 self.cli("score", source, "--work", self.root / "score")
@@ -115,6 +127,10 @@ class ProposalLeakBoundaryTests(TestCase):
         for i, raw in enumerate((CLEAN, json.dumps({
             "type": "result", "subtype": "success", "stop_reason": "end_turn",
             "is_error": False, "result": f"{fence}json\n{CLEAN}\n{fence}",
+            "terminal_reason": "completed", "safety_stops": 0, "permission_denials": [],
+            "duration_ms": 120, "uuid": "00000000-0000-0000-0000-000000000001",
+            "usage": {"input_tokens": 4, "cache_creation": {"ephemeral_5m_input_tokens": 0}},
+            "modelUsage": {"synthetic-model": {"inputTokens": 4, "costUSD": 0}},
         }))):
             seen = []
 
@@ -131,6 +147,70 @@ class ProposalLeakBoundaryTests(TestCase):
             self.assertEqual(seen[0][1], seen[1][1])
             self.assertEqual(seen[0][1]["problem"], PLAN)
             self.assertNotIn("evidence", str(seen[0][1]))
+
+    def test_tampered_judge_receipts_block_new_stage_and_cannot_be_reused(self):
+        source = self.root / "plan.txt"
+        source.write_text(PLAN, encoding="utf-8")
+        score = json.dumps({key: {"score": None, "rationale": "No evidence.", "basis": []} for key in stages.RUBRIC})
+        for name, first, reason in (
+            ("duplicate", CLEAN, "duplicate JSON key"),
+            ("verdict", LEAK, "cached verdict mismatch"),
+            ("reply-and-verdict", LEAK, "invalid cached reply digest"),
+        ):
+            with self.subTest(name=name):
+                work = self.root / name
+                with patch.object(stages, "run_command", side_effect=[(first, 0), (score, 0)]):
+                    self.cli("score", source, "--work", work, expected=0 if first == CLEAN else 2)
+                receipt, = (work / "cache" / "leak_audit").glob("*.json")
+                original = receipt.read_text(encoding="utf-8")
+                if name == "duplicate":
+                    altered = original.replace('"verdict": "clean"', '"verdict": "leak", "verdict": "clean"')
+                else:
+                    altered = original.replace('"verdict": "leak"', '"verdict": "clean"')
+                    if name == "reply-and-verdict":
+                        altered = altered.replace(r'\"leak\"', r'\"clean\"')
+                self.assertNotEqual(altered, original)
+                receipt.write_text(altered, encoding="utf-8")
+                for cached_only in (False, True):
+                    judge = cli.model_leak_judge(work / "cache", "claude-opus-5-5", stages.claude_argv(), 240,
+                                                 cached_only=cached_only)
+                    with (patch.object(stages, "run_command") as transport,
+                          self.assertRaisesRegex(ValueError, "leak audit blocked") as error):
+                        stages.invoke("forecast", sanitize_proposal(PLAN), work / "cache", "synthetic", ["stub"], 1,
+                                      leak_judge=judge, cached_only=cached_only)
+                    self.assertEqual(str(error.exception.__cause__), reason)
+                    transport.assert_not_called()
+
+    def test_reordered_score_packet_gets_a_new_exact_byte_audit(self):
+        source = self.root / "plan.json"
+        work = self.root / "ordered"
+        fields = {key: None for key in stages.SECTIONS}
+        fields.update(problem=PLAN, approach="Index the café catalogue by location.")
+        sent = []
+
+        def transport(_argv, *, system, prompt, **_options):
+            sent.append((system, prompt.encode("utf-8")))
+            if system == PROMPT:
+                return CLEAN, 0
+            key = "score" if system == stages.JUDGE else "panel"
+            row = {"rationale": "No evidence.", "basis": [], key: None}
+            return json.dumps(dict.fromkeys(stages.RUBRIC, row)), 0
+
+        with patch.object(stages, "run_command", side_effect=transport):
+            args = ["score", source, "--work", work]
+            source.write_text(json.dumps(fields), encoding="utf-8")
+            self.cli(*args, expected=0)
+            self.cli(*args, expected=0)
+            source.write_text(json.dumps(dict(reversed(list(fields.items())))), encoding="utf-8")
+            self.cli(*args, "--reviewer", "forecast", expected=0)
+        self.assertEqual([system for system, _ in sent], [PROMPT, stages.JUDGE, PROMPT, stages.FORECAST])
+        first, second = sent[0][1], sent[2][1]
+        self.assertEqual(first, sent[1][1])
+        self.assertEqual(second, sent[3][1])
+        self.assertNotEqual(first, second)
+        receipts = (work / "cache" / "leak_audit").glob("*.json")
+        hashes = {json.loads(path.read_text(encoding="utf-8"))["request"]["input_sha256"] for path in receipts}
+        self.assertEqual(hashes, {sha256(payload).hexdigest() for payload in (first, second)})
 
     def test_missing_judge_factories_stop_each_cli_entry_and_run_stage(self):
         source = self.document("plan.json", {"proposal": PLAN})
@@ -254,12 +334,12 @@ class ProposalLeakBoundaryTests(TestCase):
         bank = [{
             "key": f"synthetic-{i}", "split": "dev", "year": 2020, "revision_ms": i + 1,
             "target": 1 + (i % 5), "proposal": {"problem": f"{PLAN} {SIGNAL}"},
-            "opinions": [SIGNAL],
+            "opinions": [SIGNAL], "opinion_ms": 30,
         } for i in range(15)]
         write(root / "bank.json", bank)
         write(root / "contrast-bank.json", bank)
         write(root / "lessons.json", {"criteria": [SIGNAL]})
-        write(root / "prior-opinions.json", {"synthetic-paper": [{"opinion": SIGNAL}]})
+        write(root / "prior-opinions.json", {"synthetic-paper": [{"opinion": SIGNAL, "opinion_ms": 30}]})
         prior = [{
             "title": "A synthetic archival method", "abstract": SIGNAL,
             "year": 2020, "forum": "synthetic-paper",
@@ -275,7 +355,7 @@ class ProposalLeakBoundaryTests(TestCase):
             def judge(body):
                 if marker in body:
                     receipts.append(body)
-                    self.assertIn(SIGNAL, str(require_model_input(body)))
+                    self.assertIn(SIGNAL, str(require_model_input(body, stage=stage)))
                     return {"verdict": "leak"}
                 return {"verdict": "clean"}
 
@@ -290,7 +370,7 @@ class ProposalLeakBoundaryTests(TestCase):
             with (self.subTest(marker=marker), patch.object(priority, "retrieve", return_value=prior),
                   patch.object(stages, "run_command", side_effect=transport) as calls,
                   self.assertRaisesRegex(ValueError, "leak audit blocked")):
-                priority.rank(PLAN, root, profile, root, leak_judge=judge)
+                priority.rank(PLAN, root, profile, root, year=2024, cutoff_ms=50, leak_judge=judge)
             self.assertTrue(receipts)
             self.assertEqual(calls.call_count, int(marker == "r1"))
 
@@ -300,7 +380,7 @@ class ProposalLeakBoundaryTests(TestCase):
 
             def transport(_argv, *, system, prompt, **_options):
                 data = json.loads(prompt)
-                if system == PROMPT:
+                if system == REFERENCE_PROMPT:
                     stage = "extract" if isinstance(data["r1"], dict) else "joint" if len(data) == 2 else "independent"
                     sent.append(("judge", stage))
                     return (LEAK if stage == reject else CLEAN), 0
@@ -379,3 +459,24 @@ class ProposalLeakBoundaryTests(TestCase):
         self.assertEqual(command.call_count, 1)
         self.assertEqual(recorded[1]["payload"], recorded[0])
         self.assertTrue(recorded[1]["validation_feedback"])
+
+    def test_model_judge_and_review_retry_receive_identical_bytes(self):
+        sent = []
+
+        def transport(_argv, *, system, prompt, **_options):
+            sent.append((system, prompt.encode("utf-8")))
+            if system == PROMPT:
+                return CLEAN, 0
+            if len(sent) == 2:
+                return "malformed", 0
+            return json.dumps({key: {"score": None, "rationale": "No evidence.", "basis": []}
+                               for key in stages.RUBRIC}), 0
+
+        with patch.object(stages, "run_command", side_effect=transport):
+            judge = cli.model_leak_judge(self.root, "synthetic", ["stub"], 1)
+            stages.invoke("review", sanitize_proposal(PLAN), self.root, "synthetic", ["stub"], 1,
+                          leak_judge=judge)
+        self.assertEqual([system for system, _ in sent], [PROMPT, stages.JUDGE, PROMPT, stages.JUDGE])
+        self.assertEqual(sent[0][1], sent[1][1])
+        self.assertEqual(sent[2][1], sent[3][1])
+        self.assertNotEqual(sent[0][1], sent[2][1])

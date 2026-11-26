@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from math import floor, sqrt
+from math import ceil, floor, sqrt
 from random import Random
 from statistics import mean
 
@@ -233,14 +233,21 @@ def top_fraction(scores, ratings, *, fraction=0.2, threshold=7.0):
         raise ValueError("scores and ratings must be the same nonempty cohort")
     if not 0 < fraction <= 1:
         raise ValueError("fraction must be in (0, 1]")
-    width = max(1, int(round(count * fraction)))
-    order = sorted(range(count), key=lambda i: (scores[i], -i), reverse=True)
-    chosen = order[:width]
-    population = sum(1 for rating in ratings if rating >= threshold)
+    width = ceil(count * fraction)
+    cutoff = sorted(scores, reverse=True)[width - 1]
+    positive = [rating >= threshold for rating in ratings]
+    above = [hit for score, hit in zip(scores, positive, strict=True) if score > cutoff]
+    tied = [hit for score, hit in zip(scores, positive, strict=True) if score == cutoff]
+    remaining = width - len(above)
+    strict_hits = sum(above)
+    tied_hits = sum(tied)
+    low = strict_hits + max(0, remaining - (len(tied) - tied_hits))
+    high = strict_hits + min(remaining, tied_hits)
     return {
         "k": width,
-        "held": sum(1 for index in chosen if ratings[index] >= threshold),
-        "expected_random": width * population / count,
+        "held": low if low == high else None,
+        "included_positive_range": [low, high],
+        "expected_random": width * sum(positive) / count,
         "threshold": threshold,
         "fraction": fraction,
     }

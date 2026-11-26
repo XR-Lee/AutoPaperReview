@@ -8,7 +8,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -25,6 +28,8 @@ from autopaperreview.proposal.repro_metrics import (  # noqa: E402
     reproduce_headlines,
 )
 from autopaperreview.public_calibration import spearman  # noqa: E402
+from autopaperreview.proposal.overall_rank import top_fraction  # noqa: E402
+from scripts import rank_eval, reproduce_proposal_rank  # noqa: E402
 
 
 def _external_dir() -> Path | None:
@@ -124,8 +129,85 @@ class ProposalArtifactTests(unittest.TestCase):
     def test_headlines_match_rejects_nan(self) -> None:
         committed = committed_aggregates()
         got = json.loads(json.dumps(committed))
+        got["recomputed"] = True
         got["fixed100"]["rho"] = float("nan")
         self.assertFalse(headlines_match(got, committed))
+
+    def test_headlines_match_checks_count_types_and_resampling_settings(self) -> None:
+        committed = committed_aggregates()
+        got = json.loads(json.dumps(committed))
+        got["recomputed"] = True
+        self.assertTrue(headlines_match(got, committed))
+        for field, value in (
+            ("n", 100.0000001), ("n", "100"), ("rho", str(got["fixed100"]["rho"])),
+            ("draws", 2999), ("seed", 0),
+        ):
+            with self.subTest(field=field, value=value):
+                changed = json.loads(json.dumps(got))
+                changed["fixed100"][field] = value
+                self.assertFalse(headlines_match(changed, committed))
+        got["nlp84"]["threshold"] += 1
+        self.assertFalse(headlines_match(got, committed))
+
+    def test_top_fraction_reports_the_same_cutoff_ties_after_reordering(self) -> None:
+        import numpy as np
+
+        scores = [3] * 6
+        ratings = [8, 8, 2, 2, 2, 2]
+        expected = top_fraction(scores, ratings)
+        self.assertEqual(expected["k"], 2)
+        self.assertIsNone(expected["held"])
+        self.assertEqual(expected["included_positive_range"], [0, 2])
+        self.assertEqual(top_fraction(scores, list(reversed(ratings))), expected)
+        published = _top_fifth(np.array(scores), np.array(ratings) >= 7, np)
+        self.assertEqual(published["included_positive_range"], expected["included_positive_range"])
+
+    def test_custom_reproduction_refuses_all_output_input_aliases(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            args = []
+            for arg in ("manifest", "predictions", "references"):
+                path = root / f"{arg}.json"
+                path.write_text("{}\n", encoding="utf-8")
+                args.extend([f"--{arg}", str(path)])
+            for arg in ("manifest", "predictions", "references"):
+                source = root / f"{arg}.json"
+                symlink = root / f"{arg}.symlink"
+                symlink.symlink_to(source)
+                hardlink = root / f"{arg}.hardlink"
+                os.link(source, hardlink)
+                for output in (source, symlink, hardlink):
+                    with self.subTest(arg=arg, output=output.name), redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()) as stdout:
+                        self.assertEqual(reproduce_proposal_rank.main([*args, "--output", str(output)]), 2)
+                        self.assertIn("output must be distinct", error.getvalue())
+                        self.assertFalse(stdout.getvalue())
+                    self.assertEqual(source.read_text(encoding="utf-8"), "{}\n")
+
+    def test_rank_eval_refuses_hardlink_to_ids_before_reading(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            ids = root / "ids.json"
+            ids.write_text("synthetic unreadable ID list", encoding="utf-8")
+            output = root / "result.json"
+            os.link(ids, output)
+            with redirect_stderr(StringIO()) as error:
+                self.assertEqual(rank_eval.main([
+                    "--cache", str(root), "--ids", str(ids), "--output", str(output), "--fixed-set", "none",
+                ]), 2)
+            self.assertIn("output must be distinct", error.getvalue())
+            self.assertEqual(ids.read_text(encoding="utf-8"), "synthetic unreadable ID list")
+
+    def test_rank_eval_refuses_hardlink_to_fixed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
+            root = Path(tmp)
+            manifest = root / "manifest.json"
+            manifest.write_text("synthetic manifest", encoding="utf-8")
+            output = root / "result.json"
+            os.link(manifest, output)
+            with patch.object(rank_eval, "manifest_path", return_value=manifest), redirect_stderr(StringIO()) as error:
+                self.assertEqual(rank_eval.main(["--cache", str(root), "--output", str(output)]), 2)
+            self.assertIn("output must be distinct", error.getvalue())
+            self.assertEqual(manifest.read_text(encoding="utf-8"), "synthetic manifest")
 
     def test_rekey_script_replaces_synthetic_ids_with_hmac(self) -> None:
         script = ROOT / "scripts" / "rekey_external_repro.py"
