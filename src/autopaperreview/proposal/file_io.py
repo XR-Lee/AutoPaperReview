@@ -242,30 +242,36 @@ class _Output:
         """Replace an existing file only after the new bytes are complete."""
         name = f".apr-output-{uuid4().hex}.tmp"
         created = _write_complete(self.directory, name, content.encode("utf-8"))
+        held = None
         try:
             self.check()
             current = self._destination_identity()
             if current != original or current in self.inputs.values():
                 raise ValueError(_ALIAS)
+            # Keep the pre-exchange inode open so a later writer cannot reuse
+            # its number and look like the file this writer displaced.
+            held = os.open(
+                self.path.name,
+                os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=self.directory,
+            )
+            if file_identity(os.fstat(held)) != original:
+                raise ValueError(_ALIAS)
             _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
             destination = self._destination_identity()
             swapped = file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
-            owned = destination == created
-            if not owned or swapped != original or swapped in self.inputs.values():
-                # Roll back only while this writer still owns the destination.
-                # A concurrent publisher that already won keeps its bytes.
-                if owned:
-                    try:
-                        _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
-                    except OSError:
-                        pass
-                elif swapped == original and swapped not in self.inputs.values():
-                    remove_temporary(self.directory, name)
-                raise ValueError(_ALIAS)
-            held = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
-            if file_identity(held) != original or original in self.inputs.values():
-                raise ValueError(_ALIAS)
-            os.unlink(name, dir_fd=self.directory)
+            if (
+                destination == created
+                and swapped == file_identity(os.fstat(held))
+                and swapped not in self.inputs.values()
+            ):
+                os.unlink(name, dir_fd=self.directory)
+                return
+            # Do not exchange again. A second exchange can swap away a writer
+            # who published after this check. Restore with one rename only
+            # while the destination is still the file this writer created.
+            self._restore_displaced(name, created)
+            raise ValueError(_ALIAS)
         except BaseException:
             try:
                 info = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
@@ -274,6 +280,23 @@ class _Output:
             if info is not None and file_identity(info) == created:
                 remove_temporary(self.directory, name)
             raise
+        finally:
+            if held is not None:
+                os.close(held)
+
+    def _restore_displaced(self, name: str, created: tuple[int, int]) -> None:
+        """Put a displaced winner back without a second exchange."""
+        try:
+            held = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        held_id = file_identity(held)
+        destination = self._destination_identity()
+        if destination == created and held_id != created and held_id not in self.inputs.values():
+            os.rename(name, self.path.name, src_dir_fd=self.directory, dst_dir_fd=self.directory)
+            return
+        if held_id != destination and held_id not in self.inputs.values():
+            remove_temporary(self.directory, name)
 
 
 def _write_complete(directory: int, name: str, payload: bytes) -> tuple[int, int]:

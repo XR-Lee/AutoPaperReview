@@ -94,10 +94,15 @@ _ASSERTED_RESULT = re.compile(
     r"|\bstate.of.the.art (?:performance|results)\b|优于|实验结果"
 )
 _RETROSPECTIVE_REVIEW = re.compile(
-    r"\b(?:(?:was|were) (?:accept|reject)ed|rebuttal|camera.ready|"
+    r"\b(?:(?:was|were) (?:accept|reject)ed(?!\s+(?:practice|standard|meaning|usage|convention|sense|definition|use)\b)"
+    r"|rebuttal|camera.ready|"
     r"acceptance (?:for publication|(?:at|to|by) (?:(?:a|the) )?(?:venue|conference|journal|workshop|iclr|cvpr))|"
     r"recommend (?:accept|reject)|my (?:rating|score)|after (?:the )?(?:discussion|response))\b|录用|拒稿"
 )
+_BARE_METRIC = re.compile(
+    rf"\b{_METRIC}\s*(?:[:=]|\b(?:is|of|at|reaches)\b)\s*{_QUANTITY}"
+)
+_FORMULA_CONTEXT = re.compile(r"\b(?:formula|equation|synthetic)\b")
 _PROSPECTIVE = re.compile(
     r"\b(?:will|would|could|may|might|should|can|planned|intend(?:s)?|aim(?:s)?|hypothesiz(?:e|es)|"
     r"expect(?:s|ed)?|predict(?:s|ed)?|whether)\b|"
@@ -113,10 +118,13 @@ def reported_result(text: str) -> bool:
     for clause in _RESULT_CLAUSE.split(normalized_fact_text(text)):
         if _COMPLETED_RESULT.search(clause) or _RETROSPECTIVE_REVIEW.search(clause):
             return True
-        if any(
-            not _PROSPECTIVE.search(clause[: finding.end()])
-            for finding in _ASSERTED_RESULT.finditer(clause)
-        ):
+        formula = _FORMULA_CONTEXT.search(clause) is not None
+        for finding in _ASSERTED_RESULT.finditer(clause):
+            if _PROSPECTIVE.search(clause[: finding.end()]):
+                continue
+            # A quantity on a formula is a definition, not a completed measurement.
+            if formula and _BARE_METRIC.fullmatch(finding.group(0)):
+                continue
             return True
     return False
 
@@ -638,7 +646,17 @@ def archived_notes(path: Path):
         while True:
             buf = buf.lstrip()
             if buf.startswith("]"):
-                _reject_duplicate_root_key(buf[1:], f, "notes")
+                rest = buf[1:]
+                while True:
+                    more = f.read(65536)
+                    if not more:
+                        break
+                    rest += more
+                # Re-parse the tail as a complete object so escaped duplicate
+                # keys and a truncated root fail closed.
+                from .leak_audit import decode_json
+
+                decode_json('{"notes":[]' + rest)
                 return
             try:
                 item, end = decoder.raw_decode(buf)

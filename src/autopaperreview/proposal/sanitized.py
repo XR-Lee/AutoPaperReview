@@ -395,12 +395,36 @@ _SCIENTIFIC_KEY_HEADS = frozenset({
 })
 
 
+_IDENTITY_LEMMAS = frozenset({
+    "email", "emails", "phone", "telephone", "mobile", "orcid", "affiliation",
+    "institution", "university", "department", "byline", "bylines",
+})
+_REVIEW_ONLY = frozenset({
+    "overall", "total", "final", "reviewer", "reviewers", "meta", "official", "human",
+    "peer", "initial", "rating", "ratings", "grade", "grades",
+})
+_SOFT_SCORE = frozenset({"average", "mean", "aggregate", "aggregated"})
+_SCIENTIFIC_MEASURES = frozenset({
+    "angle", "angles", "space", "spaces", "metric", "metrics", "value", "values",
+    "map", "maps", "index", "measure", "measurement", "measurements", "bleu", "f1",
+    "loss", "similarity", "distance", "jaccard", "cosine", "accuracy", "precision",
+    "recall", "auc", "latency", "perplexity", "threshold", "surface", "surfaces",
+    "optical", "water", "memory", "virtual",
+})
+
+
 def _key_tokens(key: object) -> list[str]:
-    """Split a key on separators and camel-case boundaries before markup glues them."""
-    raw = str(key)
+    """Split a key after invisible characters and markup are removed, not used as separators."""
+    raw = unicodedata.normalize("NFKC", str(key))
+    raw = _ZERO_WIDTH.sub("", "".join(char for char in raw if unicodedata.category(char) != "Cf"))
+    raw = raw.replace("\\_", " ").replace("\\", " ")
+    raw = re.sub(r"[{}$]", " ", raw)
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
     spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", spaced)
-    return [token for token in re.split(r"[^0-9A-Za-z]+", spaced.casefold()) if token]
+    tokens = [token for token in re.split(r"[^0-9A-Za-z]+", spaced.casefold()) if token]
+    if len(tokens) > 1 and all(len(token) == 1 for token in tokens):
+        tokens = ["".join(tokens)]
+    return tokens
 
 
 def _key_word_blocked(word: str) -> bool:
@@ -426,18 +450,22 @@ def _structured_key(tokens: list[str]) -> bool:
         return False
     head = tokens[-1]
     modifiers = set(tokens[:-1])
-    if head in {"angle", "angles"} and "contact" in modifiers and not (modifiers & (_IDENTITY_MODIFIERS - {"contact"})):
+    if head in {"angle", "angles", "surface", "surfaces"} and "contact" in modifiers and not (modifiers & (_IDENTITY_MODIFIERS - {"contact"})):
         return False
     if head in {"space", "spaces"} and "address" in modifiers and not (modifiers & _IDENTITY_MODIFIERS):
         return False
-    if "reviewer" in tokens or "reviewers" in tokens:
+    if set(tokens) & _IDENTITY_LEMMAS:
+        return True
+    if ("reviewer" in tokens or "reviewers" in tokens) and not (set(tokens) & _SCIENTIFIC_MEASURES):
         return True
     if "score" in tokens or "scores" in tokens:
-        if set(tokens) & _REVIEW_SCORE_MODIFIERS:
+        reviewish = set(tokens) & _REVIEW_ONLY
+        scientific = set(tokens) & (_SCIENTIFIC_MEASURES | _SCIENTIFIC_KEY_HEADS)
+        if (reviewish or (set(tokens) & _SOFT_SCORE) or "last" in tokens) and not scientific:
             return True
-        if head in {"score", "scores"} and not modifiers:
+        if head in {"score", "scores"} and not modifiers and not scientific:
             return True
-        if head in {"score", "scores"} or head in _SCIENTIFIC_KEY_HEADS:
+        if scientific or head in {"score", "scores"} or head in _SCIENTIFIC_KEY_HEADS:
             return False
         return True
     if head in {"contact", "contacts"}:
@@ -515,18 +543,34 @@ def factual_leak(text: str, *, key: bool = False) -> bool:
 
 
 _CONSTRUCT_WORD = re.compile(r"[0-9]+(?:\.[0-9]+)?|[^\W\d_]+|[^\w\s]", re.UNICODE)
-_STATUS_SUBJECTS = frozenset({"submission", "manuscript", "paper", "投稿", "稿件", "论文"})
+_STATUS_SUBJECTS = frozenset({
+    "submission", "manuscript", "paper", "article", "manuscrito", "articulo", "envio",
+    "propuesta", "trabajo", "投稿", "稿件", "论文", "本稿", "本文",
+})
 _DECISION_WORDS = frozenset({
     "accept", "accepted", "acceptance", "reject", "rejected", "rejection",
+    "aceptado", "aceptada", "aceptacion", "rechazo", "rechazado", "rechazada",
+    "aceptar", "acepta", "rechazar",
     "录用", "录取", "接收", "拒稿", "拒绝", "接受",
 })
 _STATUS_HEADS = frozenset({
     "decision", "verdict", "outcome", "status", "recommendation", "recommendations",
-    "决定", "结论", "建议", "推荐", "状态",
+    "estado", "dictamen", "puntuacion", "calificacion", "puntaje",
+    "决定", "结论", "建议", "推荐", "状态", "总分", "总评", "评分",
 })
 _STATUS_BINDERS = frozenset({
     "is", "was", "were", "been", "be", "are", "received", "gets", "got", "given",
-    "reads", "marked", ":", "=", "-", "—", "–", "－",
+    "reads", "marked", "es", "fue", "son", "esta", "fueron",
+    ":", "=", "|", "-", "—", "–", "－", "为", "是",
+})
+_STATUS_ABBREV = frozenset({"acc", "rej", "rec"})
+_SCORE_LABELS = frozenset({
+    "rating", "ratings", "grade", "grades", "recommendation", "recommendations",
+    "puntuacion", "calificacion", "puntaje",
+})
+_PLAN_CUES = frozenset({
+    "plan", "planned", "propose", "proposed", "will", "intend", "intended",
+    "previsto", "propuesto", "planeamos", "planteamos", "pretendemos", "计划", "拟",
 })
 _STATUS_MODALS = frozenset({
     "should", "could", "would", "may", "might", "must", "can", "shall", "ought",
@@ -544,7 +588,7 @@ _RATING_TAILS = frozenset({
     "for", "as", "given", "out", "/", "—", "–", "-", "－", "strong", "weak", "clear",
     "borderline", "accept", "reject", "on",
 })
-_RANGE_MARKS = frozenset({"-", "–", "—", "－", "~", "to"})
+_RANGE_MARKS = frozenset({"-", "–", "—", "－", "~", "to", "a", "y", "到", "至"})
 _CJK_STATUS = re.compile(
     r"(?:投稿|稿件|论文|提交)(?:状态|决定|结论|结果)?\s*[:=：为是]\s*(?:已|被)?\s*(?:录取|录用|接收|拒稿|拒绝|接受)"
     r"|(?:投稿|稿件|论文).{0,4}(?:已|被)(?:录取|录用|接收|拒稿|拒绝|接受)"
@@ -568,13 +612,15 @@ def _submission_status(tokens: list[str], raw: str) -> bool:
     if _CJK_STATUS.search(raw):
         return True
     for index, token in enumerate(tokens):
+        left = tokens[max(0, index - 8):index]
+        if token in _STATUS_ABBREV and any(word in _STATUS_HEADS for word in left):
+            return True
         if token not in _DECISION_WORDS:
             continue
         previous = tokens[index - 1] if index else ""
         nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
         if previous in _STATUS_DEGREES:
             return True
-        left = tokens[max(0, index - 8):index]
         right = tokens[index + 1:index + 8]
         # "should be accepted" is a recommendation for the leak judge, not a recorded status.
         if any(word in _STATUS_MODALS for word in left):
@@ -611,7 +657,10 @@ def _number_after_label(tokens: list[str], index: int) -> bool:
         token = tokens[cursor]
         if _is_number(token):
             return _rating_number(tokens, cursor)
-        if token not in {":", "=", "-", "—", "–", "－", "of", "is", "equals", "equal", "out", "/", "a", "an", "the"}:
+        if token not in {
+            ":", "=", "-", "—", "–", "－", "|", "of", "is", "equals", "equal", "out", "/",
+            "a", "an", "the", "es", "fue", "为", "是",
+        }:
             return False
     return False
 
@@ -619,7 +668,7 @@ def _number_after_label(tokens: list[str], index: int) -> bool:
 def _total_score(tokens: list[str]) -> bool:
     for index, token in enumerate(tokens):
         qualified_score = token in {"score", "scores"} and index and tokens[index - 1] in _SCORE_QUALIFIERS
-        direct = token in {"rating", "ratings", "grade", "grades", "recommendation", "recommendations"}
+        direct = token in _SCORE_LABELS
         if not direct and not qualified_score and token not in {"overall", "total"}:
             continue
         if _number_after_label(tokens, index):
@@ -628,16 +677,22 @@ def _total_score(tokens: list[str]) -> bool:
 
 
 def _range_anchor(window: list[str]) -> bool:
-    labels = {"rating", "ratings", "grade", "grades", "recommendation", "recommendations", "score", "scores"}
+    labels = _SCORE_LABELS | {"score", "scores"}
     if any(word in labels for word in window):
         return True
     return bool(window) and window[-1] in {"overall", "total"}
 
 
+def _planned_before(tokens: list[str], index: int) -> bool:
+    return any(word in _PLAN_CUES for word in tokens[max(0, index - 12):index])
+
+
 def _score_range(tokens: list[str]) -> bool:
     for index, token in enumerate(tokens):
         window = tokens[max(0, index - 6):index]
-        if token in {"range", "between"} and _range_anchor(window):
+        if _planned_before(tokens, index):
+            continue
+        if token in {"range", "between", "entre"} and _range_anchor(window):
             if any(_is_number(word) for word in tokens[index:index + 8]):
                 return True
         if (
@@ -651,10 +706,77 @@ def _score_range(tokens: list[str]) -> bool:
     return False
 
 
+_PRIOR_WORK = re.compile(
+    r"(?i)\b(?:earlier|prior|previous|independent)\b|先前|已有研究|trabajo\s+previo|\banterior\b|\bindependiente\b"
+)
+_OURS = re.compile(r"(?i)\bour\b")
+_EARLIER_WORD = re.compile(r"(?i)\b(?:earlier|prior|previous)\b")
+_REVIEW_STATUS = re.compile(
+    r"(?i)\b(?:review|reviewer|meta-?review)\s*(?:status|state|decision)\s*[:=]\s*\S"
+    r"|\b(?:review\s+)?(?:status|decision)\s*[:=]\s*(?:major|minor)\s+revision\b"
+    r"|审稿(?:意见)?(?:状态|结论)\s*[:：]\s*\S"
+    r"|(?:评审|审稿)(?:状态|结论)\s*[:：为是]\s*(?:大修|小修|待审|修改|拒稿|录用)"
+)
+_CJK_DECISION = re.compile(
+    r"(?:投稿|稿件|论文|提交|本稿|本文).{0,8}(?:已|被)?(?:录取|录用|拒稿|拒绝)"
+    r"|(?:决定|结论|状态)\s*[:：为是]\s*(?:已|被)?(?:录取|录用|拒稿|拒绝|接受|接收)"
+    r"|(?:录取|录用|拒稿)(?:决定|结论)"
+)
+_CJK_SCORE = re.compile(
+    r"(?:总体|最终|审稿|评审|元评审)?(?:总分|总评)\s*[:：为是]?\s*\d"
+    r"|(?:总体|最终|审稿|评审)(?:评分|分数|得分|评级)\s*[:：为是]?\s*\d"
+)
+_CJK_RANGE = re.compile(r"(?:评分|总分|总评|评级).{0,12}\d\s*(?:到|至|—|-)\s*\d")
+_IDENTITY_LABEL = re.compile(
+    r"(?i)\b(?:affiliation|institution|university|universidad|instituto|department|orcid)\s*[:：]\s*\S"
+    r"|\b(?:e-?mail|correo(?:\s+electronico)?)\s*[:：]\s*\S"
+    r"|\b(?:phone|telephone)\s*[:：.]?\s*\+?\d[\d\s().-]{6,}"
+    r"|\b(?:tel|mobile)\s*[:：.]\s*\+?\d[\d\s().-]{6,}"
+    r"|(?:单位|机构|邮箱|电话|大学)\s*[:：]\s*\S"
+    r"|(?:作者|署名)\s*[:：]\s*\S"
+    r"|\b(?:authors?|autores|byline)\s*[:：]\s*\S"
+)
+_LABEL_SEPARATORS = frozenset({":", "=", "|", "-", "—", "–", "－"})
+_LABEL_VALUES = _DECISION_WORDS | _STATUS_ABBREV | {"major", "minor", "大修", "小修", "待审"}
+
+
+def _labeled_fact(tokens: list[str]) -> bool:
+    """A review or identity label, a separator, and a value in the next token."""
+    for index, token in enumerate(tokens):
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+        value = tokens[index + 2] if index + 2 < len(tokens) else ""
+        if nxt not in _LABEL_SEPARATORS or not value:
+            continue
+        qualified = token in {"score", "scores"} and index and tokens[index - 1] in _SCORE_QUALIFIERS
+        if token in _SCORE_LABELS or qualified or token in {"overall", "total"}:
+            if _is_number(value) or value in _LABEL_VALUES:
+                return True
+        elif token in _IDENTITY_LABEL_TOKENS and value not in _CONTENT_SKIP:
+            return True
+        elif token in _STATUS_HEADS and value in _LABEL_VALUES:
+            return True
+    return False
+
+
+_IDENTITY_LABEL_TOKENS = frozenset({
+    "affiliation", "institution", "university", "universidad", "instituto", "department",
+    "orcid", "email", "phone", "telephone", "mobile", "author", "authors", "autores",
+    "byline", "单位", "机构", "邮箱", "电话", "大学", "作者", "署名",
+})
+
+
 def _preprint_authorship(text: str) -> bool:
-    """A name bound to a preprint marker in the same short span."""
+    """A name bound to a preprint marker in the same short span.
+
+    A preprint attributed to earlier independent work is not this proposal's byline.
+    ``our preprint`` stays a byline unless it is also marked earlier or prior.
+    """
     for match in _PREPRINT_MARK.finditer(text):
         span = text[max(0, match.start() - 80):match.end() + 80]
+        earlier = _PRIOR_WORK.search(span) is not None
+        ours = _OURS.search(span) is not None and _EARLIER_WORD.search(span) is None
+        if earlier and not ours:
+            continue
         if (
             _PREPRINT_BY.search(span)
             or _PREPRINT_AUTHORS.search(span)
@@ -675,11 +797,19 @@ def _explicit_construct(text: str) -> bool:
     if not text:
         return False
     tokens = _construct_tokens(text)
+    planned = any(word in _PLAN_CUES or word.startswith("计划") for word in tokens) or "计划" in text
+    if _CJK_RANGE.search(text) and not planned:
+        return True
     return (
         _submission_status(tokens, text)
         or _total_score(tokens)
         or _score_range(tokens)
         or _preprint_authorship(text)
+        or _labeled_fact(tokens)
+        or _REVIEW_STATUS.search(text) is not None
+        or _CJK_DECISION.search(text) is not None
+        or _CJK_SCORE.search(text) is not None
+        or _IDENTITY_LABEL.search(text) is not None
     )
 
 
@@ -866,6 +996,9 @@ def sanitize_proposal(source: Any) -> SanitizedProposal:
         if factual_leak(key, key=True) or factual_leak(value):
             raise ValueError(f"proposal {LEAK_MESSAGE}")
         flat[key] = value
+    parts = [text.strip() for text in flat.values() if isinstance(text, str) and text.strip()]
+    if len(parts) > 1 and factual_leak("\n".join(parts)):
+        raise ValueError(f"proposal {LEAK_MESSAGE}")
     return seal(flat)
 
 

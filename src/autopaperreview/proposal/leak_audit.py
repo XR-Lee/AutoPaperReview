@@ -121,6 +121,39 @@ def decode_json(text):
     return json.loads(text, object_pairs_hook=_unique_object)
 
 
+def decode_model_json(text):
+    """Strict business JSON: unique keys, no NaN, and no invalid Unicode."""
+    if isinstance(text, bytes):
+        try:
+            text = text.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid utf-8 in model JSON") from exc
+    if not isinstance(text, str):
+        raise ValueError("expected JSON text")
+    value = json.loads(
+        text,
+        object_pairs_hook=_unique_object,
+        parse_constant=_invalid_constant,
+    )
+    _reject_bad_unicode(value)
+    return value
+
+
+def _reject_bad_unicode(value) -> None:
+    """Lone surrogates and replacement characters are not model text."""
+    if isinstance(value, str):
+        if any(0xD800 <= ord(char) <= 0xDFFF or ord(char) == 0xFFFD for char in value):
+            raise ValueError("invalid unicode in model JSON")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _reject_bad_unicode(key)
+            _reject_bad_unicode(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_bad_unicode(item)
+
+
 def decode_json_object(text):
     value = json.loads(
         text,
@@ -139,36 +172,64 @@ def _decode_reply(text):
 
 
 _SUCCESS_STATUSES = frozenset({"success", "completed"})
-_BAD_STOPS = frozenset({
-    "refusal", "refused", "length", "max_tokens", "max_output_tokens", "max_tokens_truncation",
+_SUCCESS_STOPS = frozenset({"stop", "end_turn", "stop_sequence"})
+_REFUSAL_MARKERS = frozenset({
+    "refusal", "refused", "error", "api_error", "permission_denied", "safety_abort",
 })
+
+
+def _marker_text(value) -> str | None:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return None
 
 
 def _reject_unsuccessful_envelope(value: dict) -> None:
     """A business envelope that signals failure is not a result.
 
-    ``modelUsage: null`` is an absent usage map, not a failure.
+    The same failure signals the leak judge rejects are rejected here.
+    ``modelUsage: null`` is an absent usage map, not a failure. A missing
+    status or subtype is still success. A boolean, an abort, an API error,
+    a permission denial, or a stop reason outside the success allowlist is not.
     """
     from ..command_transport import CommandTransportError
 
-    if value.get("is_error"):
-        raise CommandTransportError("command reported an error: " + str(value.get("result"))[:300])
-    reasons = []
+    def fail(message: str) -> None:
+        if "refusal" in message:
+            raise CommandTransportError('command refused: {"stop_reason": "refusal"}')
+        raise CommandTransportError(message)
+
+    if "is_error" in value and value.get("is_error") is not False:
+        fail("command reported an error: " + str(value.get("result"))[:300])
+    for key in _REFUSAL_MARKERS:
+        if key in value and value.get(key) not in (None, False, "", [], {}):
+            fail("command refused: refusal marker")
     for key in ("stop_reason", "finish_reason"):
-        reason = value.get(key)
-        if isinstance(reason, str):
-            reasons.append(reason.lower())
-    subtype = value.get("subtype")
-    subtype_text = subtype.lower() if isinstance(subtype, str) else None
-    if any(reason in {"refusal", "refused"} for reason in reasons) or subtype_text in {"refusal", "refused"}:
-        raise CommandTransportError('command refused: {"stop_reason": "refusal"}')
-    if any(reason in _BAD_STOPS for reason in reasons):
-        raise CommandTransportError("command reply stopped at max_tokens")
-    status = value.get("status")
-    if isinstance(status, str) and status.lower() not in _SUCCESS_STATUSES:
-        raise CommandTransportError(f"command status is not success: {status}")
-    if subtype_text not in (None, "success"):
-        raise CommandTransportError(f"command subtype is not success: {subtype}")
+        if key not in value or value.get(key) is None:
+            continue
+        reason = _marker_text(value.get(key))
+        if reason is None or reason not in _SUCCESS_STOPS:
+            if reason in {"refusal", "refused"}:
+                fail("command refused: refusal marker")
+            fail("command reply stopped unsuccessfully")
+    if "status" in value and value.get("status") is not None:
+        status = _marker_text(value.get("status"))
+        if status is None or status not in _SUCCESS_STATUSES:
+            fail(f"command status is not success: {value.get('status')}")
+    if "subtype" in value:
+        subtype = _marker_text(value.get("subtype"))
+        if subtype != "success":
+            if subtype in {"refusal", "refused"}:
+                fail("command refused: refusal marker")
+            fail(f"command subtype is not success: {value.get('subtype')}")
+    if "terminal_reason" in value and value.get("terminal_reason") != "completed":
+        fail("command terminal reason is not completed")
+    if "permission_denials" in value and value.get("permission_denials") != []:
+        fail("command reported a permission denial")
+    if "safety_stops" in value and (type(value.get("safety_stops")) is not int or value.get("safety_stops") != 0):
+        fail("command reported a safety stop")
+    if value.get("api_error_status") is not None:
+        fail("command reported an API error")
 
 
 def strict_model_value(stdout: str):
@@ -180,13 +241,13 @@ def strict_model_value(stdout: str):
     when they require an object. An envelope that reports refusal, a failure
     status, an error subtype, or length truncation is not unwrapped.
     """
-    value = decode_json(stdout)
+    value = decode_model_json(stdout)
     if isinstance(value, dict) and value.get("type") == "result" and "result" in value:
         _reject_unsuccessful_envelope(value)
         inner = value.get("result")
         if not isinstance(inner, str):
             raise ValueError("expected JSON text")
-        value = decode_json(inner)
+        value = decode_model_json(inner)
     if not isinstance(value, (dict, list)):
         raise ValueError("expected a JSON object or array")
     return value

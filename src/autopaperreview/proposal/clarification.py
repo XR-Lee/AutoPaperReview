@@ -41,8 +41,18 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
         entry = read(path)
         if entry["request"] != request:
             raise ValueError("clarification cache fingerprint mismatch")
-        protocol.validate(stage, entry["output"], data)
-        return key, entry["output"]
+        reply = entry.get("reply")
+        if isinstance(reply, str) and payload_sha256(reply) == entry.get("reply_sha256"):
+            parsed = strict_model_value(reply)
+            protocol.validate(stage, parsed, data)
+            if entry.get("output") != parsed:
+                raise ValueError("cached output does not match the strict reply")
+            return key, parsed
+        if entry.get("disposition") in {"refusal", "invalid", "scope"}:
+            protocol.validate(stage, entry["output"], data)
+            return key, entry["output"]
+        if cached_only:
+            raise ValueError(f"missing cached {stage} judgment for request {key}")
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {key}")
     disposition = "response"
@@ -73,7 +83,10 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
         if stage == "question" and not output.get("abstain") and protocol.outside_scope(" ".join(protocol.interpretations(output).values())):
             output, disposition = abstention, "scope"
         break
-    write(path, dict(request=request, output=output, disposition=disposition))
+    record = dict(request=request, output=output, disposition=disposition)
+    if disposition == "response":
+        record.update(reply=raw, reply_sha256=payload_sha256(raw))
+    write(path, record)
     return key, output
 
 

@@ -367,6 +367,47 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(path.read_text(encoding="utf-8"), "BBB")
         self.assertTrue(errors)
+
+    def test_three_writers_keep_the_latest_success(self):
+        path = self.root / "report.json"
+        with file_io.protected_output(path):
+            file_io.write_text(path, "OLD")
+        started = threading.Event()
+        release = threading.Event()
+        real = file_io._renameat2
+        state = {"n": 0}
+
+        def wrapped(*args):
+            if args[-1] == file_io.RENAME_EXCHANGE:
+                state["n"] += 1
+                if state["n"] == 1:
+                    started.set()
+                    self.assertTrue(release.wait(5), "writer A was not released")
+            return real(*args)
+
+        errors = []
+
+        def lose():
+            try:
+                with file_io.protected_output(path):
+                    file_io.write_text(path, "AAA")
+            except ValueError as exc:
+                errors.append(exc)
+
+        with patch.object(file_io, "_renameat2", wrapped):
+            worker = threading.Thread(target=lose)
+            worker.start()
+            self.assertTrue(started.wait(5), "writer A did not reach the exchange")
+            with file_io.protected_output(path):
+                file_io.write_text(path, "BBB")
+            with file_io.protected_output(path):
+                file_io.write_text(path, "CCC")
+            release.set()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(path.read_text(encoding="utf-8"), "CCC")
+        self.assertTrue(errors)
+        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
         self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
 
     def test_tilde_output_inside_the_input_root_is_refused(self):

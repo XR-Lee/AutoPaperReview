@@ -69,14 +69,23 @@ def _token_signature(text: str) -> tuple[str, ...]:
 _UNCOMPARABLE = "\x00uncomparable"
 
 
-def _proposal_raw(value) -> str:
+def _field_segments(value) -> tuple[str, ...] | None:
+    """One normalized segment per text field. Field names do not enter the identity."""
     if isinstance(value, str):
-        return value
-    if isinstance(value, Mapping):
-        return " ".join(
-            value[key] for key in sorted(value) if isinstance(value[key], str)
-        )
-    return ""
+        texts = [value]
+    elif isinstance(value, Mapping):
+        texts = [item for item in value.values() if isinstance(item, str)]
+    else:
+        texts = []
+    parts = []
+    for text in texts:
+        if not str(text).strip():
+            continue
+        identity = _identity(text)
+        if identity is None:
+            return None
+        parts.append(identity)
+    return tuple(sorted(parts))
 
 
 _SPLIT_FIELDS = ("split", "partition", "cohort")
@@ -161,16 +170,17 @@ def development_row(row) -> bool:
 
 
 def proposal_body(value) -> str:
-    """Normalized text of a proposal object, ignoring key order.
+    """Normalized segments of a proposal, ignoring key names and key order.
 
+    The same three passages in different allowed fields are one document.
     Text that survives only as punctuation has no identity. The sentinel is
     not equal to another document's real text, and a requested exclusion of
     that sentinel does not pass.
     """
-    identity = _identity(_proposal_raw(value))
-    if identity is None:
+    segments = _field_segments(value)
+    if segments is None:
         return _UNCOMPARABLE
-    return identity
+    return "\n".join(segments)
 
 
 def _text_conflict(wanted: str, found: str) -> bool:
@@ -255,17 +265,47 @@ def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
     return year, cutoff
 
 
+def _append_arxiv(found: set[str], value) -> bool:
+    if value is None or isinstance(value, str) and not value.strip():
+        return True
+    if not isinstance(value, str):
+        return False
+    identifier = norm_arxiv(value)
+    if not identifier:
+        return False
+    found.add(identifier)
+    return True
+
+
+def _collect_arxiv_ids(value, found: set[str], *, skip_opinions: bool = False) -> bool:
+    """Collect arXiv ids from the row and nested metadata. An unreadable id fails closed."""
+    if isinstance(value, dict):
+        for field in _ARXIV_FIELDS:
+            if field in value and not _append_arxiv(found, value[field]):
+                return False
+        for key, child in value.items():
+            if key in _ARXIV_FIELDS:
+                continue
+            if skip_opinions and key in _OPINION_FIELDS:
+                continue
+            if isinstance(child, (dict, list)) and not _collect_arxiv_ids(child, found, skip_opinions=skip_opinions):
+                return False
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)) and not _collect_arxiv_ids(child, found, skip_opinions=skip_opinions):
+                return False
+    return True
+
+
 def _arxiv_identifiers(row) -> set[str] | None:
-    identifiers = set()
-    for field in _ARXIV_FIELDS:
-        value = row.get(field)
-        if value is None or isinstance(value, str) and not value.strip():
-            continue
-        identifier = norm_arxiv(value)
-        if not identifier:
-            return None
-        identifiers.add(identifier)
+    identifiers: set[str] = set()
+    if not _collect_arxiv_ids(row, identifiers, skip_opinions=True):
+        return None
     return identifiers
+
+
+def _forum_text(value) -> str:
+    return str(value or "").strip().casefold()
 
 
 def latest_stamp(values) -> int | None:
@@ -311,11 +351,12 @@ def eligible_history(
     row_key = row.get("key")
     if exclude_key not in ("", None) and row_key is not None:
         try:
-            if canonical_key(row_key) and canonical_key(row_key) == canonical_key(exclude_key):
+            left, right = canonical_key(row_key), canonical_key(exclude_key)
+            if left and right and left.casefold() == right.casefold():
                 return False
         except ValueError:
             return False
-    if exclude_forum and str(row.get("forum") or "") == str(exclude_forum):
+    if exclude_forum and _forum_text(row.get("forum")) == _forum_text(exclude_forum):
         return False
     if _text_conflict(exclude_title, str(row.get("title") or "")):
         return False
@@ -330,6 +371,10 @@ def eligible_history(
 
 
 _OPINION_FIELDS = frozenset({"opinions", "excerpts", "reviewer_excerpts", "comments", "reviews"})
+INDEX_CLOCK_VERSION = 2
+_CURRENT_INDEX_COLUMNS = frozenset({
+    "title", "abstract", "year", "revision", "forum", "arxiv", "split", "available_ms", "key",
+})
 
 
 def _collect_years(value, found: list, *, skip_opinions: bool = False) -> None:
@@ -489,7 +534,13 @@ def _build_into(corpus: Path, db: Path, decode_json) -> None:
                 ),
             )
         conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
+        conn.execute(f"PRAGMA user_version = {INDEX_CLOCK_VERSION}")
         conn.commit()
+
+
+def _index_version(conn) -> int:
+    row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0]) if row else 0
 
 
 def _columns(conn):
@@ -534,6 +585,9 @@ def retrieve(
             return []
         if exclude_key and "key" not in columns:
             return []
+        # Same columns cannot show that an older build dropped nested clocks.
+        if _CURRENT_INDEX_COLUMNS.issubset(columns) and _index_version(conn) != INDEX_CLOCK_VERSION:
+            raise ValueError("prior index is stale; rebuild it before retrieval")
         arxiv_fields = tuple(k for k in _ARXIV_FIELDS if k in columns)
         timeline_fields = tuple(k for k in _HISTORY_TIME_FIELDS if k in columns)
         aliases = (*timeline_fields, *split_fields, *arxiv_fields)

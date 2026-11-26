@@ -365,7 +365,8 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
             "business receipt has no strict reply to re-validate",
         )
         parsed = strict_model_value(reply)
-        validate(stage, parsed, source, spans=spans)
+        validated = validate(stage, parsed, source, spans=spans)
+        check(old.get("output") == validated, "cached output does not match the strict reply")
         return path
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")

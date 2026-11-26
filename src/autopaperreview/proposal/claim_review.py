@@ -80,11 +80,19 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         if (result.get("request") != descriptor or result.get("state") not in {"response", "refusal", "invalid"}
                 or not isinstance(result.get("output"), dict)):
             raise ValueError("invalid model receipt")
-        if result["state"] == "response":
-            validate(stage, result["output"], body)
-        elif result["output"]:
-            raise ValueError("incomplete model receipt contains predictions")
-        return key, result
+        if result["state"] != "response":
+            if result["output"]:
+                raise ValueError("incomplete model receipt contains predictions")
+            return key, result
+        reply = result.get("reply")
+        if isinstance(reply, str) and payload_sha256(reply) == result.get("reply_sha256"):
+            parsed = strict_model_value(reply)
+            validate(stage, parsed, body)
+            if result.get("output") != parsed:
+                raise ValueError("cached output does not match the strict reply")
+            return key, result
+        if offline:
+            raise ValueError(f"missing cached {stage} receipt {key}")
     if offline:
         raise ValueError(f"missing cached {stage} receipt {key}")
     result = {"request": descriptor, "state": "invalid", "output": {}}
@@ -109,7 +117,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
                 feedback = "\nReturn the complete JSON again, following the required schema."
                 message = apply_leak_audit(body, leak_judge, feedback=feedback)
             continue
-        result.update(state="response", output=parsed)
+        result.update(state="response", output=parsed, reply=raw, reply_sha256=payload_sha256(raw))
         break
     write(path, result)
     return key, result

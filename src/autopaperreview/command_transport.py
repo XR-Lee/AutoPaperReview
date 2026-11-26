@@ -243,7 +243,14 @@ def run_command(
         except OSError as exc:
             raise CommandTransportError(f"command failed to start: {exc}") from exc
         latency = round(time.perf_counter() - started, 3)
-        stdout = completed.stdout.decode("utf-8", errors="replace")
+        # Paper review keeps replacement characters. Proposal calls reject bad bytes.
+        if strict:
+            try:
+                stdout = completed.stdout.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise CommandTransportError("command stdout is not valid utf-8") from exc
+        else:
+            stdout = completed.stdout.decode("utf-8", errors="replace")
         stderr = completed.stderr.decode("utf-8", errors="replace")
         if completed.returncode != 0:
             detail = (stderr or stdout).strip()[:500]

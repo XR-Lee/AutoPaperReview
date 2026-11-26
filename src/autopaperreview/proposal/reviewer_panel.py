@@ -91,11 +91,19 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         states = {missing} if missing else {"response", "refusal", "invalid"}
         if not isinstance(r, dict) or r.get("request") != descriptor or r.get("state") not in states or "output" not in r:
             raise ValueError("invalid reviewer panel receipt")
-        if r["state"] == "response":
-            validate(r["output"], body)
-        elif r["output"] != empty:
-            raise ValueError("incomplete receipt contains unexpected judgments")
-        return key, r
+        if r["state"] != "response":
+            if r["output"] != empty:
+                raise ValueError("incomplete receipt contains unexpected judgments")
+            return key, r
+        reply = r.get("reply")
+        if isinstance(reply, str) and payload_sha256(reply) == r.get("reply_sha256"):
+            parsed = strict_model_value(reply)
+            validate(parsed, body)
+            if r.get("output") != parsed:
+                raise ValueError("cached output does not match the strict reply")
+            return key, r
+        if offline and not missing:
+            raise ValueError(f"missing cached {stage} receipt {key}")
     if offline and not missing:
         raise ValueError(f"missing cached {stage} receipt {key}")
     r = dict(request=descriptor, state=missing or "invalid", output=empty)
@@ -125,7 +133,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
                 feedback = "\nReturn the entire corrected JSON with valid references."
                 message = apply_leak_audit(body, leak_judge, feedback=feedback)
             continue
-        r.update(state="response", output=answer)
+        r.update(state="response", output=answer, reply=raw, reply_sha256=payload_sha256(raw))
         break
     write(path, r)
     return key, r
