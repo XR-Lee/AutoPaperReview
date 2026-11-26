@@ -539,16 +539,25 @@ class AuditAndCohortTests(unittest.TestCase):
         self.assertAlmostEqual(point["rho"][0], 1.0)
         self.assertAlmostEqual(point["rho"][1], 1.0)
 
-    def test_reproduce_script_reports_missing_artifacts(self) -> None:
+    def test_reproduce_script_scores_a_supplied_cohort(self) -> None:
         script = Path(__file__).resolve().parents[1] / "scripts" / "reproduce_proposal_rank.py"
-        missing = subprocess.run(
-            [sys.executable, str(script)],
+        partial = subprocess.run(
+            [sys.executable, str(script), "--manifest", "missing.json"],
             check=False,
             capture_output=True,
             text=True,
         )
-        self.assertEqual(missing.returncode, 2)
-        self.assertIn("not yet reproducible from repo artifacts", missing.stderr)
+        self.assertEqual(partial.returncode, 2)
+        self.assertIn("Pass --manifest, --predictions, and --references together.", partial.stderr)
+        absent = subprocess.run(
+            [sys.executable, str(script), "--root", str(Path(__file__).parent / "no-such-repro")],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(absent.returncode, 2)
+        self.assertIn("reproduced from committed artifacts", absent.stderr)
+        self.assertNotIn("not yet reproducible", absent.stderr)
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             ids = ["synthetic-a", "synthetic-b"]
@@ -596,7 +605,8 @@ class AuditAndCohortTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             saved = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["n"], 2)
-            self.assertIn("not yet reproducible from repo artifacts", saved["published_headlines"])
+            self.assertNotIn("not yet reproducible", completed.stdout)
+            self.assertNotIn("published_headlines", saved)
 
     def test_cli_import_does_not_load_sqlite3(self) -> None:
         probe = subprocess.run(

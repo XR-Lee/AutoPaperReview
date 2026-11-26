@@ -1,0 +1,22 @@
+{
+  "submissions": {
+    "url": "https://github.com/ranpox/iclr2024-openreview-submissions/releases/download/v0.1/raw_paperlist.json",
+    "sha256": "b436c8949b9d74b2ab1dbd8332d6ada57b3db064e031c1a4e4203ffc4ef60527"
+  },
+  "initial_reviews": {
+    "url": "https://github.com/ranpox/iclr2024-openreview-submissions/releases/download/v0.2/raw_paper_reviews.jsonl",
+    "sha256": "9cd41d2f1e741618525d28fbdc3d2d442d829f90cfc265f9a32291239fe8957d"
+  },
+  "official_archive": {
+    "url": "https://github.com/qhjqhj00/iclr-openreview-reviews/releases/download/v1.0/iclr.tar.bz2",
+    "sha256": "350071daf25ebf1aef854ee1d5dc3a81834e1c468917c82a4f78af5548de34fc"
+  },
+  "matched_full_text": {
+    "url": "https://huggingface.co/datasets/latkes/ai-research-index-iclr-openreview/tree/4c9e09931a7814d7500630ffd064b74f1c01bcf3",
+    "full_jsonl_sha256": "05520ebe6dcd973e05b39e283ce3d32e9dfcdba4d9d91b8a0ee36ae9cf3dcd73"
+  },
+  "preprint_history": {
+    "url": "https://huggingface.co/datasets/Harini/iclr_reviews/tree/598fff1e208d4a2ff41ff2b492ad36dfa5ff9fba",
+    "usage": "Exact title and forum match plus arXiv version timestamp strictly before the first review. Version and hash per input."
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "all_calls": "offline cached requests only",
+  "deployed_profile_sha256": "4ec92786cf3cd2545ee518862e3ae4e151cd23853d3769bc8a0021ad5736060d",
+  "fixed": 100,
+  "fresh": 100,
+  "identical_judgments": 200,
+  "identical_scores": 200
+}

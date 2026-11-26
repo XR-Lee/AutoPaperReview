@@ -611,7 +611,7 @@ A title and a short description can be reviewed without a PDF (`prompt_packet` w
 
 `autopaperreview proposal-review` compresses an ICLR submission abstract into an early proposal and scores idea dimensions on 1–5. There is no results section and no PDF on that path. The comparison is the official final mean reviewer score, parsed with the per-year scale in `profiles/rating_scales.json`. The abstract is anonymized before it is split into source units. How to run it is in [docs/proposal-review.md](docs/proposal-review.md).
 
-The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the table below are reported by the original Codex run, not yet reproducible from repo artifacts. The cohorts are stratified by the final score, so the correlation is a within-sample association. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace. These proposals were scored after the conference, not before the work was done. The unit tests do not call a model. `scripts/reproduce_proposal_rank.py` scores a later public manifest; it does not reconstruct this table.
+The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the table below are reproduced from committed artifacts. The cohorts are stratified by the final score, so the correlation is a within-sample association. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace. These proposals were scored after the conference, not before the work was done. The unit tests do not call a model. `scripts/reproduce_proposal_rank.py` regenerates this table, including the intervals, from `benchmarks/proposal/repro/`.
 
 ![Higher proposal scores sit next to higher final review scores. Fixed test n=100, Spearman 0.677. Independent confirm n=100, Spearman 0.597. Two replications n=199, Spearman 0.522. Dots are unlabeled. Each cohort is stratified by the final score.](docs/assets/proposal_score_vs_final_review.png)
 
@@ -621,7 +621,7 @@ The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the ta
 | Independent confirm | 100 | 0.597 | [0.465, 0.713] | 0.794 |
 | Two replications | 199 | 0.522 | [0.400, 0.637] | 0.805 |
 
-The two-replication AUC uses the 141 papers that have a decision. On those 199 papers, the top 20% by the APR score is 40 papers and holds 23 whose final mean is at least 7, against about 10.05 expected from a random 40. On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273.
+The two-replication AUC uses the 141 papers that have a decision. On those 199 papers, the top 20% by the APR score is 40 papers and holds 23 whose final mean is at least 7, against about 10.05 expected from a random 40. On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273 and the AUC at 6.625/10 was 0.681.
 
 ### What this release runs
 

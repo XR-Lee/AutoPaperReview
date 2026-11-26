@@ -1,0 +1,2410 @@
+[
+  {
+    "forum": "fjpfCOV4ru",
+    "key": "59d59081e8df82114fe69358",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.325
+  },
+  {
+    "forum": "tnBaiidobu",
+    "key": "c6977c4389df24b6d9f59291",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.8
+  },
+  {
+    "forum": "3y2TfP966N",
+    "key": "45ed3645f1341d7b67f0a97c",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.75
+  },
+  {
+    "forum": "mQ72XRfYRZ",
+    "key": "a7910fa5c113b66766387049",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.525
+  },
+  {
+    "forum": "vogtAV1GGL",
+    "key": "e1babc3b55753d0ace342130",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.425
+  },
+  {
+    "forum": "YcW8i9VCf5",
+    "key": "d1c68304d0a509e08acc1824",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "bLhqPxRy3G",
+    "key": "35ab4e1be959bb43c1f7af4e",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.175
+  },
+  {
+    "forum": "DLJznSp6X3",
+    "key": "11265b26fe71f33de2176d7c",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.625
+  },
+  {
+    "forum": "KI9NqjLVDT",
+    "key": "50dbdc5c0fd61da19ef088d9",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "Dxl0EuFjlf",
+    "key": "1469174807360b992d1d7f37",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.75
+  },
+  {
+    "forum": "68k0KcHFrW",
+    "key": "ed9dd328fc58181ce6e3bedc",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.175
+  },
+  {
+    "forum": "V0CUOBWUHa",
+    "key": "5bce981f1e31d3a3c7c267f5",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.275
+  },
+  {
+    "forum": "hdoD5OYHPJ",
+    "key": "7b98e1a5b7f64d348aa47880",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.875
+  },
+  {
+    "forum": "QGR5IeMNDF",
+    "key": "39536cb9e39f1757b75e2561",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.025
+  },
+  {
+    "forum": "Zc2aIcucwc",
+    "key": "36a29c0e1ae3f85e9f754618",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.5
+  },
+  {
+    "forum": "UMfcdRIotC",
+    "key": "5345f878a4a52bf321aad3ae",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.2
+  },
+  {
+    "forum": "QibPzdVrRu",
+    "key": "c4c43983db9224d2771754ce",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.225
+  },
+  {
+    "forum": "D7KJmfEDQP",
+    "key": "e1ccbd4021bd5139940ef42b",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.7
+  },
+  {
+    "forum": "Tj3xLVuE9f",
+    "key": "60fe0b784fb12878588a636f",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.375
+  },
+  {
+    "forum": "YrTI2Zu0dd",
+    "key": "db6cccf691c2412d687033db",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.475
+  },
+  {
+    "forum": "XhYWgjqCrV",
+    "key": "fb2171e1a6629a658d9f3ef5",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 2.95
+  },
+  {
+    "forum": "2Y5Gseybzp",
+    "key": "2ab63f77c14d5448f848fafe",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.1
+  },
+  {
+    "forum": "SqMVI1GFnp",
+    "key": "5469200ff319fb1d9f613333",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.05
+  },
+  {
+    "forum": "TJ2PQ9QaDF",
+    "key": "937b53e199f707dda46b4418",
+    "group": "dev",
+    "tier": "borderline_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "nrctFaenIZ",
+    "key": "7be109848b0c90194f28741a",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.0
+  },
+  {
+    "forum": "6jBNQ8nSxA",
+    "key": "d42240cd22196e6b393144c6",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 2.375
+  },
+  {
+    "forum": "z6n1fKMMC1",
+    "key": "0e461061a9f33bbffc768d50",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.9749999999999996
+  },
+  {
+    "forum": "Hf17y6u9BC",
+    "key": "0642a3a1908f23fbf312f509",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.575
+  },
+  {
+    "forum": "S5yOuNfSA0",
+    "key": "a8844f8578425c82dc67f562",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.45
+  },
+  {
+    "forum": "816T4ab9Z5",
+    "key": "6b30d4619ba9c367769c9412",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.075
+  },
+  {
+    "forum": "Tj6Wcx7gVk",
+    "key": "574536332584ab0f40f4f19e",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.175
+  },
+  {
+    "forum": "XVhm3X8Fum",
+    "key": "bdfe62f68754a64eae0f3bd3",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.4
+  },
+  {
+    "forum": "rIx1YXVWZb",
+    "key": "21775943ae5628143f88f834",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 2.975
+  },
+  {
+    "forum": "k2a2aPOA4b",
+    "key": "b27adf01880048acfd44dfbc",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.125
+  },
+  {
+    "forum": "TS8HoIWAPQ",
+    "key": "3a916cdebb10ba17d3ba1729",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "sNFLN3itAd",
+    "key": "bba32db6bdb5bb4e2271550e",
+    "group": "val",
+    "tier": "borderline_accept",
+    "base": 3.475
+  },
+  {
+    "forum": "sOHVDPqoUJ",
+    "key": "99d48fc942973facb26336c8",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.6
+  },
+  {
+    "forum": "53gU1BASrd",
+    "key": "8f2308dbd56c0fac1f9c3778",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.4000000000000004
+  },
+  {
+    "forum": "gusHSc09zj",
+    "key": "c7240a86c8d5bd0ef3f6becb",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.825
+  },
+  {
+    "forum": "X2gjYmy77l",
+    "key": "d9939e4dec6899b05a2882fc",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.4
+  },
+  {
+    "forum": "dKPh4CLmYp",
+    "key": "e38c6d09030f6806f39babca",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.125
+  },
+  {
+    "forum": "9XdLlbxZCC",
+    "key": "2f72864a7f8edcf067b6a9d3",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.125
+  },
+  {
+    "forum": "ia9fKO1Vjq",
+    "key": "fc43ee7274c1925fe54b934e",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.025
+  },
+  {
+    "forum": "qOFLn0pMoe",
+    "key": "59e58ff05ae8fcf6c805bbf7",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.55
+  },
+  {
+    "forum": "ZhY1XSYqO4",
+    "key": "976c6b4a3a48424ad2d6dcce",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "l5rEkR8OgU",
+    "key": "3af2cf2b7a03c7299d574306",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.025
+  },
+  {
+    "forum": "rYyu3jpk8z",
+    "key": "ff0d5b5414f97fca1ad46fc7",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.225
+  },
+  {
+    "forum": "Fn655mJ4bv",
+    "key": "e4221f60d757efb374f746d8",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.075
+  },
+  {
+    "forum": "4e0ItHjNo9",
+    "key": "9929364690aaedd40283abd5",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.25
+  },
+  {
+    "forum": "6yXAKleluj",
+    "key": "685a15934cc8bc7bede51c12",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 1.975
+  },
+  {
+    "forum": "kKxvFpvV04",
+    "key": "f83a4b3539af994f3d711749",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.025
+  },
+  {
+    "forum": "wCRTEOIdmf",
+    "key": "40722fc62108696a0f25a392",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.65
+  },
+  {
+    "forum": "Dk1ybhMrJv",
+    "key": "4629592280885be986c034f2",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.0
+  },
+  {
+    "forum": "83w0LPowHz",
+    "key": "9c237b7312d6f8ca748c0acd",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.95
+  },
+  {
+    "forum": "hdCDVSPQ7v",
+    "key": "732f2503f49a62cc50e42b69",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.5
+  },
+  {
+    "forum": "QHfIe4chR5",
+    "key": "2d3f0bc454c9b4cabe2e5181",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.425
+  },
+  {
+    "forum": "wRkfniZIBl",
+    "key": "9512569bcb9cfeca7c391eae",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.375
+  },
+  {
+    "forum": "feZ7RpTLRy",
+    "key": "fc6d58ffa0fe2b783ec82761",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.725
+  },
+  {
+    "forum": "CXjz7p4qha",
+    "key": "38cf0d16f01c7a6511e6aaa3",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 2.85
+  },
+  {
+    "forum": "zDMM4ZX1UB",
+    "key": "fc8717291535b350664ef53a",
+    "group": "dev",
+    "tier": "borderline_reject",
+    "base": 3.4
+  },
+  {
+    "forum": "fV54cBCGEV",
+    "key": "ef97e9a640732d212dfd30a1",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.475
+  },
+  {
+    "forum": "YnaGcMJQ0M",
+    "key": "fd2bde376f88c7fb60d24ddb",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 3.05
+  },
+  {
+    "forum": "tcx84iyqaC",
+    "key": "67500e5146908888932f8732",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 3.525
+  },
+  {
+    "forum": "Pzir15nPfc",
+    "key": "0ca4ae17a396ab50b8818ac6",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.775
+  },
+  {
+    "forum": "wsWGcw6qKD",
+    "key": "0caa5c90dd8414ecab6f695a",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.925
+  },
+  {
+    "forum": "lgmCGI2IpI",
+    "key": "c64ebef7d90682caca9fc386",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.3
+  },
+  {
+    "forum": "iZQW7eutCv",
+    "key": "c53eef6f330a867e0ecdbf48",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.925
+  },
+  {
+    "forum": "nAR9xu8WM6",
+    "key": "2119bd7e3c0954702c8ef6a9",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "MXI8aSgl53",
+    "key": "6623bc93b37a81c6b6187806",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.325
+  },
+  {
+    "forum": "PtB6l1vNtk",
+    "key": "b5f4fe87c926584f36a72c32",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 3.075
+  },
+  {
+    "forum": "tyIPw2m3Um",
+    "key": "4bec60e1963110a1880c205c",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "HnVtsfyvap",
+    "key": "3caeffda8cf37b9b2a68ec7a",
+    "group": "val",
+    "tier": "borderline_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "L0r0GphlIL",
+    "key": "53a806f1a16b3ac92b78ecbc",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.55
+  },
+  {
+    "forum": "NialiwI2V6",
+    "key": "c2da9a8fa47370e0fb6b4446",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.625
+  },
+  {
+    "forum": "1BmveEMNbG",
+    "key": "306149a4ff4af4757e2bdbd1",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.775
+  },
+  {
+    "forum": "dONpC9GL1o",
+    "key": "5b411a2c14af231e9368b509",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.75
+  },
+  {
+    "forum": "ViNe1fjGME",
+    "key": "05bb3958653ff8026939a670",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "g7ohDlTITL",
+    "key": "c03e5c2910e245b68f2daf21",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 4.225
+  },
+  {
+    "forum": "26XphugOcS",
+    "key": "8d502ffd5771cb10954d1259",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.225
+  },
+  {
+    "forum": "3M0GXoUEzP",
+    "key": "5f9ae81fa43585e8dc174ec7",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.2
+  },
+  {
+    "forum": "P1aobHnjjj",
+    "key": "44588394bb3055f2c87aa9dd",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.375
+  },
+  {
+    "forum": "ze7DOLi394",
+    "key": "be53713fcf006d6187105eed",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.35
+  },
+  {
+    "forum": "hNhwSmtXRh",
+    "key": "e9e4c1ccc814716c0549cd42",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 2.575
+  },
+  {
+    "forum": "Ouj6p4ca60",
+    "key": "7fcd24e21dbfcfcb3287ca45",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 4.0
+  },
+  {
+    "forum": "MrR3rMxqqv",
+    "key": "7a46463bbe19e7f9142ee992",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.4
+  },
+  {
+    "forum": "3cuJwmPxXj",
+    "key": "504cd69dd3e8463e28f09829",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.75
+  },
+  {
+    "forum": "fCeUoDr9Tq",
+    "key": "e5e9d2c35120335ad815230b",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.275
+  },
+  {
+    "forum": "AbXGwqb5Ht",
+    "key": "e70913760ff8ee2b211c830e",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.55
+  },
+  {
+    "forum": "yuy6cGt3KL",
+    "key": "1942de45a0dc72c333961ebf",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "YEPlTU5mZC",
+    "key": "4a9ad72a7211440866286329",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.25
+  },
+  {
+    "forum": "PP1rudnxiW",
+    "key": "d6f027720ba17d1086523d5c",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.55
+  },
+  {
+    "forum": "34STseLBrQ",
+    "key": "d0421a41d7cccbe6e287529e",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.7
+  },
+  {
+    "forum": "3Vw7DQqq7U",
+    "key": "df84a166e3e09211c3d8cb90",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.25
+  },
+  {
+    "forum": "i9Vs5NGDpk",
+    "key": "d571728cd4b4cc4ca425e1e6",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.5
+  },
+  {
+    "forum": "UyGWafcopT",
+    "key": "8fabd34bd635e0585dd64de0",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.6
+  },
+  {
+    "forum": "DASh78rJ7g",
+    "key": "e8b317d7c7511e2535939124",
+    "group": "dev",
+    "tier": "clear_accept",
+    "base": 3.625
+  },
+  {
+    "forum": "PdaPky8MUn",
+    "key": "3d747015c21fb9744854b48f",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.95
+  },
+  {
+    "forum": "nLWiR5P3wr",
+    "key": "3683f95ae29e486d9b471751",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.525
+  },
+  {
+    "forum": "yiMB2DOjsR",
+    "key": "3303b32b082f4b09877e241f",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "v0zNCwwkaV",
+    "key": "ffc17fc78f1d6d92e88cf3c4",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.55
+  },
+  {
+    "forum": "2dnO3LLiJ1",
+    "key": "0dea2b7f9bf52ee4d3362f84",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 4.2
+  },
+  {
+    "forum": "8BAkNCqpGW",
+    "key": "44911d9e3614741a38b7bf1d",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.175
+  },
+  {
+    "forum": "DqziS8DG4M",
+    "key": "14f254748b4be0a567cf37d2",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 2.75
+  },
+  {
+    "forum": "TjhUtloBZU",
+    "key": "a01226289380e2e8777fd483",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.6
+  },
+  {
+    "forum": "5t57omGVMw",
+    "key": "85160ec7cfb81c3111b7eb04",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.7
+  },
+  {
+    "forum": "rmXXKxQpOR",
+    "key": "3f632822523ec2283a27bb97",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.475
+  },
+  {
+    "forum": "Bo6GpQ3B9a",
+    "key": "ae560bbf9351658ad545a8c4",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 2.8499999999999996
+  },
+  {
+    "forum": "i9K2ZWkYIP",
+    "key": "62331c8e9fe732b58b23a662",
+    "group": "val",
+    "tier": "clear_accept",
+    "base": 3.775
+  },
+  {
+    "forum": "qW9GVa3Caa",
+    "key": "3d10d0962b3b52d99c38877f",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.525
+  },
+  {
+    "forum": "yNyDvFQNEm",
+    "key": "23d3e6d93cb80bbe40532ae4",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.375
+  },
+  {
+    "forum": "3nPFco1EKt",
+    "key": "7a7b120060f93153afcc2711",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.4
+  },
+  {
+    "forum": "cSSHiLnjsJ",
+    "key": "084940e91db15c30bd7b0efd",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.3
+  },
+  {
+    "forum": "vY4iBYm9TU",
+    "key": "e7f5c2fbd8bdfd5707d8c476",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.725
+  },
+  {
+    "forum": "scxDIx6StY",
+    "key": "f776ded19711924928fb4c5d",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 1.975
+  },
+  {
+    "forum": "xJ5CF1aOOX",
+    "key": "bfc2aa1c72c0663d9aaa4575",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.125
+  },
+  {
+    "forum": "FL1VmOgiO8",
+    "key": "a899a274baaad0d9ad896f5b",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 1.725
+  },
+  {
+    "forum": "lvjz7Bm3Ea",
+    "key": "4a7c2c99d91a16d5825f55ef",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.275
+  },
+  {
+    "forum": "sSWGqY2qNJ",
+    "key": "2746eb479d5b5dfb03ea8fee",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.1
+  },
+  {
+    "forum": "lK0WxHeups",
+    "key": "6f90cb1e784f4c67e91ab42e",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.25
+  },
+  {
+    "forum": "pUy4mGPmUy",
+    "key": "33d87837a5d33792b7cfcf4d",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.35
+  },
+  {
+    "forum": "zhJDD85QHD",
+    "key": "b07236799dff5b10c58b8c97",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.225
+  },
+  {
+    "forum": "OWUWWr50PF",
+    "key": "8fd0901aea984949c201745d",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.025
+  },
+  {
+    "forum": "gENfMmUIkT",
+    "key": "3a298ca5955b2a6268111092",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.175
+  },
+  {
+    "forum": "RFLZFxoLnE",
+    "key": "517d99f30d5d723497302400",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.45
+  },
+  {
+    "forum": "YRJDZYGmAZ",
+    "key": "38922536278380e44b41ba91",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.275
+  },
+  {
+    "forum": "msuaCcTMQ2",
+    "key": "4914ecb0066be3436b256d9e",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.175
+  },
+  {
+    "forum": "OJYIyO4G1t",
+    "key": "e87dd924f580e892761504a4",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.275
+  },
+  {
+    "forum": "7Yg5eylBHe",
+    "key": "019f68d71e085fcc877d288b",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.75
+  },
+  {
+    "forum": "7gVX2LxE7A",
+    "key": "9be2ac18d2a1fc537de33b8b",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.5
+  },
+  {
+    "forum": "UqEI76CKgO",
+    "key": "08b75259ed9137b33237aa6f",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.875
+  },
+  {
+    "forum": "10fsmnw6aD",
+    "key": "16fb4a0088b30daa84d12821",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.15
+  },
+  {
+    "forum": "SznHfMwmjG",
+    "key": "e697054ace3c322645d76139",
+    "group": "dev",
+    "tier": "clear_reject",
+    "base": 2.4
+  },
+  {
+    "forum": "SZErAetdMu",
+    "key": "d4f0f5ac702da2f54f7c3853",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.725
+  },
+  {
+    "forum": "WKALcMvCdm",
+    "key": "c8d15f7ab6c737eb79b5cc8c",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 3.05
+  },
+  {
+    "forum": "AxYTFpdlvj",
+    "key": "31c30c77d273e6b287aa633a",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.175
+  },
+  {
+    "forum": "HvTJLthEGQ",
+    "key": "da9fafc818eb3220c21ea99c",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.65
+  },
+  {
+    "forum": "2zoi9YI21Y",
+    "key": "fe3bedb1862145e172ee49b8",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "vrjDNgAfp4",
+    "key": "a5c54db001a76593ca2c7478",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.375
+  },
+  {
+    "forum": "FLOaCQfZe9",
+    "key": "ed2ab5182ff83e0caa2b8d61",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "KZZbdJ4wff",
+    "key": "2cc66c2d65bb5e956a3ac97f",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "BRO4PfCiwb",
+    "key": "5b60d7ab18445570166c7b4e",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.825
+  },
+  {
+    "forum": "RGE8Bs5Tra",
+    "key": "1b3fa722af676eb88ad63cdd",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.3
+  },
+  {
+    "forum": "5zwrpqYIK5",
+    "key": "bb6cef52756165dfe7240abe",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 3.3
+  },
+  {
+    "forum": "ZlZakr4GYK",
+    "key": "279c0cbccea446f834864bdd",
+    "group": "val",
+    "tier": "clear_reject",
+    "base": 2.75
+  },
+  {
+    "forum": "ki4NYmRTQI",
+    "key": "515d39c920cde84d54fce7d70894e50f52ec23e44ca378f9c2e7e29b712eb369",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.875
+  },
+  {
+    "forum": "Q8ypeYHKFO",
+    "key": "1a3f003e1a13e84d4759b3c2f48b43ba1b2df7a47a93fa90bf8e24eba3f7ba8d",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 3.725
+  },
+  {
+    "forum": "NV6rn7j5p5",
+    "key": "146ac0807e65a80b9cb4df5019895f8789e6ed1e196ed82ced1e684af6e33144",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 3.95
+  },
+  {
+    "forum": "wPK65O4pqS",
+    "key": "3c33fc92977e4f199a3b0fca5001154895d2b69dd16c71efc783184a56fb217d",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 1.85
+  },
+  {
+    "forum": "6EQbYM0CIX",
+    "key": "5fdac92eb202fa354cc2be9e62a4fc2f1daece8c65af288d56200afc644dfa84",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.875
+  },
+  {
+    "forum": "HTH3HnJeRC",
+    "key": "d81a4446714b16860e4df10607266cd69394d6dbc40150fba8a0dbde54685ee0",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.1
+  },
+  {
+    "forum": "tItq3cwzYc",
+    "key": "ad17f262539745dac5a23f8b86541fe294b7fe88a6b5f1bcfd50208985a62516",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 1.575
+  },
+  {
+    "forum": "vwSxJEq8VO",
+    "key": "845cd00e2f75273c17790c9e0fb20ee519df4ebbfe0118f2102411aa5c2fa387",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 1.85
+  },
+  {
+    "forum": "4d32Ufnoxb",
+    "key": "2b1e7b3835dcb607d89f12361eff92f822759ae32f9f5c955359de025d308f6f",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.175
+  },
+  {
+    "forum": "hxAveMWogn",
+    "key": "f7ac20bf7dd115b19dd9eb2b6565da0d2330c4258a2393022362cb6cbfc60657",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.775
+  },
+  {
+    "forum": "wyHCt1P7SR",
+    "key": "d58a38dfe497c14c384a59d5dd0713f6612943524797b96b6f88ce29f13ef708",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.9
+  },
+  {
+    "forum": "HgndgAbBcR",
+    "key": "c2eab24996b1a03b67ddc682df5ad60c5243f727bb1813d3c8463fa6a55e981c",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.65
+  },
+  {
+    "forum": "MACKSU3xed",
+    "key": "bdd6ed614781bd6339ef9b2a860d40f83968229d75ef4aee86e6a8e8e68b828c",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.075
+  },
+  {
+    "forum": "LlG0jR7Yjh",
+    "key": "065f8a6506c01aa6baa509c5ded5af47da49abbcafa743088e6feb269e9cff8d",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "N581Nje6fH",
+    "key": "db9592093dd3ca5117dae1567ea3b77098b3f4bfa4c4fdb62b283cf1e2c1c17f",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.125
+  },
+  {
+    "forum": "HZtBP6DZah",
+    "key": "eb74841676336ddf5cb3d9c9ed3bbcd22c7beb08991dbd3dd646543cf8b9a8a8",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "uK4TYkVBJG",
+    "key": "67a9eb4cd1a63d6d9aa357337e6feb80fae71217b6596216e4c161e08486a3fe",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.35
+  },
+  {
+    "forum": "CgkAGcp9lk",
+    "key": "c4c26b4c6d8add90ab5277b9ef48dc306dbbf56412e25c9f54dc2ca73bbaac44",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.125
+  },
+  {
+    "forum": "eqWUGoyUVI",
+    "key": "46d130c71840b3b091053a91e09f3ab54a62326fde35d559a884165c52aab3dd",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 3.225
+  },
+  {
+    "forum": "CJBAMwl2ds",
+    "key": "65829c6a97d1f7a3e957a1fee62241d51ae13dc0a1c482017b6ca6881f91c2fd",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.2
+  },
+  {
+    "forum": "11oqo92x2Z",
+    "key": "afdef87f83ea065b233e31f300cffef71928b68d528545608c8b4b650de209b9",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 1.9
+  },
+  {
+    "forum": "KEu5imWGhw",
+    "key": "46a32bcf9fd43099c71b5211c11a1efef51e2d5b3fffeb83ac415defc1195bc9",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "jFiFmHrIfD",
+    "key": "d14442bd1d664921f225bfdcb5977409535a20add5c81acb2d2480d212637ea6",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.2750000000000004
+  },
+  {
+    "forum": "fI6TkT050a",
+    "key": "ed2e8bee6e569802402aeb90428043655e4a1124a581a98ee0cdb88348dee496",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "jENDptNU5u",
+    "key": "0b45a0d9f4d94eb7a6b36f6dec57b8500ccb8c13f9a6f7e37e3e3318cd3f8498",
+    "group": "replication_A",
+    "tier": "clear_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "Po6lYYsrB4",
+    "key": "42ec87f7d8edfe67a43b1db0b26fe0f8fcd8adc549ccb08a4a4210be09076bfc",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "rtzUW1FU3H",
+    "key": "a64e850ae02a51b2b3a9ca5ef5216e62ac9e9913dcef7a7725ab6f4fd6a8faf6",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.05
+  },
+  {
+    "forum": "f5juXkyorf",
+    "key": "015ea78f95d36c75f9325e614253294bc093324e7e0d8bfc5af5e52b47afdb8e",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.35
+  },
+  {
+    "forum": "fH2wf2w2Ss",
+    "key": "e22cd5f98b4df4c8fe549aaf72a42136178945b6dee0198e60563e3670fe4888",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.425
+  },
+  {
+    "forum": "WA2mZrDTAH",
+    "key": "d3b7e68f4cb64387466e1cf6cb6865f48fa5ffecd2661cb86c4b7fa758b0c271",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.75
+  },
+  {
+    "forum": "s5ZAs0UkRr",
+    "key": "2ba2487922fcdad76db82940468a31815cdb8713a0d42f1c50eb2225d9d8b310",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.475
+  },
+  {
+    "forum": "jHdz0CIS2y",
+    "key": "635147b627dffab2f29d282eac5f95ed65c82e39d7740d437719ce84c67c7422",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.825
+  },
+  {
+    "forum": "992eLydH8G",
+    "key": "4c930b2ac4aaacc7da496bf7c7f37b8c4366035ee4b18e7b9393f755e601ffa0",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.825
+  },
+  {
+    "forum": "EEqEyyYUwc",
+    "key": "7e6ec2bc61e75ed2f7abdb711440e4a7375a78a18428cbe8f1321161feb6ea44",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.225
+  },
+  {
+    "forum": "nR1EEDuov7",
+    "key": "cac5a151e0ea1f6970448e2e72abd601730f9c3e521455e1fed05e164ff5c1db",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": null
+  },
+  {
+    "forum": "xvhjRjoFCN",
+    "key": "f52d9a27df98692a1f58d9eb04ebbda905e36f5513486cb612578e21fd6a722f",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.1
+  },
+  {
+    "forum": "fKfvyJeAlY",
+    "key": "360bc0368a9dd13098f933f6a2ada3830af57cc47f0b6af6d588c5376898f8e0",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.775
+  },
+  {
+    "forum": "TzWLecXH6I",
+    "key": "63ae91f865a48e240c7e8b2fae446d2c4a9624f050dbb160d9f1c2c5c1bb3a91",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "Howb7fXB4V",
+    "key": "6f20545d06ed09c92b7b0bf14454331a6263e3cb214b48050fc6c4eb5b0c88de",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.75
+  },
+  {
+    "forum": "SdBQM7f4bX",
+    "key": "14b37705e2809e6de65e614018b319e50751d6d5a63bee99e7bbdabb16dbf082",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 1.85
+  },
+  {
+    "forum": "Z73ymB1C7G",
+    "key": "7528a2023baf153a915bfb3df4645b516e2c851a6f499baf907ce9b24320a68f",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.925
+  },
+  {
+    "forum": "aTFPO9FHL3",
+    "key": "9bb19a0e4d8d31319d706bd242a39ae882decbf02d2a7b1b24ecf9c17086c10b",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.525
+  },
+  {
+    "forum": "sk7RRHFk7M",
+    "key": "9dd6531708d8ceb8296468f9c54818e597e163f6b9a8a70116ab13cfe213262c",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.025
+  },
+  {
+    "forum": "zCJFTA19K4",
+    "key": "2e842ef82257bdef6909a2fc28c9dfb8171aa3d358791ad54be0fe2ab2700320",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "reDaK6lvzM",
+    "key": "bac24ca88c212d892c046befe6796a346e0e83f0656cee0c64b60e1979c4a0f0",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "hgQFmoZT4g",
+    "key": "73a56f25c9900f4cac98b0850a5e580ca62074d4ce5cf4b75c74fac0b7202c2b",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "4PzxLPEGRn",
+    "key": "0f5b414ce9a17efe090b1bca4c1b8cc7b3dd1c9bc6ab599a7015f611c319c500",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.95
+  },
+  {
+    "forum": "RC2yS5QZQc",
+    "key": "1455d8c9b921141e34a461a1f7d8b5abb0d8157e03cbc10f13024cea7e0613bd",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.4
+  },
+  {
+    "forum": "sVs7lV691r",
+    "key": "98366983bb280b3f4806f35502df0ed92b6dea545ff00315a0d45ba5a03edccb",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 2.725
+  },
+  {
+    "forum": "9n9q0R9Gyw",
+    "key": "156c7daa3d8af867eebecf9abc47bcf7957f9853ff52dbdc00ffd1805be6313e",
+    "group": "replication_A",
+    "tier": "borderline_reject",
+    "base": 3.25
+  },
+  {
+    "forum": "7hxoYxKDTV",
+    "key": "8e9db7c67a8ec4b79a5c4ef18d0347123fc41929394d221a03551d0d80b58b40",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "yisfNWUEsD",
+    "key": "8fb429d8bf8daf53e0d98b40a77d544106e7e4ace9606c39f9886a5c95ee4d96",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.625
+  },
+  {
+    "forum": "488A64eOf6",
+    "key": "4a548f2b55b07935f885e7ae34ed564d865078c0f843f802c0053c8ff238d97d",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.95
+  },
+  {
+    "forum": "DzxaRFVsgC",
+    "key": "34cb27c4777ddc00b857a8df657eba6f9a6bbebed70e20c75b5986b3e83cf834",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.2750000000000004
+  },
+  {
+    "forum": "xh3XUaB8M9",
+    "key": "1c37018ff8d64381f8ad27d0887004b424e2fd4a6d502f60772331df7c42cc24",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.15
+  },
+  {
+    "forum": "ClqyY6Bvb7",
+    "key": "0a15d94aca2ba77348e7a400d70939498725e1aa00cf88399de3d35b7fc99a6b",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.75
+  },
+  {
+    "forum": "tc1jaWpi7M",
+    "key": "94e480ea07fda2216314982262678979ae7ef73894dd4f4ec11cf1521b7f7926",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "ALVwQjZRS8",
+    "key": "81ec8216402543662eb6f9025404067cb706653c55344d2bb0f51c4c26f9e44b",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.075
+  },
+  {
+    "forum": "8Xx0mKoCMd",
+    "key": "9956c6560737a7a4d0775efe5a9fceaf7c5a426a9a67bc7f086511472cd0f3bd",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "J9Vwp7TiE5",
+    "key": "1db3e5cfb51ae9ffae785ae13d8e34f884722738673a2926417a1d0172a4f064",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.0
+  },
+  {
+    "forum": "2XBBumBGeP",
+    "key": "3be4952b3767aa4238605474e9bccfb4d1e84b5d9042038db52497114ebfd844",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.5
+  },
+  {
+    "forum": "ktG8Tun1Cy",
+    "key": "73cba23b90891e64365ec693e7b4f4e2e6c3182a275cc78784bb18fd9ff45aa7",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "R0c2qtalgG",
+    "key": "d4569236ba5ff78c7246ee61587475586cd3066e80f66f903992e476917e45e4",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.95
+  },
+  {
+    "forum": "A6juYCULJO",
+    "key": "cc87769b846b2d4dcff3364f421cfe55eff34b0bec6133c98f3e9873e9488f96",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.275
+  },
+  {
+    "forum": "iH49a0yxgF",
+    "key": "add1a61d69a6ce55792b3fe583542b217e860eaccd077fb8190311b900bed756",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.65
+  },
+  {
+    "forum": "4YgfwJBJeQ",
+    "key": "aa9b2cfaf6084c2f19e14b84e2573c152168501e6a26f313176e7addafdafacb",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.7
+  },
+  {
+    "forum": "1bAUywYJTU",
+    "key": "4a9a2faf1e8574e70b2c6572d84beae7bbdf7c649cdb24a9c5d08728bc8cf20a",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.825
+  },
+  {
+    "forum": "z7usV2BlEE",
+    "key": "16e81df9db35f37eebf2e6e39b0a4fba172023735522232b769174d5a19f42b3",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.875
+  },
+  {
+    "forum": "bEDTZxwJjT",
+    "key": "683a23f4f32bb5c3e1664292b3049382344a007aa0aefed08860f9b1294dfe06",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "bpheRCxzb4",
+    "key": "316f01698ec6361eedc0a58c3675a93b6db8a7d0eec864e325129935c3a57d9c",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.825
+  },
+  {
+    "forum": "nNyjIMKGCH",
+    "key": "45372bfa8ff516c749e70bdca113b94525200e73a81c0291af959b8c0a6539bf",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.0
+  },
+  {
+    "forum": "2pvECsmld3",
+    "key": "561724eb5b7b3c324b40c67147af970767d39c7791fbda39f0737ea47c72051d",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.325
+  },
+  {
+    "forum": "rnHqwPH4TZ",
+    "key": "64f7eb57c0f20dfccd56b35e3464192889da1e06b7091fcd09a4b266802e00d6",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.0
+  },
+  {
+    "forum": "2msbbX3ydD",
+    "key": "9f0678767922cdd1ff3fbb755de00c04cf2ed157d99252fddae3dc0b8dc58160",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 3.425
+  },
+  {
+    "forum": "F9Qy7mH34l",
+    "key": "47f73af8b8b77c9b669109a0106daf03aa2b19c51c58934bb2baf0086f838dc3",
+    "group": "replication_A",
+    "tier": "borderline_accept",
+    "base": 2.775
+  },
+  {
+    "forum": "LXVswInHOo",
+    "key": "33b217d2667c559a56076a3b0cf000a51b7fba14e89153fdce90814ba950d188",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.675
+  },
+  {
+    "forum": "ozX92bu8VA",
+    "key": "6de1d7b9eeec7b6d333cf2b447071605d099857517ffb8cf06b7c4d1231fd832",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.675
+  },
+  {
+    "forum": "3bq3jsvcQ1",
+    "key": "aa5d189b5708bfe874e39b5f421911e94043dee814b955077990ef0f95866502",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "jjiOHEcS2c",
+    "key": "60828e46dd298e3cdda307eb88ecb8a493031de81a87565b350807601fe6e0a7",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.2
+  },
+  {
+    "forum": "CGlczSBBSj",
+    "key": "a32dbe722de446519f05115a61cd4bd441ce2325efdaa978617a4e41e4e4f2aa",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.075
+  },
+  {
+    "forum": "qL9gogRepu",
+    "key": "64ce655f282c519f1133413031cb680243399b124064c803c5d73163126bc914",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.55
+  },
+  {
+    "forum": "OUeIBFhyem",
+    "key": "fa02cc667e471a2d86b38566be1835d796f846c6825152b9afacb423761f6e9f",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.3499999999999996
+  },
+  {
+    "forum": "sllU8vvsFF",
+    "key": "adcd19d2b0c7dd82625e1b892ded68cbe506db2114916f13aa35859d2aa2b6e1",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 4.0
+  },
+  {
+    "forum": "xsd2llWYSA",
+    "key": "ff6525b041a44aeda68d3a03595b5e1518eb745f29fb182ed0291bb1a4479652",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "84n3UwkH7b",
+    "key": "f63dc03039d17e84bda0b3a8b9d3e4a3e91ff80567aa8ee6cd64449a76e8ea1e",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.7
+  },
+  {
+    "forum": "bH6T0Jjw5y",
+    "key": "879a629fe6c235014972fa9dc070d3d43581efbd355f883474339357a787ade2",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.25
+  },
+  {
+    "forum": "SQrHpTllXa",
+    "key": "a31130032ca6ac6324cbbd137f42f5abd6fb0d48b8c50ee987f646a156e5339b",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "VdwVOREDZM",
+    "key": "83378a671b89b3f3b5f2afbd82c083ab3c315ca516e6687240656a0675491432",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.525
+  },
+  {
+    "forum": "H4yQefeXhp",
+    "key": "4a435d99a9da4ad6cebd852aa95baad6a8528df946bcdcdf0d74d4a97a4033ea",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.825
+  },
+  {
+    "forum": "gzqrANCF4g",
+    "key": "e387bbbac47daeca62e876188ef2fcdd0f70e5fb1da362402d6fff354dfa7840",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.45
+  },
+  {
+    "forum": "TrKq4Wlwcz",
+    "key": "884029e67bf3b4f601c466a9a06960ed1f0d02d39e53d9968f4401e326ea483a",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "fUGhVYPVRM",
+    "key": "36d037a4d7086e2d52fd86c1fdd38a42e139f5344ba54acb8bd31140f503a47f",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.25
+  },
+  {
+    "forum": "kUuKFW7DIF",
+    "key": "b804180c2e1231a6a0a0198b6d96d673c6bbffc287c93b4bebcecf084986a693",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.625
+  },
+  {
+    "forum": "6ALuy19mPa",
+    "key": "da00ca060b106dee83a94560df581c3c01284f1e9c078702ba82884110435bb8",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "vpJMJerXHU",
+    "key": "7cd5c3f64ccb5d6c65cea700a5fc126bdb3ea2023711ede069e7d1cb966e96af",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.175
+  },
+  {
+    "forum": "BXY6fe7q31",
+    "key": "a3181d8d6aa1a73d50c8d47c5a4e6256328aa4f4fa66fe1f0d7cae8ffa86ba3e",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "6O3Q6AFUTu",
+    "key": "9de0b13ac7d0ca43cd1e1c5999b45df18d59f9803f35db3ecb0808ee426ed875",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.4
+  },
+  {
+    "forum": "FlhjUkC7vH",
+    "key": "ce2366c12923bf7d6fa4309f90e6acf1e0590b75db7c5ff35bfa75f58dca7e82",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.75
+  },
+  {
+    "forum": "o8tjamaJ80",
+    "key": "408e3a80665bfa96374482b7f498ddf52be381d67e8ebe181b3357a8ab5ed65e",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 2.625
+  },
+  {
+    "forum": "tUtGjQEDd4",
+    "key": "6049ef407073e09bd7d7b9eb426c06cc255a287e9280bd785abb241a13546f3a",
+    "group": "replication_A",
+    "tier": "clear_accept",
+    "base": 3.425
+  },
+  {
+    "forum": "2Rwq6c3tvr",
+    "key": "0081c2d56cb96d93216a74d1ce99986121714fd1c423f21369c4c0afded952da",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.425
+  },
+  {
+    "forum": "9ROuKblmi7",
+    "key": "03e1f7364b4d173632e1c5770c3cc60697e115217ef5f627ad9a49d70b72dcc6",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.775
+  },
+  {
+    "forum": "QQYpgReSRk",
+    "key": "058cb4415521c079876717b72db06b45fd0a6bdcb2331a2ee0acfcd82f3d3fcf",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "P2gnDEHGu3",
+    "key": "08e300cbd5c8eef80ca7ee10526fbac661c29d7940a1780a2dd90f02b7906f52",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.2
+  },
+  {
+    "forum": "jYsowwcXV1",
+    "key": "0930e4b4751d2f13f3ffa4764e8f611cee2d6f9d4d407ca701b4e648829a07d1",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "6cFcw1Rxww",
+    "key": "111aceb1e3bdfcb5b7df3c4b50964837505c75fcd3ea5abb79362fb057c3eea9",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.25
+  },
+  {
+    "forum": "C6a0Obrp3o",
+    "key": "11f5585a50bf0f481eb75430616bc6fc07a80ead8176754948affc2737be0118",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.425
+  },
+  {
+    "forum": "PHGxChm1l5",
+    "key": "15a3681ed63d55d904b6c7fbbaf5cc1b38e752b886ce47f93cd010d230abe667",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.9
+  },
+  {
+    "forum": "2BfZMh9td4",
+    "key": "1a17bf48d5aaf14409b486ca1c41f7da9d79d3595fd9b68ec5e21e03064e6a33",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "rWVlkLgP3q",
+    "key": "1b4f7fd3228d1a418ef49d3affb5074919daadc425d65beb045926f8e5604492",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.375
+  },
+  {
+    "forum": "TVg6hlfsKa",
+    "key": "1cdf7a3ae109cbd10af83551eff1a7a56b53773101e0228c5a29fb2be263baec",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.25
+  },
+  {
+    "forum": "1Htbe2fiQU",
+    "key": "1d59fb96791fce68fbd01c1770cffd3d9ce17d7074a158f8b5e8547108b8fcf4",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "hss35aoQ1Y",
+    "key": "207f99478d30d859962fef986bc25a76553c50a38844115360cec0ed73d39e5b",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.8
+  },
+  {
+    "forum": "Vzn7c8SWbX",
+    "key": "2180e8ab64ed47c5eda0ea0bbc049859509c27c10ec1e95e2578021041ff7034",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "oq5EF8parZ",
+    "key": "221c1d5e397b6f72a13b197e07cdeb4a2a8248638303b103dad1e76cdd8183f7",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.575
+  },
+  {
+    "forum": "I1Gd2d1WXY",
+    "key": "22567a4421a3ffdc97ef1f81deedd263ea75152c97f5eac588610bd596bd906a",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 3.35
+  },
+  {
+    "forum": "zbKcFZ6Dbp",
+    "key": "2328e2861fefda1315af5b101ce51dfde7ee21a2c0e4efcbae343d6b48a8905f",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.35
+  },
+  {
+    "forum": "HDoUgQEdNb",
+    "key": "26850495f40593dcab69fbab954a09f5082705bd2aceae7ca4a798a004d5bd28",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.35
+  },
+  {
+    "forum": "3ijmMNaSJk",
+    "key": "27563e02c92e799fca642ea47f5f4062459f3e483a5878c6ca255c011a46629d",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "Rn3qJGOitY",
+    "key": "299dba2c78822c3fd8e54e3bee071e449080b32ee2a78eee7cdf1714118f2dad",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "qTlcbLSm4p",
+    "key": "2b24880dc9696a373001c52cf17bdc405fc646982e6e073c97d5b0af3bbc1715",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.6
+  },
+  {
+    "forum": "dQVtTdsvZH",
+    "key": "2cffed56945fee09de284c36ee930c9a57ef3b40d4fea8995a88ada8113272e9",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.35
+  },
+  {
+    "forum": "w5oP27fmYW",
+    "key": "2d08a72bdd5640f2742fd9fe13e91b6076ac3ffc8b4312a3e11248f4836f8eaf",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "S7T0slMrTD",
+    "key": "3801d33ad65d03bdca8fb686ced997936a0445394e7cb36dc83a0275fb11c26f",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "3jXCF5dNpC",
+    "key": "3865971968315ee8f902467c87cd281efe7fcc40f1f8969106c8ffbf12eb4f01",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "0Q1mBvUgmt",
+    "key": "3a4b3d20a9a970521583ab254d2068512338610fb5f67d4bdfb46b49fc061696",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 1.975
+  },
+  {
+    "forum": "glwwbaeKm2",
+    "key": "3a61440657a9c9645f6d2b9a688afb081b8bee36ea8f215c6194fe49275ad3c4",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.15
+  },
+  {
+    "forum": "5a79AqFr0c",
+    "key": "3e2db6c5c05aea4b97ec4837b652b0b11453f3b775117a0ad498107d9276dce4",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.8499999999999996
+  },
+  {
+    "forum": "UndmcWatBN",
+    "key": "3fb6a6c3f1d40650b5c3d8959e86412c4c8f8d352d9b7def7fb53f146614b122",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.7
+  },
+  {
+    "forum": "oMTa1tcn7V",
+    "key": "41087b951b1a1303a52303593326c0cdb5eef9e908c76160e25c22e710c4d270",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.45
+  },
+  {
+    "forum": "FjifPJV2Ol",
+    "key": "48e6952ca9678788384b487d7e9b5d12daccd14fe0654fe67f40d3434c068e1c",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.5
+  },
+  {
+    "forum": "cdIyf38mRw",
+    "key": "49a6bdab7890d774eae5a0928878abec9226b8bae6240746e0a0756a8a9592c9",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.625
+  },
+  {
+    "forum": "Mmd7EXdVXG",
+    "key": "4aa5d0ff15c163fb59426b49e062d971d616a926f9b4f60debf759bcef7c0fb6",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.1
+  },
+  {
+    "forum": "7Ttk3RzDeu",
+    "key": "4d13e0579de993fe757d6edaa1b3d80abf4e5a5e78506dc48608a5c8e390b257",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.65
+  },
+  {
+    "forum": "HeNuL50C60",
+    "key": "4efad4b91699159f54339027d0b048363d3f71c491c0da97996c35891859802a",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.8249999999999997
+  },
+  {
+    "forum": "RvfPnOkPV4",
+    "key": "4f643db7872633ccaa8f9d186a18307b710ceda2fd2bd9f86729f95944788e08",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.45
+  },
+  {
+    "forum": "kKmi2UTlBN",
+    "key": "55d3da72e295a608a62de48a30d47c56e47f6aa515b3a6703a33c6b9db176ae5",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.2
+  },
+  {
+    "forum": "tOzCcDdH9O",
+    "key": "5b1eccc3c571001d8482f49af4409b90a02acc022bce83ee8b64e00e47da3b87",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.675
+  },
+  {
+    "forum": "oOjX2hIdWo",
+    "key": "5eb99e4c56eeb93e71a4189f75b33a7e6d40c69eacb242bb238acccd97cfa89c",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.875
+  },
+  {
+    "forum": "r7cYRi7NxT",
+    "key": "60b70eae82c56042db4cea972df39d6618b2a83cb38a7c2adc01876f282b8ba4",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.8
+  },
+  {
+    "forum": "kNjrhD67LP",
+    "key": "62f044ea4e19bae7f7db5e1482ee1d3109baf3d68fd611dc6f644f81602a9b90",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.725
+  },
+  {
+    "forum": "Cnn60wwTe1",
+    "key": "640d75cb7beb00b1b9cad20e602f551afbfd3e9fe5b07396b7d3db40170f53f8",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.175
+  },
+  {
+    "forum": "Jg8y1buQ3r",
+    "key": "671eea28f2d3549fb808bf60173e9d187fc923b016f3927817b1a5b24bb1097d",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.5
+  },
+  {
+    "forum": "QgSwyVsOzK",
+    "key": "6ca5e003083cfc1d150df9105e208989a429ba37f971b5c6d3bd8c1b9bf65b02",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.425
+  },
+  {
+    "forum": "2gMwe9Duc4",
+    "key": "7056b41efd239ef6db44b827ecea15bcfcbc08ab2883215d82e410803c97d75f",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.475
+  },
+  {
+    "forum": "CsDLcku5cY",
+    "key": "7576cd097a0d5d68f14943b37f4f1cb4b189c6b73853bc5f9e8f37cdf6b33937",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "skb4IdpQ3M",
+    "key": "78cbef753316d7fe2b9a6a57ebb175ba5764dfc6525f1eec7167968db3166a71",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.225
+  },
+  {
+    "forum": "n9xeGcI4Yg",
+    "key": "7aa744d6ef86479d6637cfd5af41d5eef9a583cb4b4fa41366a68bfb3108d2b8",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 4.075
+  },
+  {
+    "forum": "Or6xoO2END",
+    "key": "7d252c475bec5c2877cbb38ee5742fbd3e5cdf4230ad940ffd67e408eb4a9472",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.9
+  },
+  {
+    "forum": "mIEHIcHGOo",
+    "key": "7d784e04efd3f6629edaafc9470d63c989d2b3b878bbe2df1038cfb12b6ab518",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.2
+  },
+  {
+    "forum": "pDFncEOiWi",
+    "key": "7f4fad0c0c3aeb3d5b375eebe185eba59fae811fea3d2dc7874be944559d4d13",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.65
+  },
+  {
+    "forum": "1oijHJBRsT",
+    "key": "7f69cb048e4394b5e7cfb09f0664e300dad5bd14bc03d532a169f02afa2900aa",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.875
+  },
+  {
+    "forum": "jesfGs3fIc",
+    "key": "7fb0c9e72c76fb772cde8f0d467e6df58e45cd70c08452aa129880d29a8d26c0",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.975
+  },
+  {
+    "forum": "5Nn2BLV7SB",
+    "key": "868ceaa3d2222640b84b260e551f1fb8ed9236f83f9ec3e147b6161492235cf0",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.85
+  },
+  {
+    "forum": "mw1PWNSWZP",
+    "key": "8b7a5e90e80861ebfc860ae0e68bcccac9fc4523bc77203ea5605e62c3b41b57",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.7750000000000004
+  },
+  {
+    "forum": "HiTg16qhxp",
+    "key": "8c1652713317674c06ed8f29d5ad5af7509e47ce7c0542635308c08651cda919",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.35
+  },
+  {
+    "forum": "s3EpSMU2Jz",
+    "key": "8c5c0edaa06101c1f665db93648139ed09a84c6ac2488b71a76c75e05780f0b7",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 3.375
+  },
+  {
+    "forum": "gJ7cHBHfBk",
+    "key": "8cbc066467606340cedc8c135b018536e21315b9efd936bfff1052400cacaa75",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.725
+  },
+  {
+    "forum": "4NhMhElWqP",
+    "key": "93499b043340c12993adea582ee78452b520e2cd5d16b868b7a8e2b840da3e3e",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.125
+  },
+  {
+    "forum": "yLClGs770I",
+    "key": "935493794d9507dbdb01f3205c25e4952e7ced39c1da3bf5d6d3368f2ae92875",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.3
+  },
+  {
+    "forum": "kqq95wrZWp",
+    "key": "97416c0e7781a6a0e0d7385e065255f65a5025cf6644ce698b88ea4ea647dabc",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "rcsV1C2eyk",
+    "key": "980d381f844665f233cc0b3616ffbbc844fb7a1215661e81c5108cf746ea6ea0",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.55
+  },
+  {
+    "forum": "rzF0R6GOd4",
+    "key": "99701e55debfa2b17a261f3449534a1ec829a3ff13c58943c880a852dd73ace1",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.6
+  },
+  {
+    "forum": "3QR230r11w",
+    "key": "9b0036907b344311e9e670a008563545cb92dc1d42cde58fafb25828c9ec97ea",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.925
+  },
+  {
+    "forum": "5BCFlnfE1g",
+    "key": "9b2c3bbdf3cd53bbde5f5db8afcc5269d437ac69722246f64fc7847d72c774f3",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.95
+  },
+  {
+    "forum": "1HgJZl3HgT",
+    "key": "9ecac9b3a43d19f6bc117b45b5ac87eb6d7f326928bc4d56690e4239beb679cb",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.675
+  },
+  {
+    "forum": "dO06t9iVO3",
+    "key": "9f28d1f91de8458747ad324112521fc096f29e49b35f6039b794bdb2c142b507",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.65
+  },
+  {
+    "forum": "N8N0hgNDRt",
+    "key": "a4938e173694ef236706a467fddd9a6e204b9a9a0da2ef6c792e972c12287528",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.075
+  },
+  {
+    "forum": "ff5srKUefm",
+    "key": "a5cc0731469abe1caf71c4a29dca9ce27a651febe48bb51b07c92f9986f5444b",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.375
+  },
+  {
+    "forum": "FI0vOp2asx",
+    "key": "a68897e029de43fd54ec3bc1d26eb9355263c379b8ca261ed8b340cb1c60c074",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.025
+  },
+  {
+    "forum": "3eFMnZ3N4J",
+    "key": "ab5823db634271a8ba5fc1a4721a3a1ee4654c63ded9685ef41118ab2c6d1a84",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.325
+  },
+  {
+    "forum": "cWiEN1plhJ",
+    "key": "acfcd4022077fea9d421749a6c00cd4f380c9987c4e1a116e267185d48b6432d",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.6
+  },
+  {
+    "forum": "dA4EWchlbn",
+    "key": "b5072335440ee38583b77755f088fdd92374b71c66338e2102700c629b4f9521",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 3.025
+  },
+  {
+    "forum": "jH67LHVOIO",
+    "key": "b701ed016a8df36c13aa72429efa64173ef10d7cdb3563c5ce2fc0165693b9be",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.625
+  },
+  {
+    "forum": "chA0Zvsc6o",
+    "key": "be48e0c76c87a123f9d3ba3f597d77a083cfc72851f9f080290ef4693fbc55b1",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 1.85
+  },
+  {
+    "forum": "jyiD0q2wp2",
+    "key": "bfdb3a69c868414047dbdebca0fc623269a5a8f240a24e814e48852fcef4c0e5",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.425
+  },
+  {
+    "forum": "nMbWsXPUVL",
+    "key": "c3a4ff750ef5afd671eb2da80dcb155c79e179b54f09a208a8e27846020b1b60",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.05
+  },
+  {
+    "forum": "TWVMVPx2wO",
+    "key": "c4e1ceae364efe2d4cf09829aac89846cd2779ef5d260c08d5eb71d65fb9a381",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.775
+  },
+  {
+    "forum": "tveiUXU2aa",
+    "key": "c59b4ff0bf401a427daa89698fef1529623fe1025d9c3ab4de5c18c871b31065",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.625
+  },
+  {
+    "forum": "Q9vYgjcvrX",
+    "key": "c632f59441d8e7da0ffc1afa22728e418b5c4446e49e1d463f4b5240c69f2347",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.45
+  },
+  {
+    "forum": "d3UGSRLbPo",
+    "key": "c990ec7f31f8b33991cf8b7f6fe1449a66bcfae8ca8c4e8e8f2ad234038d63eb",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 3.15
+  },
+  {
+    "forum": "rO62BY3dYc",
+    "key": "cb7d93bd0ce206985ef7aeda27e9afda82e62277cf4ad3c3d633418666b094ae",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.375
+  },
+  {
+    "forum": "uI2xBHjgr0",
+    "key": "cef698670621b74df6b577a07d04b7bb52a1c9734c39993246f032288f8174b5",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.4
+  },
+  {
+    "forum": "gP9TWGHtGM",
+    "key": "d255dca782d50c289f31767d2979937d35c1fe2a5f8fdecc104e005321904b4e",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.45
+  },
+  {
+    "forum": "TgSRPRz8cI",
+    "key": "d35520aa207940545b37e851446a1e876f86b0e9d69d067f721b5c0bb64cc21a",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.825
+  },
+  {
+    "forum": "sn7CYWyavh",
+    "key": "d530fd6f64e6441d503f337ba574d2e6735cfdd0786a1835008354a9dac06c5e",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.625
+  },
+  {
+    "forum": "lhZEodF8Dn",
+    "key": "d6f4e8b6e3930be5b3a4ce98cab97a0b4f2a4e6c3511b768b449841bcb7e9f1d",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.7
+  },
+  {
+    "forum": "lFYj0oibGR",
+    "key": "dd8f72845ef6b7ad9ed3f7c15393d144bc68d93704c59ef609316131625a2c78",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.85
+  },
+  {
+    "forum": "9NiprOP4OL",
+    "key": "dfc68793d34db93947bab8d410a9290cd7552602e4c48224e39482562d5ea5e0",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.425
+  },
+  {
+    "forum": "pk0iUCNVPa",
+    "key": "e09f426267838a167cf85e24e152c0cbf32277cc9accf19e9713b41754ad38f8",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 2.25
+  },
+  {
+    "forum": "dIjwC8A0N6",
+    "key": "e0fd9787ea6c46d4772cf9d92cd228118fa351a6da47ef57a7ff91c0d12680bf",
+    "group": "replication_B",
+    "tier": "borderline_reject",
+    "base": 2.775
+  },
+  {
+    "forum": "SEiuSzlD1d",
+    "key": "e825d4ba8f60fc77c1cf40659f46efbda28782c350b4c8ffd4e12002869c36d4",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.7
+  },
+  {
+    "forum": "MEbNz44926",
+    "key": "eae384a3959c2468e01c272e97581e8830cec22cb1f186bf5f678042fe55d387",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 2.45
+  },
+  {
+    "forum": "Cy5v64DqEF",
+    "key": "eb683f24edf86337e4ba141f74e085b32455617bd1173d3a0f4bca7fe02a1d68",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 4.0
+  },
+  {
+    "forum": "ycv2z8TYur",
+    "key": "f06fef107921107eddb29f158c2bf33177518976d83a2147f1601bde47075221",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.525
+  },
+  {
+    "forum": "IZVCzCWwoY",
+    "key": "f349777c986b02a39b2f0730db5571cb8d548dd036df0738a73492b03ed215ee",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "DLfdJEuXkR",
+    "key": "f708a0514dc31ea30094f3b5a2957c82a836ee979f7f39fb54c9ba2857f52edd",
+    "group": "replication_B",
+    "tier": "clear_reject",
+    "base": 2.675
+  },
+  {
+    "forum": "uREj4ZuGJE",
+    "key": "fa0176a23d43e7314372e2680ee0a75cbf839d9c57b983539537b62fd8d14b1d",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.325
+  },
+  {
+    "forum": "h8GeqOxtd4",
+    "key": "faa784f1cc6ed2987e6e9ff8e251b5b44d3374397adba19417b82092594701c1",
+    "group": "replication_B",
+    "tier": "borderline_accept",
+    "base": 3.475
+  },
+  {
+    "forum": "UyNXMqnN3c",
+    "key": "ffce807341c7e65578ae11895b3b794c7c4801f678acbbc3e6829618f0e77159",
+    "group": "replication_B",
+    "tier": "clear_accept",
+    "base": 3.625
+  }
+]

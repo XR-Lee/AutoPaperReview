@@ -1,0 +1,46 @@
+{
+  "assets": {
+    "contrast-bank.json": "aeb0497525f95a2196225058857b0be0a54cb2a7a666dce7a393599170ff199b",
+    "prior.sqlite": "f6f7e00bdaf393af1d6333bbedd0bb42024cecf79ffb7869890b7955cc6ca1a0"
+  },
+  "name": "calibrated-advance",
+  "prompts": {
+    "challenge": "d3d418791366e8e92a820627dc9ee5386c69758e3c4b8b06f3e7d9ee8cc932a0",
+    "contrast": "8a996cc40c3a452b72785aba998b25236e2f4fd1cfb2405a2e4209c344c8aaec",
+    "design": "8676a892239bfd6c81619f869508e37077d4134f2ac8c30648c6b5d707eddd54",
+    "merit": "e66d141ab8c743c4b6b9d067c001a31d4dea4117e7aad16b3f0ed17c4eda23d8",
+    "search_terms": "cf41cbce4ce3095780526f44bf38ca07b65440afbe8e2535bda9610c5bbc3a51"
+  },
+  "ranker": {
+    "method": "mean",
+    "names": [
+      "novelty",
+      "crit_originality",
+      "pair_advance",
+      "pair_value"
+    ]
+  },
+  "routes": {
+    "challenge": {
+      "command_sha256": "5d0beda51bfe9956522ee173c0fe7740bfc3692af8b29d1aac17db6a7cc739f0",
+      "model": "claude-opus-5-5"
+    },
+    "contrast": {
+      "command_sha256": "5d0beda51bfe9956522ee173c0fe7740bfc3692af8b29d1aac17db6a7cc739f0",
+      "model": "claude-opus-5-5"
+    },
+    "design": {
+      "command_sha256": "6c7d4f7ef54fd87c4022c2bfbbb466c07957fc3da81ed7a5746c90a72335d112",
+      "model": "claude-opus-5-5"
+    },
+    "merit": {
+      "command_sha256": "6c7d4f7ef54fd87c4022c2bfbbb466c07957fc3da81ed7a5746c90a72335d112",
+      "model": "claude-opus-5-5"
+    },
+    "search_terms": {
+      "command_sha256": "6c7d4f7ef54fd87c4022c2bfbbb466c07957fc3da81ed7a5746c90a72335d112",
+      "model": "claude-opus-5-5"
+    }
+  },
+  "version": 2
+}

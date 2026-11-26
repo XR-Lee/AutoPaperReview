@@ -76,7 +76,7 @@ Both arms wrote 72 seats and 144 weaknesses. On this release, resolved last-weak
 
 ## Proposal review
 
-The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the figure and the table below are reported by the original Codex run, not yet reproducible from repo artifacts. The unit tests do not call a model.
+The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the figure and the table below are reproduced from committed artifacts. The unit tests do not call a model. `scripts/reproduce_proposal_rank.py` regenerates them from [benchmarks/proposal/repro](../benchmarks/proposal/repro/README.md).
 
 The harness scores ICLR public OpenReview submissions after they are compressed to an early proposal: a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score. Intake parses that mean with `parse_rating` and the per-year scale, and anonymizes the abstract before the compressor sees it. The numbers below predate that wiring.
 
@@ -92,7 +92,7 @@ Cohorts are stratified by that final score. The correlation is a within-sample a
 
 The two-replication AUC uses the 141 papers that have a decision. On those 199 papers, the top 20% by the APR score is 40 papers. That slice holds 23 papers whose final mean is at least 7. A random 40 of the same 199 would hold about 10.05.
 
-On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273.
+On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273 and the AUC at 6.625/10 was 0.681. The Spearman interval is [0.045, 0.472] and the AUC interval is [0.434, 0.885].
 
 ### Shipped proposal path, and ClaimNov
 

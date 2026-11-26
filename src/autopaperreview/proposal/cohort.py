@@ -1,10 +1,10 @@
 """Shape of a locked proposal-rank cohort.
 
 The published fixed100, confirm100, replications199, top-20%, and 84-NLP
-numbers are reported by the original Codex run, not yet reproducible from
-repo artifacts. This module checks a manifest, a prediction file, and a
-reference file so a later public bundle can be scored with
-``scripts/reproduce_proposal_rank.py``. It does not contain those papers.
+numbers are reproduced from committed artifacts by
+``scripts/reproduce_proposal_rank.py``. This module checks a manifest, a
+prediction file, and a reference file so ``evaluate-rank`` can score any
+locked cohort. It does not contain those papers.
 """
 
 from __future__ import annotations

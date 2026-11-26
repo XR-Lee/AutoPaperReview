@@ -1,0 +1,67 @@
+{
+  "candidate": {
+    "dev": {
+      "apr_auc": 0.8823660714285714,
+      "apr_rho": 0.768524252501235,
+      "auc": 0.8877840909090909,
+      "n": 96,
+      "positive": 8,
+      "rho": 0.6811870315525597
+    },
+    "model": {
+      "method": "mean",
+      "names": [
+        "novelty",
+        "crit_originality",
+        "pair_advance",
+        "pair_value"
+      ]
+    },
+    "name": "calibrated-advance",
+    "val": {
+      "apr_auc": 0.8941798941798942,
+      "apr_rho": 0.6998999218955335,
+      "auc": 0.8441860465116279,
+      "n": 48,
+      "positive": 5,
+      "rho": 0.6221262079348561
+    }
+  },
+  "complete_development_routes": [
+    "broad",
+    "contrast",
+    "tournament",
+    "embedding",
+    "traits",
+    "evidence",
+    "semanticpairs",
+    "repeat"
+  ],
+  "development_target_met": false,
+  "fresh_ids_sha256": "07cd7b518d5cc94711e0a9f2914b9d2bd6e3576810ac1f5a702ec2339729707a",
+  "fresh_references_sha256": "0e4a7e7d62ff0a3bfd00197eb2047a4e8ec6edb40df7dfe9be8d53fa9113bc1b",
+  "main_ids_sha256": "6258f38e52202b2f5a9e33a811a63fe48d10cc727f70745de6131e87ae8bcf7f",
+  "main_references_sha256": "e5a430212a610cd8c3524b99e7c535222cc96057a8c06abdf6ba74410d7e5542",
+  "method_sources": {
+    "contrast.py": "4f2a03dc718ade1d818404d6452cd2c16099052e6bdf480ab83a0503c4549189",
+    "embed.py": "3bdaea8fb87c645571c6d20cc2e85e6e8342ef0fca47a3e7b60f01a1c49a984c",
+    "eval_next.py": "0089feb69c96b340c15ee813fbf5be89dd8a03ee4299dd2731b045a144a66ed3",
+    "evidence.py": "070465cd2c4721b229f5957a6fc72fc2e68cfc63e61f95ae58378e0749aec2ad",
+    "fit_traits.py": "9a18abdd938e6dddbde0f8c1833ce7b81d4087ef33edab97e03f529270672992",
+    "independent.py": "abc926cbaa91e9c6964592e3d3a149f4f14a949ad3bb95196eeb1b04c405b2ad",
+    "neon.py": "239ede5cd6bbb20f806cd5d84a22d5ebec4188966c62effc5256086fc6fe70ec",
+    "repeat.py": "dbeedfe198edbd94f55d467964fadc8f58802cc9e01defce5f8f10e9ec994bb3",
+    "run_domain.py": "8ba9f1e8397a7cd3a8a664c85ce5a43ac3a294aca5c2d61846e40fb8f756d1f7",
+    "semantic_fit.py": "9acdc2333ff2e4864a1efc7e55a058261f2afb06475dc14ed6e1d91f5d85e7e3",
+    "tournament.py": "28032db440b35a187647d52248e38a55a726bda19792b5317085bcc35f503f8b",
+    "traits.py": "77f8eea785fb41c11b90351aeab404df9e4d08ffed68e9e5aff1edff08b79242"
+  },
+  "selection_rule_sha256": "0dcffb26b71fc220617129e400ba4471593e60dc79ab9ed092ceecd2322836aa",
+  "stages": [
+    "challenge",
+    "contrast",
+    "merit"
+  ],
+  "table_sha256": "60d9f40bcd632fb17f2862c1d4ea5e52f4a850a01d503c0bbf1440d71288ec9b",
+  "utc": "2026-11-24T04:29:53.989744+00:00"
+}
