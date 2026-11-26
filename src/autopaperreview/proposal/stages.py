@@ -14,6 +14,7 @@ from .file_io import read_text
 from .leak_audit import PROMPT as LEAK_AUDIT
 from .leak_audit import (
     REPLY_PROTOCOL,
+    BUSINESS_REPLY_PROTOCOL,
     apply_leak_audit,
     decode_json_object,
     parse_reply,
@@ -352,12 +353,19 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
         "input_sha256": payload_sha256(prompt),
         "model": model,
         "command_sha256": digest(command),
+        "reply_protocol": BUSINESS_REPLY_PROTOCOL,
     }
     path = cache / stage / (digest(descriptor) + ".json")
     if path.exists():
-        old = read(path)
-        check(old["request"] == descriptor, "cache request mismatch")
-        validate(stage, old["output"], source, spans=spans)
+        old = decode_json_object(read_text(path))
+        check(old.get("request") == descriptor, "cache request mismatch")
+        reply = old.get("reply")
+        check(
+            isinstance(reply, str) and payload_sha256(reply) == old.get("reply_sha256"),
+            "business receipt has no strict reply to re-validate",
+        )
+        parsed = strict_model_value(reply)
+        validate(stage, parsed, source, spans=spans)
         return path
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")
@@ -374,15 +382,19 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
             prompt = apply_leak_audit(source, leak_judge, stage=stage, feedback=feedback)
             continue
         try:
-            resolved_models = list(json.loads(raw).get("modelUsage", {}))
-        except (AttributeError, ValueError):
-            resolved_models = []
+            payload = json.loads(raw)
+        except ValueError:
+            payload = None
+        usage = payload.get("modelUsage") if isinstance(payload, dict) else None
+        resolved_models = list(usage) if isinstance(usage, dict) else []
         write(
             path,
             {
                 "request": descriptor,
                 "resolved_models": resolved_models,
                 "output": result,
+                "reply": raw,
+                "reply_sha256": payload_sha256(raw),
                 "attempts": attempt + 1,
                 "latency_sec": latency,
             },

@@ -12,9 +12,11 @@ CLI such as Claude Code or Codex CLI:
 - The process runs in an empty temporary directory with the scrubbed
   environment of the CVPR tier command backend: credential variables and
   ``APR_*`` do not pass through.
-- stdout must be exactly one JSON value. Any stderr content fails the call.
-  A successful Claude Code ``--output-format json`` envelope is JSON and is
-  unwrapped afterwards. Prose, fences, and trailing text are not a reply.
+- The paper-review adapter keeps the historical contract. A zero exit returns
+  stdout as written, including a fenced object, a Claude envelope, or ordinary
+  stderr, and the adapter recovers the reply. Proposal and leak callers pass
+  ``strict=True``: stdout must be exactly one JSON value, and any stderr text
+  fails the call before a verdict is read.
 
 Sampling settings (``temperature``, ``response_format``) are not passed on.
 APR cannot see where the CLI sends the manuscript, so the session treats a

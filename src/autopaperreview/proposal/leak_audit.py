@@ -54,6 +54,7 @@ OUTCOME_SCREEN_PROMPT = _JUDGE_INSTRUCTIONS + (
 _REFERENCE_STAGES = {"label", "audit", "ref_extract", "ref_grade"}
 _OUTCOME_SCREEN_STAGES = {"outcome_screen", "outcome_attribution", "outcome_context"}
 REPLY_PROTOCOL = 4
+BUSINESS_REPLY_PROTOCOL = 1
 
 _RESULT_FIELDS = {
     "type", "result", "subtype", "is_error", "status", "stop_reason",
@@ -137,26 +138,57 @@ def _decode_reply(text):
     return decode_json_object(text)
 
 
+_SUCCESS_STATUSES = frozenset({"success", "completed"})
+_BAD_STOPS = frozenset({
+    "refusal", "refused", "length", "max_tokens", "max_output_tokens", "max_tokens_truncation",
+})
+
+
+def _reject_unsuccessful_envelope(value: dict) -> None:
+    """A business envelope that signals failure is not a result.
+
+    ``modelUsage: null`` is an absent usage map, not a failure.
+    """
+    from ..command_transport import CommandTransportError
+
+    if value.get("is_error"):
+        raise CommandTransportError("command reported an error: " + str(value.get("result"))[:300])
+    reasons = []
+    for key in ("stop_reason", "finish_reason"):
+        reason = value.get(key)
+        if isinstance(reason, str):
+            reasons.append(reason.lower())
+    subtype = value.get("subtype")
+    subtype_text = subtype.lower() if isinstance(subtype, str) else None
+    if any(reason in {"refusal", "refused"} for reason in reasons) or subtype_text in {"refusal", "refused"}:
+        raise CommandTransportError('command refused: {"stop_reason": "refusal"}')
+    if any(reason in _BAD_STOPS for reason in reasons):
+        raise CommandTransportError("command reply stopped at max_tokens")
+    status = value.get("status")
+    if isinstance(status, str) and status.lower() not in _SUCCESS_STATUSES:
+        raise CommandTransportError(f"command status is not success: {status}")
+    if subtype_text not in (None, "success"):
+        raise CommandTransportError(f"command subtype is not success: {subtype}")
+
+
 def strict_model_value(stdout: str):
     """Parse a proposal reply before any envelope merge.
 
     Duplicate keys fail here, in the outer object and in a CLI ``result``
-    string. A fence or trailing value is not a verdict.
+    string. A fence or trailing value is not a verdict. A JSON array is a
+    valid reply for the reviewer-panel forecast; other stages reject it
+    when they require an object. An envelope that reports refusal, a failure
+    status, an error subtype, or length truncation is not unwrapped.
     """
     value = decode_json(stdout)
     if isinstance(value, dict) and value.get("type") == "result" and "result" in value:
-        from ..command_transport import CommandTransportError
-
-        if value.get("is_error"):
-            raise CommandTransportError("command reported an error: " + str(value.get("result"))[:300])
-        if value.get("stop_reason") == "max_tokens":
-            raise CommandTransportError("command reply stopped at max_tokens")
+        _reject_unsuccessful_envelope(value)
         inner = value.get("result")
         if not isinstance(inner, str):
-            raise ValueError("expected a JSON object")
+            raise ValueError("expected JSON text")
         value = decode_json(inner)
-    if not isinstance(value, dict):
-        raise ValueError("expected a JSON object")
+    if not isinstance(value, (dict, list)):
+        raise ValueError("expected a JSON object or array")
     return value
 
 

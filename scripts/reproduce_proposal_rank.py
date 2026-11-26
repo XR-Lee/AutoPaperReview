@@ -74,8 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if args.output is not None:
-            # A symlink in the output path is refused before the realpath overlap check.
-            local_output(args.output)
+            # Expand ~ once and use that path for every overlap check and the write.
+            args.output = local_output(args.output)
             assert_output_isolated(args.output, *_input_roots(args, supplied))
         with protected_output(args.output):
             return _run(args, supplied)
@@ -86,9 +86,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def _input_roots(args, supplied) -> list[Path]:
     if all(path is not None for path in supplied):
-        return [path.parent for path in supplied]
+        return [path.expanduser().parent for path in supplied]
     external = args.root if args.root is not None else external_root()
-    return [external] if external is not None else []
+    return [external.expanduser()] if external is not None else []
 
 
 def _run(args, supplied) -> int:

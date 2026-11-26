@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import unittest
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
@@ -328,6 +329,60 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         link.symlink_to(source, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "overlap"):
             file_io.assert_output_isolated(source / "summary.json", link)
+
+    def test_a_concurrent_publish_does_not_roll_back_the_winner(self):
+        path = self.root / "report.json"
+        with file_io.protected_output(path):
+            file_io.write_text(path, "OLD")
+        started = threading.Event()
+        release = threading.Event()
+        real = file_io._renameat2
+        state = {"n": 0}
+
+        def wrapped(*args):
+            real(*args)
+            if args[-1] == file_io.RENAME_EXCHANGE:
+                state["n"] += 1
+                if state["n"] == 1:
+                    started.set()
+                    self.assertTrue(release.wait(5), "writer A was not released")
+
+        errors = []
+
+        def lose():
+            try:
+                with file_io.protected_output(path):
+                    file_io.write_text(path, "AAA")
+            except ValueError as exc:
+                errors.append(exc)
+
+        with patch.object(file_io, "_renameat2", wrapped):
+            worker = threading.Thread(target=lose)
+            worker.start()
+            self.assertTrue(started.wait(5), "writer A did not exchange")
+            with file_io.protected_output(path):
+                file_io.write_text(path, "BBB")
+            release.set()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(path.read_text(encoding="utf-8"), "BBB")
+        self.assertTrue(errors)
+        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+
+    def test_tilde_output_inside_the_input_root_is_refused(self):
+        home = self.root / "home"
+        source = home / "input"
+        source.mkdir(parents=True)
+        output = source / "report.json"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            with redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()):
+                code = reproduce_proposal_rank.main([
+                    "--root", str(source),
+                    "--output", "~/input/report.json",
+                ])
+        self.assertEqual(code, 2, error.getvalue())
+        self.assertIn("overlap", error.getvalue())
+        self.assertFalse(output.exists())
 
     def test_gitignored_workdir_is_writable_and_tracked_files_are_not(self):
         repo = Path(file_io.__file__).resolve().parents[3]

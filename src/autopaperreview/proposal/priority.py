@@ -19,6 +19,17 @@ from .prior_index import eligible_history, historical_bounds, proposal_body, ret
 from .stages import PROMPTS, SECTIONS, claude_argv, invoke, validate
 
 
+def search_query_packet(output):
+    """Turn an English search-term reply into a packet the index can read.
+
+    A model that returns ``{"query": "..."}`` would otherwise be rejected by
+    the proposal field allowlist. The original packet stays the identity.
+    """
+    if isinstance(output, Mapping) and isinstance(output.get("query"), str):
+        return {"problem": output["query"]}
+    return output
+
+
 def grok_command():
     return [
         "grok",
@@ -213,7 +224,7 @@ def rank(
     if uses_english_index and len(words(" ".join(v for v in packet.values() if v))) < 5:
         qm, qa = route("search_terms")
         qp = send("search_terms", packet, qm, qa)
-        query_packet = read(qp)["output"]
+        query_packet = search_query_packet(read(qp)["output"])
     for stage in stages:
         if digest(PROMPTS[stage]) != profile["prompts"][stage]:
             raise ValueError(f"prompt differs from frozen {stage} prompt")

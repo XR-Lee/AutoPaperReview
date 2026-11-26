@@ -11,13 +11,15 @@ from unittest.mock import patch
 
 from autopaperreview.command_transport import CommandTransportError, run_command
 from autopaperreview.proposal import evaluation, merit, preference, priority, stages
+from autopaperreview.proposal.priority import search_query_packet
 from autopaperreview.proposal.data import (
     contiguous_quote, digest, filter_conclusion_sentences, read, reported_result, retained_label_text, write,
 )
 from autopaperreview.proposal.leak_audit import PROMPT, REFERENCE_PROMPT
 from autopaperreview.proposal.leak_audit import REPLY_PROTOCOL, payload_sha256
 from autopaperreview.proposal.prior_index import (
-    build, canonical_key, development_row, historical_opinions, proposal_body, retrieve, same_document,
+    build, canonical_key, conflicts_with_target, development_row, eligible_history,
+    historical_opinions, norm_title, proposal_body, retrieve, same_document,
 )
 from autopaperreview.proposal.sanitized import factual_leak, require_model_input, sanitize_proposal, score_field, seal
 from autopaperreview.cli import main
@@ -604,3 +606,246 @@ class NormalizationTests(TestCase):
                 list(archived_notes(path))
             path.write_text('{"notes":[{"id":"synthetic","tmdate":1}]}', encoding="utf-8")
             self.assertEqual(list(archived_notes(path)), [{"id": "synthetic", "tmdate": 1}])
+            path.write_text(
+                '{"notes":[{"id":"synthetic","tmdate":1}],"notes":[{"id":"other","tmdate":2}]}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                list(archived_notes(path))
+
+
+EXPLICIT_PROBES = (
+    "submission status: accepted",
+    "status of the submission is reject",
+    "The paper received an accept decision.",
+    "This submission's outcome is acceptance.",
+    "The venue accepted the manuscript.",
+    "accepted at the conference as a poster",
+    "outcome for the submission = accept",
+    "the submission status reads accept",
+    "Submission — accepted, with minor comments.",
+    "the paper got an acceptance",
+    "it is an accept for this submission",
+    "稿件状态：录用",
+    "overall rating is 8 for the clarity of the method",
+    "the total score is 7 as the proposal is clear",
+    "overall score 6/10 given the scope",
+    "I assign an overall rating of 8 for the specific plan",
+    "overall: 8 out of 10 as a summary of the idea",
+    "the overall assessment rating equals 8 given the design",
+    "final grade is 7 because the question is narrow",
+    "reviewer score is 7 for the submission",
+    "total score = 8 (the mechanism is concrete)",
+    "meta rating 6 since the comparison is incomplete",
+    "ratings range from 6 to 8",
+    "overall between 6 and 8",
+    "score range: 6-8",
+    "the rating is between 7 and 9",
+    "grades from 6 to 8 because the scope varies",
+    "overall 6–8 on the standard scale",
+    "a rating of 6 to 8 for this submission",
+    "the grade ranges from 5 to 7",
+    "preprint by Ada Lovelace",
+    "our preprint (Ada Lovelace and Alan Turing)",
+    "the arxiv preprint by Ada Lovelace",
+    "authored by Ada Lovelace, arXiv:2401.01234",
+    "Ada Lovelace et al. arXiv:2401.00001",
+    "by J. Smith (arXiv:2401.00001)",
+    "authors: Ada Lovelace, preprint arXiv:2401.00001",
+)
+SCIENTIFIC_POSITIVES = (
+    "the similarity score is 0.2",
+    "the acceptance rate of the planned method",
+    "we accept the assumption",
+    "the proposal should be accepted",
+    "the attachment plan uses violet tags",
+    "e.g. Figure labels stay prospective.",
+    "Measure the average score of six planned baskets.",
+    "Use a score of 8 units in the planned layout.",
+    "the author of the method assumes a bounded noise term",
+    "the paper was accepted practice in this subfield",
+    "cosine similarity score is 0.2 for the planned embedding",
+    "equation 8 defines the planned update",
+    "the loss is 0.2 on the synthetic formula",
+    "bleu score is 0.2 for the reference sentence",
+    "an f1 score of 0.2 is the target of the formula",
+    "the objective function score is 0.2",
+    "jaccard score is 0.2",
+    "the distance score is 0.2",
+    "section 4 describes the planned protocol",
+    "table 2 lists the planned factors",
+    "a probability of 0.2 under the model",
+    "the ratio is 8 to 1 in the formula",
+    "we will measure accuracy after the study",
+    "the method could reach a higher score if the plan works",
+    "the acceptance region of the hypothesis test",
+    "earlier research reported a similarity of 0.2 and we plan a new test",
+    "the paper proposes a violet index",
+)
+
+
+class Round3BoundaryTests(TestCase):
+    def test_explicit_constructs_and_scientific_positives(self):
+        self.assertEqual(len(EXPLICIT_PROBES), 37)
+        self.assertEqual(len(SCIENTIFIC_POSITIVES), 27)
+        blocked = [text for text in EXPLICIT_PROBES if not factual_leak(text)]
+        allowed = [text for text in SCIENTIFIC_POSITIVES if not factual_leak(text)]
+        self.assertEqual(blocked, [])
+        self.assertGreaterEqual(len(allowed), 18)
+        self.assertEqual(len(allowed), 27)
+        for key in (
+            "optical_contact_angle", "contact_angle", "water_contact_angle",
+            "address_space", "virtual_address_space", "measurement_score",
+        ):
+            self.assertFalse(score_field(key), key)
+        for key in (
+            "contact_address", "email_address", "previous_reviewer_average_score",
+            "overall_score", "score", "contact", "address", "reviewer",
+        ):
+            self.assertTrue(score_field(key), key)
+
+    def test_cjk_identity_matches_and_empty_normalization_does_not_pass(self):
+        text = "用标签索引篮筐的位置"
+        self.assertEqual(norm_title(text), text)
+        self.assertNotEqual(norm_title(text), norm_title("用颜色索引布料"))
+        self.assertEqual(norm_title("!!!"), "")
+        self.assertTrue(same_document({"problem": text}, "Shared English title", text))
+        self.assertFalse(same_document({"problem": "!!!"}, "!!!", "???"))
+        self.assertTrue(conflicts_with_target({"problem": "!!!"}, "!!!", "???"))
+        self.assertFalse(eligible_history(
+            _history(abstract=text, key="synthetic-cjk", forum="synthetic-cjk"),
+            (2024, 50), exclude_abstract=text,
+        ))
+        self.assertFalse(eligible_history(
+            _history(abstract="!!!", key="synthetic-punct", forum="synthetic-punct"),
+            (2024, 50), exclude_abstract="!!!",
+        ))
+
+    def test_nested_snapshot_and_year_bind_the_field_prior(self):
+        late = _history(key="synthetic-late", forum="synthetic-late", metadata={"snapshot_ms": 80})
+        early = _history(key="synthetic-early", forum="synthetic-early", metadata={"snapshot_ms": 10, "year": 2020})
+        future_year = _history(key="synthetic-year", forum="synthetic-year", metadata={"year": 2024})
+        self.assertFalse(eligible_history(late, (2024, 50)))
+        self.assertTrue(eligible_history(early, (2024, 50)))
+        self.assertFalse(eligible_history(future_year, (2024, 50)))
+        opinions = [
+            {"opinion": "A kept early note.", "opinion_ms": 5},
+            {"opinion": "Nested year meets the target.", "opinion_ms": 5, "metadata": {"year": 2024}},
+            {"opinion": "Nested year is earlier.", "opinion_ms": 5, "metadata": {"year": 2020}},
+        ]
+        self.assertEqual(
+            historical_opinions(opinions, 50, target_year=2024),
+            ["A kept early note.", "Nested year is earlier."],
+        )
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = [late, early]
+            rows.extend(
+                _history(key=f"synthetic-filler-{i}", forum=f"synthetic-filler-{i}", title=f"Filler {i}")
+                for i in range(6)
+            )
+            corpus = root / "corpus.jsonl"
+            corpus.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            database = root / "prior.sqlite"
+            build(corpus, database)
+            hits = retrieve(
+                database, {"problem": "violet archive indexing baskets labels"},
+                limit=8, target_year=2024, cutoff_ms=50,
+                identity={"problem": "a different planned index"},
+            )
+            self.assertNotIn(late["title"], [hit["title"] for hit in hits])
+
+    def test_failed_index_build_does_not_leave_an_empty_database(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            corpus = root / "corpus.jsonl"
+            corpus.write_text(
+                '{"title":"Violet","title":"Other","abstract":"baskets","year":2020,'
+                '"revision_ms":1,"split":"dev"}\n',
+                encoding="utf-8",
+            )
+            database = root / "prior.sqlite"
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                build(corpus, database)
+            self.assertFalse(database.exists())
+
+    def test_old_business_receipt_without_a_raw_reply_is_rejected(self):
+        packet = seal({"problem": PLAN})
+        valid = {
+            key: {"score": 3, "rationale": "The plan is specific.", "basis": ["problem"]}
+            for key in stages.RUBRIC
+        }
+        calls = []
+
+        def transport(*_args, **_kwargs):
+            calls.append(1)
+            return json.dumps(valid), 0
+
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.object(stages, "run_command", side_effect=transport):
+                path = stages.invoke(
+                    "review", packet, root / "cache", "synthetic", ["synthetic"], 30,
+                    leak_judge=lambda _body: {"verdict": "clean"},
+                )
+            self.assertEqual(calls, [1])
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            stored.pop("reply")
+            stored.pop("reply_sha256")
+            stored["output"]["importance"]["score"] = 1
+            path.write_text(json.dumps(stored), encoding="utf-8")
+            with patch.object(stages, "run_command", side_effect=AssertionError):
+                with self.assertRaisesRegex(ValueError, "strict reply|duplicate JSON key"):
+                    stages.invoke(
+                        "review", packet, root / "cache", "synthetic", ["synthetic"], 30,
+                        leak_judge=lambda _body: {"verdict": "clean"},
+                    )
+            duplicated = (
+                '{"importance":{"score":3,"rationale":"The plan is specific.","basis":["problem"]},'
+                '"importance":{"score":1,"rationale":"Folded.","basis":["problem"]}}'
+            )
+            stored["reply"] = duplicated
+            stored["reply_sha256"] = payload_sha256(duplicated)
+            path.write_text(json.dumps(stored), encoding="utf-8")
+            with patch.object(stages, "run_command", side_effect=AssertionError):
+                with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                    stages.invoke(
+                        "review", packet, root / "cache", "synthetic", ["synthetic"], 30,
+                        leak_judge=lambda _body: {"verdict": "clean"},
+                    )
+
+    def test_business_envelope_failures_and_null_model_usage(self):
+        packet = seal({"problem": PLAN})
+        valid = {
+            key: {"score": 3, "rationale": "The plan is specific.", "basis": ["problem"]}
+            for key in stages.RUBRIC
+        }
+        inner = json.dumps(valid)
+        failures = (
+            {"type": "result", "subtype": "success", "stop_reason": "refusal", "result": inner},
+            {"type": "result", "subtype": "success", "status": "failed", "result": inner},
+            {"type": "result", "subtype": "error", "result": inner},
+            {"type": "result", "stop_reason": "length", "result": inner},
+        )
+        for envelope in failures:
+            with self.subTest(envelope=sorted(envelope)), TemporaryDirectory() as folder:
+                with patch.object(stages, "run_command", return_value=(json.dumps(envelope), 0)):
+                    with self.assertRaises(CommandTransportError):
+                        stages.invoke(
+                            "review", packet, Path(folder) / "cache", "synthetic", ["synthetic"], 30,
+                            leak_judge=lambda _body: {"verdict": "clean"},
+                        )
+        envelope = {"type": "result", "subtype": "success", "result": inner, "modelUsage": None}
+        with TemporaryDirectory() as folder, patch.object(stages, "run_command", return_value=(json.dumps(envelope), 0)):
+            path = stages.invoke(
+                "review", packet, Path(folder) / "cache", "synthetic", ["synthetic"], 30,
+                leak_judge=lambda _body: {"verdict": "clean"},
+            )
+            self.assertEqual(read(path)["resolved_models"], [])
+            self.assertEqual(read(path)["output"]["importance"]["score"], 3)
+
+    def test_english_search_query_becomes_a_problem_field(self):
+        packet = search_query_packet({"query": "violet basket index"})
+        self.assertEqual(packet, {"problem": "violet basket index"})
+        sanitize_proposal(packet)
+        self.assertEqual(search_query_packet({"problem": "kept"}), {"problem": "kept"})

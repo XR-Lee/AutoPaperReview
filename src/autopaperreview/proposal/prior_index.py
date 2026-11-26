@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -38,12 +39,44 @@ def canonical_key(value: object) -> str:
     return unicodedata.normalize("NFC", str(value)).strip()
 
 
+def _content_tokens(text: str) -> list[str]:
+    """Letters and numbers from every script. Punctuation does not become a token."""
+    return re.findall(r"[^\W_]+", canonical_text(text).casefold())
+
+
 def norm_title(text: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", canonical_text(text).casefold()))
+    return " ".join(_content_tokens(text))
+
+
+def _identity(text: str) -> str | None:
+    """Comparable text. None when characters remain but every token was dropped.
+
+    Two empty results are not the same document. Callers treat None as
+    unusable and refuse the row instead of skipping the comparison.
+    """
+    if not str(text or "").strip():
+        return ""
+    identity = norm_title(text)
+    if not identity:
+        return None
+    return identity
 
 
 def _token_signature(text: str) -> tuple[str, ...]:
-    return tuple(sorted(re.findall(r"[a-z0-9]+", canonical_text(text).casefold())))
+    return tuple(sorted(_content_tokens(text)))
+
+
+_UNCOMPARABLE = "\x00uncomparable"
+
+
+def _proposal_raw(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return " ".join(
+            value[key] for key in sorted(value) if isinstance(value[key], str)
+        )
+    return ""
 
 
 _SPLIT_FIELDS = ("split", "partition", "cohort")
@@ -128,24 +161,60 @@ def development_row(row) -> bool:
 
 
 def proposal_body(value) -> str:
-    """Normalized text of a proposal object, ignoring key order."""
-    if isinstance(value, str):
-        return norm_title(value)
-    if isinstance(value, Mapping):
-        return norm_title(" ".join(
-            value[key] for key in sorted(value) if isinstance(value[key], str) and value[key].strip()
-        ))
-    return ""
+    """Normalized text of a proposal object, ignoring key order.
+
+    Text that survives only as punctuation has no identity. The sentinel is
+    not equal to another document's real text, and a requested exclusion of
+    that sentinel does not pass.
+    """
+    identity = _identity(_proposal_raw(value))
+    if identity is None:
+        return _UNCOMPARABLE
+    return identity
+
+
+def _text_conflict(wanted: str, found: str) -> bool:
+    """True when a requested comparison matches or cannot be formed.
+
+    An empty wanted string is not a constraint. A wanted or found string that
+    still has characters but no tokens does not silently pass. A missing found
+    string is not a match.
+    """
+    if not str(wanted or "").strip():
+        return False
+    left = _identity(wanted)
+    if left is None or not left:
+        return True
+    right = _identity(found)
+    if right is None:
+        return True
+    if not right:
+        return False
+    return left == right
+
+
+def _uncomparable(*texts: str) -> bool:
+    return any(_identity(text) is None for text in texts if str(text or "").strip())
 
 
 def same_document(proposal, title, abstract) -> bool:
-    """True when a prior row repeats the proposal title, abstract, or full text."""
+    """True when a prior row repeats the proposal title, abstract, or full text.
+
+    An empty normalized string never compares equal. Callers that must not
+    let that row through use ``conflicts_with_target``.
+    """
     if not isinstance(proposal, Mapping):
+        return False
+    if _uncomparable(
+        *(value for value in proposal.values() if isinstance(value, str)),
+        title or "",
+        abstract or "",
+    ):
         return False
     parts = [
         norm_title(value)
         for value in proposal.values()
-        if isinstance(value, str) and value.strip()
+        if isinstance(value, str) and value.strip() and norm_title(value)
     ]
     if not parts:
         return False
@@ -157,13 +226,23 @@ def same_document(proposal, title, abstract) -> bool:
     if row_abstract and (row_abstract in parts or row_abstract == joined):
         return True
     row_joined = norm_title(f"{title or ''} {abstract or ''}".strip())
-    if row_joined and row_joined == joined:
+    if row_joined and row_joined == joined and joined != _UNCOMPARABLE:
         return True
     proposal_signature = _token_signature(" ".join(
         value for value in proposal.values() if isinstance(value, str)
     ))
     row_signature = _token_signature(f"{title or ''} {abstract or ''}")
     return bool(proposal_signature) and proposal_signature == row_signature
+
+
+def conflicts_with_target(proposal, title, abstract) -> bool:
+    """The row repeats the target, or one side has no comparable tokens."""
+    texts = [title or "", abstract or ""]
+    if isinstance(proposal, Mapping):
+        texts.extend(value for value in proposal.values() if isinstance(value, str))
+    if _uncomparable(*texts):
+        return True
+    return same_document(proposal, title, abstract)
 
 
 def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
@@ -203,14 +282,28 @@ def eligible_history(
     """Check development provenance, all known availability clocks and self-matches."""
     if not isinstance(row, dict) or not development_row(row):
         return False
-    if exclude_text and proposal_body(row.get("proposal")) == exclude_text:
+    body = proposal_body(row.get("proposal"))
+    if exclude_text and (
+        exclude_text == _UNCOMPARABLE or body == _UNCOMPARABLE or body == exclude_text
+    ):
+        return False
+    years: list = []
+    _collect_years(row, years, skip_opinions=True)
+    parsed_years = [_positive_stamp(value) for value in years]
+    if years and any(value is None for value in parsed_years):
         return False
     year = _positive_stamp(row.get("year"))
     revision = latest_stamp(row.get(field) for field in _REVISION_FIELDS)
-    available = latest_stamp(row.get(field) for field in _HISTORY_TIME_FIELDS)
+    times: list = []
+    _collect_times(row, times, skip_opinions=True)
+    available = latest_stamp(times)
     if year is None or revision is None or available is None:
         return False
-    if bounds is not None and (year >= bounds[0] or available >= bounds[1]):
+    if bounds is not None and (
+        year >= bounds[0]
+        or any(value >= bounds[0] for value in parsed_years)
+        or available >= bounds[1]
+    ):
         return False
     identifiers = _arxiv_identifiers(row)
     if identifiers is None or len(identifiers) > 1:
@@ -224,11 +317,9 @@ def eligible_history(
             return False
     if exclude_forum and str(row.get("forum") or "") == str(exclude_forum):
         return False
-    wanted_title = norm_title(exclude_title)
-    if wanted_title and norm_title(str(row.get("title") or "")) == wanted_title:
+    if _text_conflict(exclude_title, str(row.get("title") or "")):
         return False
-    wanted_abstract = norm_title(exclude_abstract)
-    if wanted_abstract and norm_title(str(row.get("abstract") or "")) == wanted_abstract:
+    if _text_conflict(exclude_abstract, str(row.get("abstract") or "")):
         return False
     arxiv = norm_arxiv(exclude_arxiv)
     if arxiv:
@@ -238,18 +329,38 @@ def eligible_history(
     return True
 
 
-def _collect_times(value, found: list) -> None:
+_OPINION_FIELDS = frozenset({"opinions", "excerpts", "reviewer_excerpts", "comments", "reviews"})
+
+
+def _collect_years(value, found: list, *, skip_opinions: bool = False) -> None:
+    if isinstance(value, dict):
+        if "year" in value:
+            found.append(value["year"])
+        for key, child in value.items():
+            if skip_opinions and key in _OPINION_FIELDS:
+                continue
+            if isinstance(child, (dict, list)):
+                _collect_years(child, found, skip_opinions=skip_opinions)
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                _collect_years(child, found, skip_opinions=skip_opinions)
+
+
+def _collect_times(value, found: list, *, skip_opinions: bool = False) -> None:
     if isinstance(value, dict):
         for field in _HISTORY_TIME_FIELDS:
             if field in value:
                 found.append(value[field])
-        for child in value.values():
+        for key, child in value.items():
+            if skip_opinions and key in _OPINION_FIELDS:
+                continue
             if isinstance(child, (dict, list)):
-                _collect_times(child, found)
+                _collect_times(child, found, skip_opinions=skip_opinions)
     elif isinstance(value, list):
         for child in value:
             if isinstance(child, (dict, list)):
-                _collect_times(child, found)
+                _collect_times(child, found, skip_opinions=skip_opinions)
 
 
 def _opinion_splits_allowed(item) -> bool:
@@ -273,8 +384,13 @@ def historical_opinions(items, cutoff_ms, *, snapshot_ms=None, target_year=None)
         if isinstance(item, str):
             text, available = item, _positive_stamp(snapshot_ms)
         elif isinstance(item, dict):
-            year = _positive_stamp(item.get("year"))
-            if item.get("year") is not None and (year is None or target_year is not None and year >= target_year):
+            years: list = []
+            _collect_years(item, years)
+            parsed_years = [_positive_stamp(value) for value in years]
+            if years and (
+                any(value is None for value in parsed_years)
+                or target_year is not None and any(value >= target_year for value in parsed_years)
+            ):
                 continue
             if not _opinion_splits_allowed(item):
                 continue
@@ -326,6 +442,18 @@ def _record_key(row) -> str:
 def build(corpus: Path, db: Path):
     from .leak_audit import decode_json
 
+    partial = Path(str(db) + ".partial")
+    if partial.exists():
+        partial.unlink()
+    try:
+        _build_into(corpus, partial, decode_json)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    os.replace(partial, db)
+
+
+def _build_into(corpus: Path, db: Path, decode_json) -> None:
     with corpus.open(encoding="utf-8") as source, closing(_connect(db)) as conn:
         conn.execute(
             "CREATE VIRTUAL TABLE papers USING fts5("
@@ -344,13 +472,19 @@ def build(corpus: Path, db: Path):
                 continue
             if not eligible_history(p):
                 continue
+            times: list = []
+            _collect_times(p, times, skip_opinions=True)
+            years: list = []
+            _collect_years(p, years, skip_opinions=True)
+            parsed_years = [value for value in (_positive_stamp(item) for item in years) if value is not None]
             conn.execute(
                 "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)",
                 (
-                    p["title"], p["abstract"], _positive_stamp(p["year"]),
+                    p["title"], p["abstract"],
+                    max(parsed_years) if parsed_years else _positive_stamp(p["year"]),
                     latest_stamp(p.get(field) for field in _REVISION_FIELDS), p.get("forum"),
                     next(iter(_arxiv_identifiers(p)), ""), "dev",
-                    latest_stamp(p.get(field) for field in _HISTORY_TIME_FIELDS),
+                    latest_stamp(times),
                     _record_key(p),
                 ),
             )
@@ -416,7 +550,7 @@ def retrieve(
             if not isinstance(title, str) or not isinstance(abstract, str):
                 return False
             row.update(title=title, abstract=abstract, year=year, forum=forum, key=key)
-            if same_document(identity, title, abstract):
+            if conflicts_with_target(identity, title, abstract):
                 return False
             if not eligible_history(
                 row, bounds, exclude_key=exclude_key, exclude_forum=exclude_forum,

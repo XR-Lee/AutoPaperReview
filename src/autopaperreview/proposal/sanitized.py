@@ -366,7 +366,7 @@ _KEY_LEMMAS = frozenset({
     "award", "awards", "byline", "bylines", "decision", "decisions", "email", "emails",
     "forum", "forums", "grade", "grades", "outcome", "outcomes", "rating", "ratings",
     "recommendation", "recommendations", "reject", "rejected", "rejection", "rejections",
-    "score", "scores", "verdict", "verdicts",
+    "verdict", "verdicts",
 })
 _KEY_PREFIXES = frozenset({
     "aggregated", "aggregate", "actual", "author", "confidence", "final", "first", "human",
@@ -379,9 +379,19 @@ _KEY_SUFFIXES = frozenset({
     "text", "value", "values",
 })
 _STATUS_OWNERS = _KEY_PREFIXES | {"decision", "outcome", "paper", "review", "reviewer", "submission", "venue"}
-_KEY_TOKENS = _KEY_LEMMAS | frozenset({
-    "contact", "contacts", "address", "addresses", "reviewer", "reviewers",
-    "phone", "telephone", "affiliation", "institution", "orcid",
+_IDENTITY_MODIFIERS = frozenset({
+    "author", "authors", "email", "emails", "contact", "contacts", "reviewer", "reviewers",
+    "postal", "mailing", "phone", "telephone", "affiliation", "institution", "orcid",
+    "home", "office", "corresponding",
+})
+_REVIEW_SCORE_MODIFIERS = frozenset({
+    "overall", "total", "final", "reviewer", "reviewers", "meta", "official", "human",
+    "average", "mean", "aggregate", "aggregated", "peer", "initial", "rating", "ratings",
+    "grade", "grades",
+})
+_SCIENTIFIC_KEY_HEADS = frozenset({
+    "angle", "angles", "space", "spaces", "metric", "metrics", "value", "values",
+    "map", "maps", "index", "measure", "measurement", "measurements",
 })
 
 
@@ -406,6 +416,43 @@ def _key_word_blocked(word: str) -> bool:
     return False
 
 
+def _structured_key(tokens: list[str]) -> bool:
+    """Review and identity keys by head and modifier, not by a bare token hit.
+
+    ``contact_angle``, ``address_space`` and ``measurement_score`` stay scientific.
+    ``contact_address``, ``overall_score`` and ``previous_reviewer_average_score`` do not.
+    """
+    if not tokens or tokens == ["reviewer", "excerpts"]:
+        return False
+    head = tokens[-1]
+    modifiers = set(tokens[:-1])
+    if head in {"angle", "angles"} and "contact" in modifiers and not (modifiers & (_IDENTITY_MODIFIERS - {"contact"})):
+        return False
+    if head in {"space", "spaces"} and "address" in modifiers and not (modifiers & _IDENTITY_MODIFIERS):
+        return False
+    if "reviewer" in tokens or "reviewers" in tokens:
+        return True
+    if "score" in tokens or "scores" in tokens:
+        if set(tokens) & _REVIEW_SCORE_MODIFIERS:
+            return True
+        if head in {"score", "scores"} and not modifiers:
+            return True
+        if head in {"score", "scores"} or head in _SCIENTIFIC_KEY_HEADS:
+            return False
+        return True
+    if head in {"contact", "contacts"}:
+        return True
+    if "contact" in tokens and head not in {"angle", "angles", "map", "maps"}:
+        return True
+    if head in {"address", "addresses"}:
+        if not modifiers or modifiers & _IDENTITY_MODIFIERS:
+            return True
+        return False
+    if "address" in tokens and head not in {"space", "spaces"} and modifiers & _IDENTITY_MODIFIERS:
+        return True
+    return False
+
+
 def score_field(key: object) -> bool:
     """Reject a key that names a decision, score, or identity, in any nesting."""
     tokens = _key_tokens(key)
@@ -413,7 +460,7 @@ def score_field(key: object) -> bool:
     # or contact token is still rejected below.
     if tokens == ["reviewer", "excerpts"]:
         return False
-    if any(token in _KEY_TOKENS for token in tokens):
+    if _structured_key(tokens):
         return True
     text = normalized_fact_text(str(key))
     compact = _compact(text)
@@ -449,7 +496,7 @@ def factual_leak(text: str, *, key: bool = False) -> bool:
     if has_override:
         return True
     for plain in _fact_texts(decoded):
-        if _has_signature(plain):
+        if _explicit_construct(plain) or _has_signature(plain):
             return True
         for match in _BARE_ALPHA_ID.finditer(plain):
             word = match[0]
@@ -465,6 +512,175 @@ def factual_leak(text: str, *, key: bool = False) -> bool:
         ):
             return True
     return False
+
+
+_CONSTRUCT_WORD = re.compile(r"[0-9]+(?:\.[0-9]+)?|[^\W\d_]+|[^\w\s]", re.UNICODE)
+_STATUS_SUBJECTS = frozenset({"submission", "manuscript", "paper", "投稿", "稿件", "论文"})
+_DECISION_WORDS = frozenset({
+    "accept", "accepted", "acceptance", "reject", "rejected", "rejection",
+    "录用", "录取", "接收", "拒稿", "拒绝", "接受",
+})
+_STATUS_HEADS = frozenset({
+    "decision", "verdict", "outcome", "status", "recommendation", "recommendations",
+    "决定", "结论", "建议", "推荐", "状态",
+})
+_STATUS_BINDERS = frozenset({
+    "is", "was", "were", "been", "be", "are", "received", "gets", "got", "given",
+    "reads", "marked", ":", "=", "-", "—", "–", "－",
+})
+_STATUS_MODALS = frozenset({
+    "should", "could", "would", "may", "might", "must", "can", "shall", "ought",
+})
+_STATUS_DEGREES = frozenset({"strong", "weak", "clear", "marginal", "oral", "spotlight", "poster", "desk"})
+_CONTENT_SKIP = frozenset({
+    "", ".", "!", "?", ",", ";", ":", ")", "]", "(", "[", "—", "–", "-", "－",
+    "because", "since", "as", "given", "due", "which", "where", "after", "when",
+    "while", "and", "or", "for", "to", "at", "by", "from", "in", "on", "into",
+    "with", "of", "the", "a", "an", "this", "that", "our", "its",
+})
+_SCORE_QUALIFIERS = frozenset({"overall", "total", "final", "reviewer", "meta", "official"})
+_RATING_TAILS = frozenset({
+    "", ".", "!", "?", ",", ";", ":", ")", "]", "because", "since", "which", "where",
+    "for", "as", "given", "out", "/", "—", "–", "-", "－", "strong", "weak", "clear",
+    "borderline", "accept", "reject", "on",
+})
+_RANGE_MARKS = frozenset({"-", "–", "—", "－", "~", "to"})
+_CJK_STATUS = re.compile(
+    r"(?:投稿|稿件|论文|提交)(?:状态|决定|结论|结果)?\s*[:=：为是]\s*(?:已|被)?\s*(?:录取|录用|接收|拒稿|拒绝|接受)"
+    r"|(?:投稿|稿件|论文).{0,4}(?:已|被)(?:录取|录用|接收|拒稿|拒绝|接受)"
+)
+_PREPRINT_MARK = re.compile(r"arxiv|pre[\s-]?print|e-print", re.IGNORECASE)
+_PREPRINT_BY = re.compile(r"\b(?:authored\s+by|by)\s+(?:[A-Z]\.\s*)?[A-Z][\w’'-]+")
+_PREPRINT_AUTHORS = re.compile(r"\bauthors?\s*[:=：]\s*[A-Z]")
+_PREPRINT_LIST = re.compile(r"\([A-Z][\w’'-]+\s+[A-Z][\w’'-]+\s+and\s+[A-Z]")
+_PREPRINT_ET_AL = re.compile(r"\bet\s+al\.?", re.IGNORECASE)
+
+
+def _construct_tokens(text: str) -> list[str]:
+    return [token for token in _CONSTRUCT_WORD.findall(text.casefold()) if token]
+
+
+def _content_follower(token: str) -> bool:
+    return bool(token) and token not in _CONTENT_SKIP and token not in _STATUS_HEADS and token not in _STATUS_SUBJECTS
+
+
+def _submission_status(tokens: list[str], raw: str) -> bool:
+    if _CJK_STATUS.search(raw):
+        return True
+    for index, token in enumerate(tokens):
+        if token not in _DECISION_WORDS:
+            continue
+        previous = tokens[index - 1] if index else ""
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if previous in _STATUS_DEGREES:
+            return True
+        left = tokens[max(0, index - 8):index]
+        right = tokens[index + 1:index + 8]
+        # "should be accepted" is a recommendation for the leak judge, not a recorded status.
+        if any(word in _STATUS_MODALS for word in left):
+            continue
+        if any(word in _STATUS_HEADS for word in left):
+            if _content_follower(nxt):
+                continue
+            return True
+        if any(word in _STATUS_SUBJECTS for word in left) and any(word in _STATUS_BINDERS for word in left):
+            if _content_follower(nxt):
+                continue
+            return True
+        if any(word in _STATUS_SUBJECTS for word in right):
+            return True
+        if "as" in right:
+            after = right[right.index("as") + 1:]
+            if any(word in {"poster", "oral", "spotlight"} for word in after):
+                return True
+    return False
+
+
+def _is_number(token: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?", token))
+
+
+def _rating_number(tokens: list[str], index: int) -> bool:
+    nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+    return nxt in _RATING_TAILS
+
+
+def _number_after_label(tokens: list[str], index: int) -> bool:
+    """A rating number follows the label without an intervening content word."""
+    for cursor in range(index + 1, min(len(tokens), index + 6)):
+        token = tokens[cursor]
+        if _is_number(token):
+            return _rating_number(tokens, cursor)
+        if token not in {":", "=", "-", "—", "–", "－", "of", "is", "equals", "equal", "out", "/", "a", "an", "the"}:
+            return False
+    return False
+
+
+def _total_score(tokens: list[str]) -> bool:
+    for index, token in enumerate(tokens):
+        qualified_score = token in {"score", "scores"} and index and tokens[index - 1] in _SCORE_QUALIFIERS
+        direct = token in {"rating", "ratings", "grade", "grades", "recommendation", "recommendations"}
+        if not direct and not qualified_score and token not in {"overall", "total"}:
+            continue
+        if _number_after_label(tokens, index):
+            return True
+    return False
+
+
+def _range_anchor(window: list[str]) -> bool:
+    labels = {"rating", "ratings", "grade", "grades", "recommendation", "recommendations", "score", "scores"}
+    if any(word in labels for word in window):
+        return True
+    return bool(window) and window[-1] in {"overall", "total"}
+
+
+def _score_range(tokens: list[str]) -> bool:
+    for index, token in enumerate(tokens):
+        window = tokens[max(0, index - 6):index]
+        if token in {"range", "between"} and _range_anchor(window):
+            if any(_is_number(word) for word in tokens[index:index + 8]):
+                return True
+        if (
+            _is_number(token)
+            and index + 2 < len(tokens)
+            and tokens[index + 1] in _RANGE_MARKS
+            and _is_number(tokens[index + 2])
+            and _range_anchor(window)
+        ):
+            return True
+    return False
+
+
+def _preprint_authorship(text: str) -> bool:
+    """A name bound to a preprint marker in the same short span."""
+    for match in _PREPRINT_MARK.finditer(text):
+        span = text[max(0, match.start() - 80):match.end() + 80]
+        if (
+            _PREPRINT_BY.search(span)
+            or _PREPRINT_AUTHORS.search(span)
+            or _PREPRINT_LIST.search(span)
+            or _PREPRINT_ET_AL.search(span)
+        ):
+            return True
+    return False
+
+
+def _explicit_construct(text: str) -> bool:
+    """Submission status, total score, score range, or inline preprint authorship.
+
+    The decision is the shape of the normalized tokens. A following content word
+    keeps ``accepted practice`` and ``acceptance rate`` scientific, and a metric
+    named ``similarity score`` is not an overall rating.
+    """
+    if not text:
+        return False
+    tokens = _construct_tokens(text)
+    return (
+        _submission_status(tokens, text)
+        or _total_score(tokens)
+        or _score_range(tokens)
+        or _preprint_authorship(text)
+    )
 
 
 def _has_scores(text: str) -> bool:

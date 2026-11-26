@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+from autopaperreview.command_transport import recover_json, reply_text
 from autopaperreview.proposal import reviewer_panel as panel
 from autopaperreview.proposal.data import digest, write
 
@@ -60,3 +62,40 @@ class ReviewerPanelTest(TestCase):
             write(path,dict(request=desc,state="response",output=[dict(n=1,grade=4,pro=None,con=None)]))
             with self.assertRaises(ValueError):
                 panel.request("forecast",body,Path(d),True,leak_judge=clean_judge)
+
+    def test_forecast_arrays_match_the_baseline_parser(self):
+        source = {"u1": "Investigate whether the two proposed groupings are equivalent."}
+        statement = source["u1"]
+        quote = "proposed groupings"
+        profile = [{"n": 20, "grade": 4, "pro": ["value", 2, "s1"], "con": None}]
+        source_reply = json.dumps({"s1": {"label": "full", "evidence": [["u1", quote]]}})
+        row = {"id": "toy", "overall": 3, "source_audit": {"source_units": source}}
+        wrapped = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": json.dumps(profile),
+            "modelUsage": None,
+        }
+        for raw in (json.dumps(profile), json.dumps(wrapped)):
+            with self.subTest(raw=raw[:24]):
+                baseline = json.loads(recover_json(reply_text(raw)[0]))
+                self.assertEqual(baseline, profile)
+                calls = []
+
+                def transport(_argv, *, system, prompt, model, timeout, strict, raw=raw):
+                    self.assertTrue(strict)
+                    calls.append(system)
+                    if system == panel.SOURCE:
+                        return source_reply, 0
+                    return raw, 0
+
+                with TemporaryDirectory() as folder, patch.object(panel, "material", return_value=[statement]), \
+                        patch.object(panel, "run_command", side_effect=transport):
+                    result = panel.evaluate(row, Path(folder), False, leak_judge=clean_judge)
+                    again = panel.evaluate(row, Path(folder), True, leak_judge=clean_judge)
+                self.assertEqual(calls.count(panel.FORECAST), 1)
+                self.assertEqual(len(result["profiles"]), 1)
+                self.assertEqual(result["state"], "response")
+                self.assertEqual(result["simulated_grade"]["mean"], 4)
+                self.assertEqual(again["profiles"], result["profiles"])

@@ -88,17 +88,17 @@ def assert_output_isolated(path: Path, *input_roots: Path) -> None:
     from ..public_calibration import PublicCalibrationError, assert_local_only
     from .repro_metrics import repo_repro_dir
 
-    output = _real(path)
+    output = _real(Path(path).expanduser())
     try:
         assert_local_only(output)
     except PublicCalibrationError as exc:
         raise ValueError(
             "output must not overlap committed repository files or the input directory"
         ) from exc
-    roots = [_real(repo_repro_dir())]
+    roots = [_real(Path(repo_repro_dir()).expanduser())]
     for root in input_roots:
         if root is not None:
-            roots.append(_real(root))
+            roots.append(_real(Path(root).expanduser()))
     for root in roots:
         if _within(root, output) or _within(output, root):
             raise ValueError("output must not overlap committed repository files or the input directory")
@@ -250,11 +250,17 @@ class _Output:
             _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
             destination = self._destination_identity()
             swapped = file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
-            if destination != created or swapped != original or swapped in self.inputs.values():
-                try:
-                    _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
-                except OSError:
-                    pass
+            owned = destination == created
+            if not owned or swapped != original or swapped in self.inputs.values():
+                # Roll back only while this writer still owns the destination.
+                # A concurrent publisher that already won keeps its bytes.
+                if owned:
+                    try:
+                        _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+                    except OSError:
+                        pass
+                elif swapped == original and swapped not in self.inputs.values():
+                    remove_temporary(self.directory, name)
                 raise ValueError(_ALIAS)
             held = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
             if file_identity(held) != original or original in self.inputs.values():

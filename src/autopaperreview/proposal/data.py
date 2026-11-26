@@ -572,6 +572,58 @@ def iclr_case(
     }
 
 
+def _reject_duplicate_root_key(buf: str, handle, key: str) -> None:
+    """Raise when the root object repeats ``key`` after its first member."""
+    data = buf
+    index = 0
+    depth = 1
+    in_string = False
+    escaped = False
+    capturing = False
+    pending = None
+    while True:
+        if index >= len(data):
+            more = handle.read(65536)
+            if not more:
+                return
+            data = data[index:] + more
+            index = 0
+            continue
+        char = data[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+                capturing = False
+            elif capturing:
+                pending = (pending or "") + char
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            capturing = depth == 1
+            if capturing:
+                pending = ""
+            index += 1
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth <= 0:
+                return
+        elif char == ":" and depth == 1 and pending is not None:
+            if pending == key:
+                raise ValueError(f"duplicate JSON key {key!r} on the root object")
+            pending = None
+        elif char == "," and depth == 1:
+            pending = None
+        index += 1
+
+
 def archived_notes(path: Path):
     """Stream the leading notes array of the submission snapshot, one note at a time."""
     decoder = json.JSONDecoder()
@@ -586,6 +638,7 @@ def archived_notes(path: Path):
         while True:
             buf = buf.lstrip()
             if buf.startswith("]"):
+                _reject_duplicate_root_key(buf[1:], f, "notes")
                 return
             try:
                 item, end = decoder.raw_decode(buf)
