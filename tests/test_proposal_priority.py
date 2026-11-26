@@ -116,6 +116,8 @@ class TestProposalPriority(unittest.TestCase):
                 }
                 for i in range(9)
             ]
+            for record in rows:
+                record.setdefault("split", "dev")
             p.write_text("\n".join(json.dumps(record) for record in rows))
             build(p, db)
             hits = retrieve(
@@ -159,10 +161,22 @@ class TestFixedProposalBenchmark(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             patch("autopaperreview.proposal.stages.run_command") as run,
         ):
-            with self.assertRaisesRegex(ValueError, "missing cached merit"):
+            from autopaperreview.proposal.sanitized import sanitize_proposal
+
+            with self.assertRaisesRegex(TypeError, "SanitizedProposal"):
                 invoke(
                     "merit",
                     {"problem": "Catalogue sample names."},
+                    Path(tmp),
+                    "synthetic",
+                    [],
+                    2,
+                    cached_only=True,
+                )
+            with self.assertRaisesRegex(ValueError, "missing cached merit"):
+                invoke(
+                    "merit",
+                    sanitize_proposal({"problem": "Catalogue sample names."}),
                     Path(tmp),
                     "synthetic",
                     [],
@@ -305,8 +319,11 @@ class TestContrastiveProposalReview(unittest.TestCase):
             for i, w in enumerate(words)
         ]
         bank.append(
-            {"key": "self", "target": 5, "proposal": target, "opinions": ["HELD-OUT"]}
+            {"key": "self", "target": 5, "split": "dev", "year": 2018, "proposal": target, "opinions": ["HELD-OUT"]}
         )
+        for row in bank:
+            row.setdefault("split", "dev")
+            row.setdefault("year", 2018)
         packet, scores = contrast.packet(target, bank)
         self.assertNotIn("HELD-OUT", str(packet))
         self.assertEqual(len(scores), 6)
@@ -344,6 +361,9 @@ class TestContrastiveProposalReview(unittest.TestCase):
                 ["pollen microscope grain"] * 12 + ["forge hammer iron"] * 12
             )
         ]
+        for row in bank:
+            row.setdefault("split", "dev")
+            row.setdefault("year", 2018)
         matched, _ = contrast.packet(target, bank, {"query": "pollen microscope grain"})
         self.assertEqual(matched["target"], target)
         self.assertTrue(

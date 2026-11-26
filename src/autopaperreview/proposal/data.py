@@ -19,6 +19,7 @@ from ..public_calibration import (
     parse_rating,
 )
 from ..rating_scales import RatingScale, classic_scale, scale_for_key, scale_for_year
+from .sanitized import SCORE_FIELDS, contains_factual_leak, factual_leak, factual_patterns
 
 
 def read(path: Path) -> Any:
@@ -65,34 +66,7 @@ def reported_result(text: str) -> bool:
     return bool(OUTCOME.search(text) or REPORTED_FINDING.search(text))
 
 
-# Venue outcome, a numeric rating, an award, or an identity marker. Scientific
-# prose such as "we accept the assumption" does not match. The pattern is
-# applied to folded text: full-width punctuation, spelled-out scores, and
-# obfuscated emails are normalized first.
-LABEL_LEAK = re.compile(
-    r"\boverall\s+ratings?\b"
-    r"|\b(?:final|meta|reviewer|my|our|average)\s+(?:ratings?|scores?|recommendations?)\b"
-    r"|\b(?:ratings?|scores?)\s*(?:[:=]\s*|\s+of\s+)\d+"
-    r"|\b\d+\s+out\s+of\s+10\b"
-    r"|\bdecision\s*[:=]\s*(?:accept|reject)\w*"
-    r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
-    r"|\b(?:strong|weak|clear|marginal|obvious)\s+(?:accept|reject)(?:ance)?\b"
-    r"|\b(?:best|outstanding)\s+paper\b"
-    r"|\bpaper\s+award\b"
-    r"|\b(?:was|were|been)\s+(?:accept|reject)ed\b"
-    r"|\b(?:should|would|must)\s+be\s+(?:accepted|rejected|published)\b"
-    r"|\bdeserves?\s+to\s+be\s+(?:accepted|rejected|published)\b"
-    r"|\brecommend(?:ing|ation)?\s+(?:acceptance|rejection)\b"
-    r"|\bvote\s+(?:to\s+)?(?:accept|reject)\b"
-    r"|\b(?:i|we)\s+(?:will|would|do)\s+(?:accept|reject)\s+(?:this|the)\s+(?:paper|submission)\b"
-    r"|\bacceptance\s+(?:decision|rate|notification)\b"
-    r"|\bcamera[- ]ready\b"
-    r"|\brecommend(?:ation)?\s*[:=]?\s*(?:to\s+)?(?:accept|reject)\b"
-    r"|\bcorresponding\s+authors?\b"
-    r"|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
-    r"|\bgithub\.com/[A-Za-z0-9_.\-]+",
-    re.IGNORECASE,
-)
+# Factual leaks live in sanitized.py. Indirect acceptance is not a regex.
 _LABEL_SPLIT = re.compile(
     r"(?<=[.!?。！？．])\s+|\n+"
     r"|(?=\bOverall\s+Ratings?\b)"
@@ -100,77 +74,9 @@ _LABEL_SPLIT = re.compile(
     r"|(?=\b(?:Final|Meta|Reviewer|My|Our)\s+(?:Rating|Score)s?\b)",
     re.IGNORECASE,
 )
-_FOLD = str.maketrans(
-    {
-        "：": ":",
-        "；": ";",
-        "＠": "@",
-        "．": ".",
-        "（": "(",
-        "）": ")",
-        "０": "0",
-        "１": "1",
-        "２": "2",
-        "３": "3",
-        "４": "4",
-        "５": "5",
-        "６": "6",
-        "７": "7",
-        "８": "8",
-        "９": "9",
-    }
-)
-_NUMBER_WORDS = {
-    "zero": "0",
-    "one": "1",
-    "two": "2",
-    "three": "3",
-    "four": "4",
-    "five": "5",
-    "six": "6",
-    "seven": "7",
-    "eight": "8",
-    "nine": "9",
-    "ten": "10",
-}
-_SPELLED_NUMBER = re.compile(
-    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b",
-    re.IGNORECASE,
-)
-_OBFUSCATED_EMAIL = re.compile(
-    r"(?i)([A-Za-z0-9._%+\-]+)\s*(?:@|\[at\]|\(at\))\s*([A-Za-z0-9\-]+)\s*(?:\.|\[dot\]|\(dot\))\s*([A-Za-z]{2,})"
-)
-_SPELLED_EMAIL = re.compile(
-    r"(?i)\b([A-Za-z0-9._%+\-]+)\s+at\s+([A-Za-z0-9\-]+)\s+dot\s+([A-Za-z]{2,})\b"
-)
 # Score and identity fields are never copied into a model packet. "contribution"
 # is not listed: APD uses that key for prose, and the ICLR numeric score is
 # excluded by the review-prose allowlist below.
-SCORE_FIELDS = frozenset(
-    {
-        "rating",
-        "ratings",
-        "recommendation",
-        "recommendations",
-        "decision",
-        "decisions",
-        "confidence",
-        "soundness",
-        "presentation",
-        "award",
-        "awards",
-        "authors",
-        "authorids",
-        "author_ids",
-        "email",
-        "emails",
-        "venue",
-        "venueid",
-        "final_rating",
-        "accept",
-        "meta_review",
-    }
-)
 _REVIEW_PROSE = (
     "strengths",
     "weaknesses",
@@ -179,38 +85,29 @@ _REVIEW_PROSE = (
 )
 
 
-def _fold_leak_text(text: str) -> str:
-    folded = text.translate(_FOLD)
-    folded = _OBFUSCATED_EMAIL.sub(r"\1@\2.\3", folded)
-    folded = _SPELLED_EMAIL.sub(r"\1@\2.\3", folded)
-    return _SPELLED_NUMBER.sub(lambda match: _NUMBER_WORDS[match.group(0).lower()], folded)
-
-
 def _score_field(key: object) -> bool:
     return str(key).strip().lower().replace(" ", "_") in SCORE_FIELDS
 
 
 def cleaning_rules() -> dict[str, str]:
-    """Patterns that define prospective-text cleaning. Included in protocol digests."""
+    """Patterns that define prospective-text cleaning. Included in protocol digests.
+
+    The factual patterns are defense in depth. Paraphrase is not one of them.
+    """
     return {
-        "label_leak": LABEL_LEAK.pattern,
+        **factual_patterns(),
         "outcome": OUTCOME.pattern,
         "reported_finding": REPORTED_FINDING.pattern,
     }
 
 
 def label_leak(text: str) -> bool:
-    return bool(isinstance(text, str) and text and LABEL_LEAK.search(_fold_leak_text(text)))
+    """Factual leak only. See ``leak_audit`` for paraphrase and cross-field hints."""
+    return factual_leak(text)
 
 
 def label_leak_in(value: Any) -> bool:
-    if isinstance(value, str):
-        return label_leak(value)
-    if isinstance(value, dict):
-        return any(label_leak_in(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(label_leak_in(item) for item in value)
-    return False
+    return contains_factual_leak(value)
 
 
 def assert_no_label_leak(value: Any, *, where: str) -> None:
@@ -440,7 +337,7 @@ def _millis(note: dict, *keys: str) -> int:
             continue
         try:
             return int(raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
     return 0
 
@@ -519,7 +416,11 @@ def iclr_case(
         if eligible:
             chosen = max(
                 eligible,
-                key=lambda note: (_millis(note, "tmdate", "mdate"), str(note.get("id") or "")),
+                key=lambda note: (
+                    _millis(note, "tmdate", "mdate"),
+                    str(note.get("id") or ""),
+                    digest(note),
+                ),
             )
             early = True
         else:

@@ -18,6 +18,8 @@ from .data import (
     scale_for_reference,
     write,
 )
+from .leak_audit import apply_leak_audit
+from .sanitized import seal
 from .merit import reference_packet
 from .stages import PROMPTS, claude_argv, invoke
 
@@ -75,16 +77,28 @@ def independent_protocol(command):
 
 
 def reviewer_result(note, units, extracted, grade):
-    """Offsets refer to the original unit, not the cleaned text sent to the model."""
+    """Offsets refer to the original unit, one span per occurrence.
+
+    A repeated excerpt advances through the original text, so the second copy
+    does not reuse the first offset.
+    """
     original = note.get("units") if isinstance(note.get("units"), dict) else units
     spans = []
+    cursor: dict[str, int] = {}
     for index in grade["used"]:
         evidence = extracted[index]
         unit, quote = evidence["id"], evidence["quote"]
         source = original.get(unit, "")
-        if not isinstance(source, str) or not isinstance(quote, str) or not quote or quote not in source:
+        start_at = cursor.get(unit, 0)
+        if (
+            not isinstance(source, str)
+            or not isinstance(quote, str)
+            or not quote
+            or quote not in source[start_at:]
+        ):
             raise ValueError("evidence quote is not in the original review unit")
-        start = source.index(quote)
+        start = source.index(quote, start_at)
+        cursor[unit] = start + len(quote)
         spans.append(
             {"unit": unit, "start": start, "end": start + len(quote), "quote": quote}
         )
@@ -104,6 +118,7 @@ def coding_units(units):
 def code_paper(
     row, cache, command, *, timeout=240, cached_only=False,
     include_independent_grades=False,
+    leak_judge=None,
 ):
     comments = {
         f"r{i}": coding_units(note["units"])
@@ -121,12 +136,14 @@ def code_paper(
         return read(p)["output"]
 
     source = {}
-    payload = {key: units for key, units in comments.items() if units}
+    payload = seal({key: units for key, units in comments.items() if units}) if any(comments.values()) else {}
+    if leak_judge is not None and payload:
+        apply_leak_audit(payload, leak_judge)
     if payload:
         extracted = stage("ref_extract", payload, requests, "ref_extract")
         source = reference_packet(comments, extracted)
         if any(source.values()):
-            grades = stage("ref_grade", source, requests, "ref_grade")
+            grades = stage("ref_grade", seal(source), requests, "ref_grade")
     default_grade = {"score": None, "used": []}
     reviewers = []
     independent = []
@@ -142,7 +159,10 @@ def code_paper(
             grade = default_grade
             if source.get(alias):
                 response = stage(
-                    "ref_grade", {"r1": source[alias]}, independent_requests, review["id"]
+                    "ref_grade",
+                    seal({"r1": source[alias]}),
+                    independent_requests,
+                    review["id"],
                 )
                 grade = response.get("r1", default_grade)
             independent.append(reviewer_result(review, units, evidence, grade))

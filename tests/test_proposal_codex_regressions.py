@@ -159,7 +159,7 @@ class LeakGuardTests(unittest.TestCase):
             priority.rank(leaked, Path("."), profile, Path("."), call=call)
         clean = {"proposal": "Index the archive labels for a planned catalogue."}
         legacy = {"proposal": "Write to ada.example@nowhere.edu. Best paper award."}
-        with self.assertRaisesRegex(ValueError, "fallback proposal"):
+        with self.assertRaisesRegex(ValueError, "identity leak"):
             priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call)
         with self.assertRaisesRegex(ValueError, "identity leak"):
             priority.rank(
@@ -177,7 +177,7 @@ class LeakGuardTests(unittest.TestCase):
         clean = {"proposal": "Index archive labels for a planned catalogue of names."}
         legacy = {"proposal": "Decision: Accept as Oral."}
         with TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "fallback proposal"):
+            with self.assertRaisesRegex(ValueError, "identity leak"):
                 priority.rank(
                     clean,
                     Path(tmp),
@@ -245,6 +245,9 @@ class RetrievalExclusionTests(unittest.TestCase):
                 "opinions": ["wood-b"],
             },
         ]
+        for row in bank:
+            row.setdefault("split", "dev")
+            row.setdefault("year", 2018)
         leaked, _scores = contrast.packet(target, bank)
         self.assertIn("SECRET-LABEL", json.dumps(leaked))
         for kwargs in (
@@ -375,6 +378,8 @@ class RetrievalExclusionTests(unittest.TestCase):
                 }
                 for index in range(24)
             )
+            for row in rows:
+                row.setdefault("split", "dev")
             corpus.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             database = root / "prior.sqlite"
             build(corpus, database)
@@ -462,7 +467,8 @@ class AuditAndCohortTests(unittest.TestCase):
 
             def invoke(stage, body, folder, model, command, timeout, *, cached_only=False):
                 path = cache / "audit.json"
-                write(path, {"output": stated})
+                visible = {key: ["stated", "s1"] for key in body["claims"]}
+                write(path, {"output": visible})
                 return path
 
             with patch.object(stages, "invoke", side_effect=invoke):
@@ -640,17 +646,23 @@ class AdversarialRegressionTests(unittest.TestCase):
         self.assertFalse(label_leak("Use one of the planned catalogues for the index."))
 
     def test_indirect_obfuscated_and_legacy_reported_text_never_reaches_a_call(self) -> None:
-        leaks = [
-            "This paper should be accepted at the conference.",
-            "The work deserves to be published.",
-            "I recommend acceptance of the idea.",
+        facts = [
             "Rating：8",
             "Decision：Accept",
             "I assign a score of eight.",
             "The score is eight out of ten.",
+            "I recommend acceptance of the idea.",
+            "Write to a\u200bda@example.com about the plan.",
+            "See forum?id=AbCdEfGh12 in the note.",
             "Write to ada [at] example [dot] edu about the plan.",
             "Write to ada(at)example(dot)edu about the plan.",
             "Write to ada AT example DOT edu about the plan.",
+            "See export.arxiv.org/pdf/2099.00001?utm=1 for the draft.",
+            "The best paper award goes to this idea.",
+        ]
+        paraphrases = [
+            "This paper should be accepted at the conference.",
+            "The work deserves to be published.",
         ]
         calls = []
 
@@ -658,8 +670,8 @@ class AdversarialRegressionTests(unittest.TestCase):
             calls.append(args)
             raise AssertionError("model was called")
 
-        profile = {"ranker": {"names": []}}
-        for text in leaks:
+        profile = {"ranker": {"names": [], "method": "mean"}}
+        for text in facts:
             with self.assertRaisesRegex(ValueError, "identity leak"):
                 priority.rank(
                     {"proposal": "Index the archive. " + text},
@@ -668,10 +680,39 @@ class AdversarialRegressionTests(unittest.TestCase):
                     Path("."),
                     call=call,
                 )
+        for text in paraphrases:
+            self.assertFalse(label_leak(text))
+            packet = {"proposal": "Index the archive. " + text}
+            for verdict in ("leak", "unsure", {"verdict": "unsure"}):
+                with self.assertRaisesRegex(ValueError, "leak audit blocked"):
+                    priority.rank(
+                        packet,
+                        Path("."),
+                        profile,
+                        Path("."),
+                        call=call,
+                        leak_judge=lambda _proposal, verdict=verdict: verdict,
+                    )
+            priority.rank(
+                packet,
+                Path("."),
+                profile,
+                Path("."),
+                call=call,
+                leak_judge=lambda _proposal: "clean",
+            )
         legacy = {"proposal": "Our experiments show a higher accuracy on the planned task."}
         clean = {"proposal": "Index archive labels for a planned catalogue of names."}
         with self.assertRaisesRegex(ValueError, "reported outcomes"):
             priority.rank(clean, Path("."), profile, Path("."), legacy=legacy, call=call)
+        with self.assertRaisesRegex(ValueError, "nested proposal field"):
+            priority.rank(
+                {"problem": {"text": "Index the archive.", "decision": "Accept"}},
+                Path("."),
+                profile,
+                Path("."),
+                call=call,
+            )
         self.assertEqual(calls, [])
 
     def test_contrast_drops_test_rows_future_years_query_arxiv_and_reported_excerpts(self) -> None:
@@ -680,6 +721,8 @@ class AdversarialRegressionTests(unittest.TestCase):
         def example(key, opinion, **extra):
             row = {
                 "key": key,
+                "split": "dev",
+                "year": 2020,
                 "target": extra.pop("target", 4.8),
                 "proposal": {
                     "problem": extra.pop(
@@ -688,14 +731,18 @@ class AdversarialRegressionTests(unittest.TestCase):
                     )
                 },
                 "opinions": [opinion, "Our experiments show a gain on the same bench."],
-                **extra,
             }
+            row.update(extra)
             return row
 
         bank = [
             example("query-paper", "QUERY-PAPER", arxiv="https://arxiv.org/abs/2099.00001?utm=1"),
             example("future-dev", "FUTURE-DEV", year=2099, split="dev"),
             example("other-test", "OTHER-TEST", year=2020, split="test"),
+            example("spaced-test", "SPACED-TEST", split=" Test "),
+            example("held-out", "HELD-OUT", split="HOLD OUT"),
+            example("no-year", "NO-YEAR", year=None),
+            example("no-split", "NO-SPLIT", split=None),
             example(
                 "near-low",
                 "low-note",
@@ -715,7 +762,16 @@ class AdversarialRegressionTests(unittest.TestCase):
         ]
         hidden, _scores = contrast.packet(target, bank, exclude_arxiv="2099.00001")
         text = json.dumps(hidden)
-        for blocked in ("QUERY-PAPER", "FUTURE-DEV", "OTHER-TEST", "experiments show"):
+        for blocked in (
+            "QUERY-PAPER",
+            "FUTURE-DEV",
+            "OTHER-TEST",
+            "SPACED-TEST",
+            "HELD-OUT",
+            "NO-YEAR",
+            "NO-SPLIT",
+            "experiments show",
+        ):
             self.assertNotIn(blocked, text)
         self.assertIn("low-note", text)
 
@@ -747,6 +803,14 @@ class AdversarialRegressionTests(unittest.TestCase):
                     "forum": "bad-stamp",
                     "arxiv": "2099.00098",
                 },
+                {
+                    "title": "Earlier adaptive indexing companion",
+                    "abstract": "Adaptive indexing of archive transcripts with a second sparse dictionary.",
+                    "year": 2018,
+                    "revision_ms": 8,
+                    "forum": "earlier-peer",
+                    "arxiv": "2099.00009",
+                },
             ]
             rows.extend(
                 {
@@ -760,14 +824,48 @@ class AdversarialRegressionTests(unittest.TestCase):
                 for index in range(24)
             )
             corpus = root / "corpus.jsonl"
+            rows.append(
+                {
+                    "title": "Infinite stamp indexing",
+                    "abstract": "Adaptive indexing of archive transcripts with a non-finite stamp.",
+                    "year": 2015,
+                    "revision_ms": "inf",
+                    "forum": "infinite-stamp",
+                    "arxiv": "2099.00097",
+                    "split": "dev",
+                }
+            )
+            for row in rows:
+                row.setdefault("split", "dev")
+            rows.append(
+                {
+                    "title": "Unlabeled split indexing",
+                    "abstract": "Adaptive indexing of archive transcripts with no cohort split.",
+                    "year": 2014,
+                    "revision_ms": 9,
+                    "forum": "missing-split",
+                    "arxiv": "2099.00096",
+                    "split": None,
+                }
+            )
             corpus.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             database = root / "prior.sqlite"
             build(corpus, database)
+            with self.assertRaises(ValueError):
+                retrieve(
+                    database,
+                    {"problem": "Adaptive indexing of archive transcripts"},
+                    cutoff_ms=float("inf"),
+                )
             hits = retrieve(database, {"problem": "Adaptive indexing of archive transcripts"})
             forums = [hit["forum"] for hit in hits]
             self.assertIn("earlier", forums)
             self.assertNotIn("year-2099", forums)
             self.assertNotIn("bad-stamp", forums)
+            self.assertNotIn("infinite-stamp", forums)
+            self.assertNotIn("missing-split", forums)
+            self.assertTrue(hits)
+            self.assertTrue(all(hit["split"] == "dev" for hit in hits))
 
     def test_missing_or_zero_review_time_is_not_pre_review_and_ties_are_stable(self) -> None:
         group = "ICLR.cc/2024/Conference"
@@ -832,6 +930,21 @@ class AdversarialRegressionTests(unittest.TestCase):
         noisy["tmdate"] = None
         self.assertEqual(latest_official_reviews([noisy, high])[0]["id"], "m-note")
         self.assertEqual(official_rating_summary([high], 2024)["final_mean"], 8)
+        plus = review("plus-note", 100, "8: accept")
+        plus["tmdate"] = "+120"
+        older = review("older-note", 100, "6: marginally above")
+        older["tmdate"] = 50
+        self.assertEqual(latest_official_reviews([older, plus])[0]["id"], "plus-note")
+        same_a = review("same-id", 100, "8: accept")
+        same_b = review("same-id", 100, "6: marginally above")
+        same_a["tmdate"] = "+120"
+        same_b["tmdate"] = 120
+        same_a["content"] = {**same_a["content"], "strengths": {"value": "Alpha record is specific."}}
+        same_b["content"] = {**same_b["content"], "strengths": {"value": "Beta record is specific."}}
+        self.assertEqual(
+            [note["content"]["strengths"]["value"] for note in latest_official_reviews([same_a, same_b])],
+            [note["content"]["strengths"]["value"] for note in latest_official_reviews([same_b, same_a])],
+        )
 
     def test_reference_offsets_use_the_original_unit_and_prose_strips_decisions(self) -> None:
         original = "Decision: Accept as Oral. The proposed test is explicit."
@@ -893,7 +1006,8 @@ class AdversarialRegressionTests(unittest.TestCase):
         case = iclr_case(submission, [note], group)
         packet = json.dumps(case["comments"])
         self.assertIn("method is clear", packet)
-        for blocked in ("should be accepted", "Rating", "score of eight", "ada", "Accept", "confident"):
+        self.assertIn("should be accepted", packet)
+        for blocked in ("Rating", "score of eight", "ada", "Accept", "confident"):
             self.assertNotIn(blocked, packet, blocked)
 
     def test_row_year_and_cutoff_cannot_override_the_cohort_lock(self) -> None:
@@ -926,6 +1040,29 @@ class AdversarialRegressionTests(unittest.TestCase):
         rows = blind_inputs(manifest, matched)
         self.assertEqual(rows[0][2]["year"], 2024)
         self.assertEqual(rows[0][2]["cutoff_ms"], 10)
+        locked_arxiv = {
+            "cases": [
+                {"forum": fid, "split": "test", "arxiv": "2099.00001"} for fid in ids
+            ],
+            "ids_sha256": digest(sorted(ids)),
+        }
+        override = [
+            {"forum": fid, "proposal": "Map old diary labels.", "arxiv": "2099.00002"}
+            for fid in ids
+        ]
+        with self.assertRaisesRegex(ValueError, "disagrees with the cohort lock"):
+            blind_inputs(locked_arxiv, override)
+        row_only = [
+            {"forum": fid, "proposal": "Map old diary labels.", "arxiv_id": "2099.00002"}
+            for fid in ids
+        ]
+        with self.assertRaisesRegex(ValueError, "must be set on the cohort lock"):
+            blind_inputs(unlocked, row_only)
+        kept = blind_inputs(
+            locked_arxiv,
+            [{"forum": fid, "proposal": "Map old diary labels."} for fid in ids],
+        )
+        self.assertEqual(kept[0][2]["arxiv"], "2099.00001")
         reference = {
             "forum": ids[0],
             "prospective": 3,
@@ -963,6 +1100,55 @@ class AdversarialRegressionTests(unittest.TestCase):
         forward = stratified_ci([row("b", 1), row("a", 5)], spec, draws=25, seed=3)
         backward = stratified_ci([row("a", 5), row("b", 1)], spec, draws=25, seed=3)
         self.assertEqual(forward, backward)
+
+    def test_duplicate_excerpts_use_each_original_offset(self) -> None:
+        original = "The plan is concrete. The plan is concrete."
+        quote = "The plan is concrete."
+        result = reference_coding.reviewer_result(
+            {"id": "n", "units": {"u": original}},
+            {},
+            [{"id": "u", "quote": quote}, {"id": "u", "quote": quote}],
+            {"score": 4, "used": [0, 1]},
+        )
+        spans = result["evidence"]
+        self.assertEqual(original[spans[0]["start"] : spans[0]["end"]], quote)
+        self.assertGreater(spans[1]["start"], spans[0]["end"] - 1)
+        self.assertEqual(original[spans[1]["start"] : spans[1]["end"]], quote)
+
+    def test_pair_material_drops_unsupported_sentences(self) -> None:
+        from autopaperreview.proposal.material import material
+
+        proposal = {
+            "problem": "Count the tokens. Invent an unsupported widget.",
+            "prior_alternatives": None,
+            "mechanism": None,
+            "assumptions": None,
+            "discriminating_test": None,
+            "intended_value": None,
+        }
+        source = {"u": "Count the tokens."}
+        item = {
+            "id": "a",
+            "overall": 3,
+            "proposal": proposal,
+            "source_audit": {
+                "source_units": source,
+                "proposal_sha256": digest(proposal),
+                "source_sha256": digest(source),
+                "claims": {
+                    "u1": {"text": "Count the tokens.", "status": "stated", "field": "problem"},
+                    "u2": {
+                        "text": "Invent an unsupported widget.",
+                        "status": "unsupported",
+                        "field": "problem",
+                    },
+                },
+            },
+            "outcome_screen": {"proposal": {}},
+        }
+        sentences = material(item)
+        self.assertIn("Count the tokens.", sentences)
+        self.assertNotIn("Invent an unsupported widget.", sentences)
 
 
 if __name__ == "__main__":

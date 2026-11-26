@@ -8,6 +8,8 @@ from statistics import mean
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
 from .data import apd_cases, assert_no_label_leak, digest, read, write
+from .leak_audit import apply_leak_audit, model_leak_judge
+from .sanitized import SanitizedProposal, sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
@@ -90,25 +92,14 @@ def stage_features(stage, verdict):
 
 
 def text_packet(doc):
-    if isinstance(doc, str):
-        return {"proposal": doc.strip()}
-    if not isinstance(doc, dict):
-        raise TypeError("expected proposal text or JSON object")
-    fields = doc.get("proposal", doc)
-    if isinstance(fields, str):
-        return {"proposal": fields.strip()}
-    if not isinstance(fields, dict):
-        raise TypeError("invalid proposal object")
-    allowed = set(merit.DESIGN_FIELDS) | set(SECTIONS) | {"proposal"}
-    if not set(fields) <= allowed:
-        raise ValueError("provide proposal fields only")
-    result = {
-        k: (v.get("text") if isinstance(v, dict) else v) for k, v in fields.items()
-    }
-    if not all(v is None or isinstance(v, str) for v in result.values()):
-        raise ValueError("invalid proposal section")
-    assert_no_label_leak(result, where="proposal")
-    return result
+    """Allowlisted flat proposal. Nested objects and score fields do not pass."""
+    return sanitize_proposal(doc)
+
+
+def _model_input(source):
+    if isinstance(source, SanitizedProposal):
+        return source
+    return seal(source)
 
 
 def rank(
@@ -128,7 +119,15 @@ def rank(
     timeout=240,
     call=invoke,
     screen_receipt=None,
+    leak_judge=None,
 ):
+    packet = sanitize_proposal(packet)
+    if legacy is not None:
+        legacy = sanitize_proposal(legacy)
+    if leak_judge is not None:
+        apply_leak_audit(packet, leak_judge)
+        if legacy is not None:
+            apply_leak_audit(legacy, leak_judge)
     if not any(packet.values()):
         raise ValueError("empty proposal")
     from .data import reported_result
@@ -185,7 +184,7 @@ def rank(
             bank = read(folder / "bank.json")
             for i in range(2):
                 source, reference = panel(packet, bank, i, exclude_key)
-                path = call(stage, source, root / "cache", model, argv, timeout)
+                path = call(stage, _model_input(source), root / "cache", model, argv, timeout)
                 verdict = read(path)["output"]
                 validate(stage, verdict, source)
                 rounds.append(score_panel(verdict, reference))
@@ -243,10 +242,10 @@ def rank(
             )
         if stage == "opinion":
             pm, pa = route("peer")
-            peer_path = call("peer", source, root / "cache", pm, pa, timeout)
+            peer_path = call("peer", _model_input(source), root / "cache", pm, pa, timeout)
             judgments["peer"] = read(peer_path)["output"]
             source = merit.opinion_packet(judgments["peer"])
-        path = call(stage, source, root / "cache", model, argv, timeout)
+        path = call(stage, _model_input(source), root / "cache", model, argv, timeout)
         verdict = read(path)["output"]
         validate(stage, verdict, source)
         if stage == "contrast":
@@ -308,10 +307,12 @@ def load_profile(path):
 
 
 def screen_packet(packet, root, *, cached_only=False, provider=None):
+    packet = sanitize_proposal(packet)
     assert_no_label_leak(packet, where="proposal")
     source = outcome_screen.units(packet)
     if not source:
-        return outcome_screen.filter_units(packet, source, {"exclude": []})
+        clean, audit = outcome_screen.filter_units(packet, source, {"exclude": []})
+        return sanitize_proposal(clean), audit
     if provider in (None, "grok"):
         first_model, argv = route("outcome_screen")
     elif provider == "claude":
@@ -320,7 +321,7 @@ def screen_packet(packet, root, *, cached_only=False, provider=None):
         raise ValueError(f"unknown outcome screen provider: {provider}")
     options = {"cached_only": True} if cached_only else {}
     receipt = invoke(
-        "outcome_screen", source, root / "cache", first_model, argv, 240, **options
+        "outcome_screen", seal(source), root / "cache", first_model, argv, 240, **options
     )
     first = read(receipt)["output"]
     clean, audit = outcome_screen.filter_units(packet, source, first)
@@ -345,7 +346,7 @@ def screen_packet(packet, root, *, cached_only=False, provider=None):
     receipts = {}
     for stage, check, key in checks:
         model, argv = route(stage)
-        second = invoke(stage, check, root / "cache", model, argv, 240, **options)
+        second = invoke(stage, seal(check), root / "cache", model, argv, 240, **options)
         confirmed = read(second)["output"]
         outcome_screen.validate_attribution(confirmed, check)
         findings.extend(confirmed["exclude"])
@@ -362,7 +363,7 @@ def screen_packet(packet, root, *, cached_only=False, provider=None):
     audit["cache_key"] = receipt.stem
     if provider is not None:
         audit["screen_model"] = first_model
-    return clean, audit
+    return sanitize_proposal(clean), audit
 
 
 def screen_rank_inputs(packet, legacy, root, profile, *, cached_only=False, provider=None):
@@ -421,15 +422,20 @@ def dispatch(args):
             if include_audit:
                 item["source"] = c["candidate"]
             m, argv = route("design")
+            candidate = seal(c["candidate"])
+            apply_leak_audit(
+                candidate,
+                model_leak_judge(root / "cache", m, argv, 240),
+            )
             design = read(
-                invoke("design", c["candidate"], root / "cache", m, argv, 240)
+                invoke("design", candidate, root / "cache", m, argv, 240)
             )["output"]
             item["proposal"] = merit.compact(design)
             if any(
                 stage_for_feature(n) == "forecast" for n in profile["ranker"]["names"]
             ):
                 legacy = read(
-                    invoke("compress", c["candidate"], root / "cache", m, argv, 240)
+                    invoke("compress", candidate, root / "cache", m, argv, 240)
                 )["output"]
                 item["short_proposal"] = {k: r["text"] for k, r in legacy.items()}
             items.append(item)
@@ -495,6 +501,7 @@ def dispatch(args):
             folder,
             legacy=legacy,
             screen_receipt=evidence.get("proposal"),
+            leak_judge=model_leak_judge(root / "cache", "claude-opus-5-5", claude_argv(), 240),
         )
         if include_audit:
             result["source_audit"] = citation_audit

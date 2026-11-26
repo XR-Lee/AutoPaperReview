@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -119,6 +120,44 @@ class ProposalArtifactTests(unittest.TestCase):
         self.assertEqual(absent.returncode, 2)
         self.assertIn("not in the repository", absent.stderr)
         self.assertNotIn("reproduced from committed artifacts", absent.stderr)
+
+    def test_headlines_match_rejects_nan(self) -> None:
+        committed = committed_aggregates()
+        got = json.loads(json.dumps(committed))
+        got["fixed100"]["rho"] = float("nan")
+        self.assertFalse(headlines_match(got, committed))
+
+    def test_rekey_script_replaces_synthetic_ids_with_hmac(self) -> None:
+        script = ROOT / "scripts" / "rekey_external_repro.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "in"
+            output = Path(temporary) / "out"
+            cohort = source / "fixed100"
+            cohort.mkdir(parents=True)
+            (cohort / "references.json").write_text(
+                json.dumps([{"key": "synthetic-forum", "final_rating": 6, "accept": 1}]),
+                encoding="utf-8",
+            )
+            (cohort / "rows.csv").write_text(
+                "key,final_rating\nsynthetic-forum,6\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["APR_PROPOSAL_REPRO_SALT"] = "synthetic-salt-not-for-real-ids"
+            completed = subprocess.run(
+                [sys.executable, str(script), "--root", str(source), "--output", str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            rewritten = (output / "fixed100" / "references.json").read_text(encoding="utf-8")
+            table = (output / "fixed100" / "rows.csv").read_text(encoding="utf-8")
+        self.assertNotIn("synthetic-forum", rewritten)
+        self.assertNotIn("synthetic-forum", table)
+        self.assertNotIn("synthetic-forum", completed.stdout)
+        self.assertIn("rewrote", completed.stdout)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,9 @@ export APR_PROPOSAL_REPRO_DIR=/path/outside/git
 python3 scripts/reproduce_proposal_rank.py
 ```
 
-`APR_PROPOSAL_REPRO_DIR` must contain the row files named in `external-sha256.json`. The script checks those SHA-256 checksums before it recomputes. The checksums are of the row files that the scorer reads (review quotes are not in those copies). They are not of the earlier local originals that still contained quotes.
+`APR_PROPOSAL_REPRO_DIR` must contain the row files named in `external-sha256.json`. The script checks those SHA-256 checksums before it recomputes. The checksums are the original delivered bytes, including reference files that still contain review quotes. The scorer reads the numeric fields and the row keys. `replications199` is scored from `joined.json`. That delivery does not include a blind index, and the check does not ask for one.
+
+`scripts/rekey_external_repro.py` writes a second directory whose identifier fields are HMAC-SHA256 under `APR_PROPOSAL_REPRO_SALT`. It does not modify the originals, so the checksums above still match. The salt is not written and the raw identifiers are not printed. nlp84 row keys are included.
 
 Without that directory, the script prints `aggregates.json` and does not fail. The unit test that recomputes the headlines skips in the same case. A synthetic fixture covers the Spearman, AUC, top-fifth, and HMAC arithmetic.
 

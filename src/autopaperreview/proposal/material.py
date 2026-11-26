@@ -25,9 +25,16 @@ def material(item):
         or audit.get('source_sha256') != digest(audit.get('source_units'))):
         raise ValueError('expected matching proposal and source receipts from prioritize --include-source-audit')
     allowed = set(plan_units(proposal).values())
+    unsupported = set()
+    claims = audit.get("claims") if isinstance(audit.get("claims"), dict) else {}
+    for claim in claims.values():
+        if isinstance(claim, dict) and claim.get("status") == "unsupported":
+            text = claim.get("text")
+            if isinstance(text, str) and text:
+                unsupported.add(text)
     fields = {k: [] for k in ORDER}
     for row in units(dict(sorted(proposal.items()))).values():
-        if row['field'] in fields and row['text'] in allowed:
+        if row['field'] in fields and row['text'] in allowed and row['text'] not in unsupported:
             fields[row['field']].append(row['text'])
     sentences = []
     for i in range(max(map(len, fields.values()))):

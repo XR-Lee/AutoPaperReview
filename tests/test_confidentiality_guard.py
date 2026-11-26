@@ -170,14 +170,16 @@ class ConfidentialityGuardTests(unittest.TestCase):
         self.assertNotIn(title, result.stderr)
 
     def test_hmac_digest_and_file_hash_pass(self) -> None:
+        import hmac
+
         title = "Synthetic title written only for this guard"
-        digest = hashlib.sha256(title.encode("utf-8")).hexdigest()
+        digest = hmac.new(b"synthetic-salt", title.encode("utf-8"), hashlib.sha256).hexdigest()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "keys.json").write_text(
                 json.dumps(
                     {
-                        "files": {"rows.json": digest},
+                        "files": {"rows.json": hashlib.sha256(b"file-bytes").hexdigest()},
                         "rows": [{"title": title, "hmac_sha256": digest, "salt_env": "APR_PROPOSAL_REPRO_SALT"}],
                     }
                 ),
@@ -185,6 +187,46 @@ class ConfidentialityGuardTests(unittest.TestCase):
             )
             result = run_check(root)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_nested_note_id_yaml_tsv_and_fake_hmac_fail(self) -> None:
+        token = "AbCdEf" + "Gh12"
+        title = "Synthetic title written only for this guard"
+        unsalted = hashlib.sha256(title.encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "nested.json").write_text(
+                json.dumps({"note": {"id": token}}),
+                encoding="utf-8",
+            )
+            (root / "keyed.json").write_text(
+                json.dumps({token: {"decision": "accept"}}),
+                encoding="utf-8",
+            )
+            (root / "rows.yaml").write_text(
+                "note:\n  id: " + token + "\n",
+                encoding="utf-8",
+            )
+            (root / "rows.tsv").write_text(
+                "forum\tfinal_rating\n" + token + "\t8\n",
+                encoding="utf-8",
+            )
+            (root / "fake.json").write_text(
+                json.dumps({"title": title, "hmac_sha256": unsalted}),
+                encoding="utf-8",
+            )
+            result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        for fragment in (
+            "nested.json: openreview id field",
+            "keyed.json: openreview id key",
+            "rows.yaml: openreview id field",
+            "rows.tsv: openreview id field",
+            "rows.tsv: per-paper rating",
+            "fake.json: fake hmac",
+        ):
+            self.assertIn(fragment, result.stderr, fragment)
+        self.assertNotIn(token, result.stderr)
+        self.assertNotIn(title, result.stderr)
 
     def test_home_directory_path_fails(self) -> None:
         home = "/" + "Users" + "/" + "example" + "/notes"

@@ -19,6 +19,8 @@ from .data import (
     reported_result,
     write,
 )
+from .leak_audit import PROMPT as LEAK_AUDIT
+from .sanitized import require_model_input
 
 SECTIONS = ("problem", "approach", "difference", "intended_value", "validation_plan")
 RUBRIC = {
@@ -78,6 +80,7 @@ PROMPTS = {
     "label": LABEL,
     "audit": AUDIT,
     "forecast": FORECAST,
+    "leak_audit": LEAK_AUDIT,
 }
 MEASURED = re.compile(
     r"\b(experiments? (?:show|demonstrat|confirm)|performance (?:in|on) (?:the )?(?:experiment|benchmark)|empirical results?|achieved|outperform\w*|state.of.the.art performance)\b",
@@ -126,6 +129,14 @@ def valid_score(n):
 
 
 def validate(stage, data, source):
+    if stage == "leak_audit":
+        check(
+            isinstance(data, dict)
+            and set(data) == {"verdict"}
+            and data.get("verdict") in ("clean", "leak", "unsure"),
+            "leak audit must return clean, leak, or unsure",
+        )
+        return data
     if stage == "source_evidence":
         return source_evidence.validate(data, source)
     if stage in ("outcome_attribution", "outcome_context"):
@@ -278,6 +289,8 @@ def claude_argv():
 
 
 def invoke(stage, source, cache: Path, model, command, timeout, *, cached_only=False):
+    # A raw dict is not a model payload. Callers seal or sanitize first.
+    source = require_model_input(source)
     # Include prompt and caller identity so a changed input, rubric or backend cannot reuse a judgment.
     descriptor = {
         "stage": stage,

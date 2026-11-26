@@ -78,7 +78,7 @@ autopaperreview proposal-review prioritize contribution.yaml --profile workdir/c
   --work workdir/priority --output workdir/priority/candidates.json
 ```
 
-Historical literature comparisons use a local date-bounded abstract index. Development examples, where enabled, include only development records. Simulated reviewer seats share a model call. The model receives an anonymous packet with the inputs needed for its own stage. The route, prompt and asset checks detect changes to a frozen profile's dependencies. Provider-side model changes may still affect fresh judgments.
+Historical literature comparisons use a local date-bounded abstract index. Development examples, where enabled, include only development records. Simulated reviewer seats share a model call. That call receives one sealed proposal object built from an allowlist of source fields. A raw dict, a nested object, a score field, and a factual leak in a key or a value are rejected before serialization. The factual check, after NFKC, zero-width stripping, and casefold, covers emails, OpenReview and arXiv ids, explicit numeric or spelled scores, decision keywords, and award names. It is defense in depth. Paraphrase and a conclusion that is only clear across fields go to a leak-audit step that blocks on any verdict other than clean, including leak and unsure. Equal review timestamps with the same id break the tie on a SHA-256 of the canonical full record. A timestamp written `+120` is the integer 120. The packet contains only the inputs that stage needs. The route, prompt and asset checks detect changes to a frozen profile's dependencies. Provider-side model changes may still affect fresh judgments.
 
 ## Score a locked benchmark
 

@@ -12,8 +12,10 @@ stay in that cache.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import re
 import shutil
 import statistics
@@ -368,24 +370,47 @@ def parse_rating(value: Any, *, scale: RatingScale | None = None) -> int | None:
     return number
 
 
-def _review_order(note: dict[str, Any]) -> tuple[int, str]:
+def _finite_int(raw: Any) -> int | None:
+    """Parse an integer timestamp. Non-finite values do not raise."""
+    if isinstance(raw, bool):
+        return None
+    if type(raw) is int:
+        return raw
+    if type(raw) is float:
+        if not math.isfinite(raw):
+            return None
+        whole = math.trunc(raw)
+        if whole != raw:
+            return None
+        try:
+            return int(raw)
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(raw, str) and re.fullmatch(r"[+-]?\d+", raw.strip()):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _record_hash(note: dict[str, Any]) -> str:
+    """SHA-256 of the canonical record. Dict key order does not change it."""
+    payload = json.dumps(note, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _review_order(note: dict[str, Any]) -> tuple[int, str, str]:
     """Sort key for the review that supplies the official score.
 
-    A missing or non-numeric timestamp loses to any integer timestamp. Equal
-    timestamps break ties on the note id, so the chosen score does not depend
-    on input order.
+    A missing or non-numeric timestamp loses to any integer timestamp. A
+    leading ``+`` is a positive integer, so ``+120`` and ``120`` are the same
+    stamp. Equal id and timestamp break the tie on the SHA-256 of the full
+    record, so the chosen score does not depend on input order.
     """
-    raw = note.get("tmdate")
-    stamp = -1
-    if type(raw) is int:
-        stamp = raw
-    elif type(raw) is float and raw == raw and raw not in (float("inf"), float("-inf")):
-        whole = int(raw)
-        if whole == raw:
-            stamp = whole
-    elif isinstance(raw, str) and raw.strip().lstrip("-").isdigit():
-        stamp = int(raw.strip())
-    return (stamp, str(note.get("id") or ""))
+    parsed = _finite_int(note.get("tmdate"))
+    stamp = -1 if parsed is None else parsed
+    return (stamp, str(note.get("id") or ""), _record_hash(note))
 
 
 def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:

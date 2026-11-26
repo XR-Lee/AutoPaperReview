@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter
 from math import log
@@ -35,19 +36,42 @@ def norm_arxiv(value: str) -> str:
 
 
 def _whole_int(value: object) -> int | None:
+    """Integer value, or None. Non-finite numbers do not raise OverflowError."""
+    if isinstance(value, bool):
+        return None
     if type(value) is int:
         return value
-    if type(value) is float and value == value and value not in (float("inf"), float("-inf")):
-        whole = int(value)
+    if type(value) is float:
+        if not math.isfinite(value):
+            return None
+        try:
+            whole = int(value)
+        except (OverflowError, ValueError):
+            return None
         return whole if whole == value else None
     if isinstance(value, str):
         text = value.strip()
-        if text.lstrip("-").isdigit():
+        if re.fullmatch(r"[+-]?\d+", text):
             try:
                 return int(text)
             except ValueError:
                 return None
     return None
+
+
+def _positive_stamp(value: object) -> int | None:
+    number = _whole_int(value)
+    if number is None or number <= 0:
+        return None
+    return number
+
+
+def _split_name(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip().casefold()
+    text = re.sub(r"[\s_\-]+", "", text)
+    return text or None
 
 
 def _connect(db, *, readonly=False):
@@ -62,7 +86,8 @@ def build(corpus: Path, db: Path):
     with corpus.open(encoding="utf-8") as source, _connect(db) as conn:
         conn.execute(
             "CREATE VIRTUAL TABLE papers USING fts5("
-            "title, abstract, year UNINDEXED, revision UNINDEXED, forum UNINDEXED, arxiv UNINDEXED)"
+            "title, abstract, year UNINDEXED, revision UNINDEXED, forum UNINDEXED, "
+            "arxiv UNINDEXED, split UNINDEXED)"
         )
         for line in source:
             p = json.loads(line)
@@ -72,10 +97,19 @@ def build(corpus: Path, db: Path):
                 re.IGNORECASE,
             ):
                 continue
+            # Rows without a split or a year are not prior work. A non-finite
+            # or non-positive revision is dropped here and does not raise.
+            split = _split_name(p.get("split"))
+            year = _whole_int(p.get("year"))
+            revision = _positive_stamp(p.get("revision_ms"))
+            if split is None or split in {"test", "holdout"} or year is None or year < 1:
+                continue
+            if year >= _FUTURE_YEAR or revision is None:
+                continue
             arxiv = norm_arxiv(str(p.get("arxiv") or p.get("arxiv_id") or ""))
             conn.execute(
-                "INSERT INTO papers VALUES (?,?,?,?,?,?)",
-                (p["title"], p["abstract"], p["year"], p["revision_ms"], p["forum"], arxiv),
+                "INSERT INTO papers VALUES (?,?,?,?,?,?,?)",
+                (p["title"], p["abstract"], year, revision, p.get("forum"), arxiv, split),
             )
         conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
         conn.commit()
@@ -96,6 +130,7 @@ def _blocked_hit(
     rev,
     forum,
     arxiv,
+    split,
     *,
     exclude_title,
     exclude_forum,
@@ -114,15 +149,21 @@ def _blocked_hit(
         or target_arxiv in f"{title} {abstract} {forum}".lower()
     ):
         return True
+    name = _split_name(split)
+    if name is None or name in {"test", "holdout"}:
+        return True
     year_i = _whole_int(year)
-    rev_i = _whole_int(rev)
+    rev_i = _positive_stamp(rev)
     if year_i is None or year_i < 1 or rev_i is None:
         return True
     if target_year is None and year_i >= _FUTURE_YEAR:
         return True
     if target_year is not None and year_i >= int(target_year):
         return True
-    if cutoff_ms is not None and rev_i >= int(cutoff_ms):
+    cutoff = None if cutoff_ms is None else _positive_stamp(cutoff_ms)
+    if cutoff_ms is not None and cutoff is None:
+        return True
+    if cutoff is not None and rev_i >= cutoff:
         return True
     return False
 
@@ -139,6 +180,11 @@ def retrieve(
     target_year=None,
     cutoff_ms=None,
 ):
+    from .sanitized import sanitize_proposal
+
+    proposal = sanitize_proposal(proposal)
+    if cutoff_ms is not None and _positive_stamp(cutoff_ms) is None:
+        raise ValueError("cutoff must be a finite positive timestamp")
     content = " ".join(x for x in proposal.values() if isinstance(x, str))
     counts = Counter(words(content))
     seen = set(words(exclude_title))
@@ -172,16 +218,21 @@ def retrieve(
                     f"CAST(year AS INTEGER) > 0 AND CAST(year AS INTEGER) < {_FUTURE_YEAR}"
                 )
         if "revision" in columns:
-            filters.append(
-                "(typeof(revision) = 'integer' OR "
-                "(typeof(revision) = 'text' AND revision GLOB '[0-9]*'))"
-            )
+            filters.append("CAST(revision AS INTEGER) > 0")
             if cutoff_ms is not None:
                 filters.append("CAST(revision AS INTEGER) < ?")
-                params.append(int(cutoff_ms))
+                params.append(_positive_stamp(cutoff_ms))
+        if "split" in columns:
+            filters.append(
+                "lower(trim(split)) != '' AND lower(trim(split)) NOT IN ('test', 'holdout')"
+            )
+        else:
+            return []
         selected = "title, abstract, year, revision, forum"
         if has_arxiv:
             selected += ", arxiv"
+        if "split" in columns:
+            selected += ", split"
         rows = conn.execute(
             f"SELECT {selected} FROM papers WHERE {' AND '.join(filters)} "
             "ORDER BY bm25(papers, 3, 1) LIMIT 64",
@@ -189,7 +240,12 @@ def retrieve(
         )
         for row in rows:
             title, abstract, year, rev, forum = row[:5]
-            arxiv = row[5] if has_arxiv else ""
+            cursor = 5
+            arxiv = ""
+            if has_arxiv:
+                arxiv = row[cursor]
+                cursor += 1
+            split = row[cursor] if "split" in columns else None
             if _blocked_hit(
                 title,
                 abstract,
@@ -197,6 +253,7 @@ def retrieve(
                 rev,
                 forum,
                 arxiv,
+                split,
                 exclude_title=exclude_title,
                 exclude_forum=exclude_forum,
                 exclude_arxiv=exclude_arxiv,
@@ -215,7 +272,7 @@ def retrieve(
                 continue
             # Venue outcome, reviewer comments and paper identity of the target are not fields in the critic packet.
             year_i = _whole_int(year)
-            rev_i = _whole_int(rev)
+            rev_i = _positive_stamp(rev)
             if year_i is None or rev_i is None:
                 continue
             picked.append(
@@ -225,6 +282,7 @@ def retrieve(
                     "year": year_i,
                     "forum": forum,
                     "revision_ms": rev_i,
+                    "split": _split_name(split),
                 }
             )
             if len(picked) == limit:

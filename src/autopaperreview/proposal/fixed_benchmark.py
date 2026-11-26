@@ -10,7 +10,8 @@ from pathlib import Path
 from ..public_calibration import assert_local_only
 from .data import digest, read, require_official_mean, scale_for_reference, write
 from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
-from .priority import add_screen_provider, load_profile, rank, screen_rank_inputs, text_packet
+from .leak_audit import model_leak_judge
+from .priority import add_screen_provider, claude_argv, load_profile, rank, screen_rank_inputs, text_packet
 from .stages import invoke
 
 
@@ -50,6 +51,8 @@ def _locked(case, row, dest, fields):
         raise ValueError("year must be a positive integer venue year")
     if dest == "cutoff_ms" and type(locked) is not int:
         raise ValueError("cutoff_ms must be an integer millisecond timestamp")
+    if dest == "arxiv" and not isinstance(locked, str):
+        raise ValueError("arxiv must be a string")
     return locked
 
 
@@ -218,27 +221,16 @@ def blind_inputs(manifest, proposals):
             if "short_proposal" in row
             else None,
         }
-        # The cohort lock wins. A row may repeat the locked year or cutoff,
-        # but it cannot replace them or introduce one the lock did not set.
+        # The cohort lock wins. A row may repeat the locked year, cutoff, or
+        # arXiv id, but it cannot replace them or introduce one the lock omitted.
         for dest, fields in (
             ("year", ("year",)),
             ("cutoff_ms", ("cutoff_ms", "submission_ms")),
+            ("arxiv", ("arxiv", "arxiv_id")),
         ):
             metadata[dest] = _locked(case, row, dest, fields)
             if metadata[dest] is None:
                 del metadata[dest]
-        for source, field, dest in (
-            (row, "arxiv", "arxiv"),
-            (row, "arxiv_id", "arxiv"),
-            (case, "arxiv", "arxiv"),
-            (case, "arxiv_id", "arxiv"),
-        ):
-            if dest in metadata or field not in source or source[field] in (None, ""):
-                continue
-            value = source[field]
-            if not isinstance(value, str):
-                raise ValueError("arxiv must be a string")
-            metadata[dest] = value
         inputs.append((fid, text_packet(row["proposal"]), metadata))
     return inputs
 
@@ -277,7 +269,21 @@ def predict_dispatch(args):
                 "legacy": legacy,
                 "screen_receipt": evidence["proposal"],
             }
-        judged = rank(proposal, root, profile, folder, call=call, **metadata)
+        judged = rank(
+            proposal,
+            root,
+            profile,
+            folder,
+            call=call,
+            leak_judge=model_leak_judge(
+                root / "cache",
+                "claude-opus-5-5",
+                claude_argv(),
+                240,
+                call=call,
+            ),
+            **metadata,
+        )
         return {"forum": fid, "overall": judged["overall"], **audit}
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:

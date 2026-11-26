@@ -13,6 +13,8 @@ from . import evaluation
 from .data import apd_cases, prepare, read, reported_result, snapshot_cases, write
 from .fetch import SNAPSHOTS, download, live_cases
 from .runner import run_batch, stage_result
+from .leak_audit import apply_leak_audit, model_leak_judge
+from .sanitized import sanitize_proposal, seal
 from .stages import SECTIONS, calibrated, check, claude_argv, invoke, scored
 
 
@@ -207,6 +209,8 @@ def dispatch(args):
             "ideas": ["compress", "review"],
             "references": ["label", "audit"],
         }.get(args.stage, [args.stage])
+        command = command_argv(args.command) if args.command else claude_argv()
+        judge = model_leak_judge(root / "cache", args.model, command, args.timeout)
         for stage in stages:
             lockdir = root / "locks" / stage
             lockdir.mkdir(parents=True, exist_ok=True)
@@ -215,12 +219,11 @@ def dispatch(args):
                     root,
                     stage=stage,
                     model=args.model,
-                    command=command_argv(args.command)
-                    if args.command
-                    else claude_argv(),
+                    command=command,
                     jobs=args.jobs,
                     timeout=args.timeout,
                     split=args.split,
+                    leak_judge=judge,
                 )
         result = {"completed": stages}
     elif args.action == "fit":
@@ -268,27 +271,30 @@ def dispatch(args):
                 isinstance(sections, dict) and set(sections) == set(SECTIONS),
                 "expected five proposal sections",
             )
-            packet = {
-                k: v.get("text") if isinstance(v, dict) else v
-                for k, v in sections.items()
-            }
-            check(
-                all(v is None or isinstance(v, str) for v in packet.values()),
-                "invalid proposal text",
+            packet = sanitize_proposal(
+                {
+                    k: v.get("text") if isinstance(v, dict) and set(v) <= {"text"} else v
+                    for k, v in sections.items()
+                }
             )
         else:
-            packet = {"proposal": args.proposal.read_text(encoding="utf-8").strip()}
+            packet = sanitize_proposal(args.proposal.read_text(encoding="utf-8").strip())
         check(any(packet.values()), "empty proposal")
         check(
             not any(reported_result(v) for v in packet.values() if v),
             "remove reported outcomes before scoring the proposal",
         )
+        command = command_argv(args.command) if args.command else claude_argv()
+        apply_leak_audit(
+            packet,
+            model_leak_judge(root / "cache", args.model, command, args.timeout),
+        )
         path = invoke(
             args.reviewer,
-            packet,
+            seal(packet),
             root / "cache",
             args.model,
-            command_argv(args.command) if args.command else claude_argv(),
+            command,
             args.timeout,
         )
         record = read(path)
