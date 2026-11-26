@@ -18,6 +18,7 @@ from .leak_audit import (
     apply_leak_audit,
     decode_json_object,
     parse_reply,
+    same_model_value,
     strict_model_value,
     payload_sha256,
     require_leak_judge,
@@ -366,7 +367,7 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
         )
         parsed = strict_model_value(reply)
         validated = validate(stage, parsed, source, spans=spans)
-        check(old.get("output") == validated, "cached output does not match the strict reply")
+        check(same_model_value(old.get("output"), validated), "cached output does not match the strict reply")
         return path
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")

@@ -4,14 +4,15 @@ import json
 import re
 from pathlib import Path
 
-from ..command_transport import reply_text, run_command
+from ..command_transport import CommandTransportError, reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
 from .data import digest, read, reported_result, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
 from .leak_audit import (
-    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, strict_model_value,
+    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, same_model_value,
+    strict_model_value,
 )
 from .outcome_screen import units
 from .sanitized import require_model_input, seal
@@ -45,12 +46,13 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
         if isinstance(reply, str) and payload_sha256(reply) == entry.get("reply_sha256"):
             parsed = strict_model_value(reply)
             protocol.validate(stage, parsed, data)
-            if entry.get("output") != parsed:
+            if not same_model_value(entry.get("output"), parsed):
                 raise ValueError("cached output does not match the strict reply")
             return key, parsed
         if entry.get("disposition") in {"refusal", "invalid", "scope"}:
-            protocol.validate(stage, entry["output"], data)
-            return key, entry["output"]
+            if not same_model_value(entry.get("output"), abstention):
+                raise ValueError("cached abstention does not match the stage sentinel")
+            return key, abstention
         if cached_only:
             raise ValueError(f"missing cached {stage} judgment for request {key}")
     if cached_only:
@@ -66,12 +68,22 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
                 raise
             output, disposition = abstention, "refusal"
             break
-        body, _ = reply_text(raw)
-        if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", body, re.I):
-            output, disposition = abstention, "refusal"
-            break
         try:
             output = strict_model_value(raw)
+        except CommandTransportError:
+            raise
+        except (ValueError, TypeError, KeyError):
+            body, _ = reply_text(raw)
+            if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", body, re.I):
+                output, disposition = abstention, "refusal"
+                break
+            if attempt == 2:
+                output, disposition = abstention, "invalid"
+                break
+            feedback = "\nReturn the requested JSON and valid identifiers."
+            message = apply_leak_audit(data, leak_judge, feedback=feedback)
+            continue
+        try:
             protocol.validate(stage, output, data)
         except (ValueError, TypeError, KeyError):
             if attempt == 2:

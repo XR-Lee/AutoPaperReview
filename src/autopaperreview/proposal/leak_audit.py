@@ -140,10 +140,14 @@ def decode_model_json(text):
 
 
 def _reject_bad_unicode(value) -> None:
-    """Lone surrogates and replacement characters are not model text."""
+    """Lone surrogates, replacement characters, and non-finite numbers are not model text."""
     if isinstance(value, str):
         if any(0xD800 <= ord(char) <= 0xDFFF or ord(char) == 0xFFFD for char in value):
             raise ValueError("invalid unicode in model JSON")
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("non-finite number in model JSON")
         return
     if isinstance(value, dict):
         for key, item in value.items():
@@ -230,6 +234,21 @@ def _reject_unsuccessful_envelope(value: dict) -> None:
         fail("command reported a safety stop")
     if value.get("api_error_status") is not None:
         fail("command reported an API error")
+    if "errors" in value and value.get("errors") not in (None, [], {}):
+        fail("command reported errors")
+    if "subagent_stats" in value and value.get("subagent_stats") != _EMPTY_SUBAGENT_STATS:
+        fail("command reported a failed subagent")
+    if "usage" in value and value.get("usage") is not None and not _usage(value["usage"]):
+        fail("command reported invalid usage")
+    for field in ("modelUsage", "model_usage_since_last_result"):
+        if field not in value or value.get(field) is None:
+            continue
+        models = value.get(field)
+        if not isinstance(models, dict) or not all(
+            _identifier(_MODEL_ID, name) and _usage(item)
+            for name, item in models.items()
+        ):
+            fail("command reported invalid usage")
 
 
 def strict_model_value(stdout: str):
@@ -251,6 +270,50 @@ def strict_model_value(stdout: str):
     if not isinstance(value, (dict, list)):
         raise ValueError("expected a JSON object or array")
     return value
+
+
+def canonical_model_json(value) -> str:
+    """Type-strict JSON. ``1``, ``1.0`` and ``true`` are different values."""
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+    )
+
+
+def same_model_value(left, right) -> bool:
+    """True when two decoded values are the same JSON value, including types."""
+    try:
+        return canonical_model_json(left) == canonical_model_json(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def require_business_receipt(entry: Mapping, stage: str) -> None:
+    """Reject a legacy receipt whose command metadata is not a current success."""
+    message = f"stale {stage} result; rerun this stage"
+    if not isinstance(entry, Mapping):
+        raise ValueError(message)
+    request = entry.get("request")
+    if not isinstance(request, Mapping):
+        raise ValueError(message)
+    if request.get("reply_protocol") != BUSINESS_REPLY_PROTOCOL:
+        raise ValueError(message)
+    model = request.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError(message)
+    command = request.get("command_sha256")
+    if not isinstance(command, str) or re.fullmatch(r"[0-9a-f]{64}", command) is None:
+        raise ValueError(message)
+    attempts = entry.get("attempts")
+    if type(attempts) is not int or attempts < 1:
+        raise ValueError(message)
+    latency = entry.get("latency_sec")
+    if type(latency) not in (int, float) or not math.isfinite(latency) or latency < 0:
+        raise ValueError(message)
+    models = entry.get("resolved_models")
+    if models is not None and (
+        not isinstance(models, list) or any(not isinstance(item, str) or not item for item in models)
+    ):
+        raise ValueError(message)
 
 
 def _metric(value):

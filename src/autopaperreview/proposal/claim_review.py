@@ -17,7 +17,8 @@ from .clarification_protocol import outside_scope
 from .data import digest, read, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
 from .leak_audit import (
-    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, strict_model_value,
+    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, same_model_value,
+    strict_model_value,
 )
 from .material import ORDER, material
 from .outcome_screen import units
@@ -88,7 +89,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         if isinstance(reply, str) and payload_sha256(reply) == result.get("reply_sha256"):
             parsed = strict_model_value(reply)
             validate(stage, parsed, body)
-            if result.get("output") != parsed:
+            if not same_model_value(result.get("output"), parsed):
                 raise ValueError("cached output does not match the strict reply")
             return key, result
         if offline:

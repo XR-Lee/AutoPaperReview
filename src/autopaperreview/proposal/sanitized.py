@@ -332,9 +332,10 @@ def _plain_text(text: str) -> str:
 
 
 def _without_markup(text: str) -> str:
-    text = _HTML_TAG.sub("", _HTML_COMMENT.sub("", text))
-    text = _LATEX_SPACE.sub("", text)
-    text = _LATEX_COMMAND.sub("", _LATEX_FORMAT_ARGUMENT.sub("", text))
+    # A space, not a deletion: adjacent table cells must not glue into one token.
+    text = _HTML_TAG.sub(" ", _HTML_COMMENT.sub(" ", text))
+    text = _LATEX_SPACE.sub(" ", text)
+    text = _LATEX_COMMAND.sub(" ", _LATEX_FORMAT_ARGUMENT.sub(" ", text))
     text = _MARKDOWN_LINK.sub(r"\1", text)
     return _MARKUP_DELIMITER.sub("", text)
 
@@ -384,11 +385,6 @@ _IDENTITY_MODIFIERS = frozenset({
     "postal", "mailing", "phone", "telephone", "affiliation", "institution", "orcid",
     "home", "office", "corresponding",
 })
-_REVIEW_SCORE_MODIFIERS = frozenset({
-    "overall", "total", "final", "reviewer", "reviewers", "meta", "official", "human",
-    "average", "mean", "aggregate", "aggregated", "peer", "initial", "rating", "ratings",
-    "grade", "grades",
-})
 _SCIENTIFIC_KEY_HEADS = frozenset({
     "angle", "angles", "space", "spaces", "metric", "metrics", "value", "values",
     "map", "maps", "index", "measure", "measurement", "measurements",
@@ -399,18 +395,27 @@ _IDENTITY_LEMMAS = frozenset({
     "email", "emails", "phone", "telephone", "mobile", "orcid", "affiliation",
     "institution", "university", "department", "byline", "bylines",
 })
-_REVIEW_ONLY = frozenset({
-    "overall", "total", "final", "reviewer", "reviewers", "meta", "official", "human",
-    "peer", "initial", "rating", "ratings", "grade", "grades",
-})
-_SOFT_SCORE = frozenset({"average", "mean", "aggregate", "aggregated"})
 _SCIENTIFIC_MEASURES = frozenset({
     "angle", "angles", "space", "spaces", "metric", "metrics", "value", "values",
     "map", "maps", "index", "measure", "measurement", "measurements", "bleu", "f1",
     "loss", "similarity", "distance", "jaccard", "cosine", "accuracy", "precision",
     "recall", "auc", "latency", "perplexity", "threshold", "surface", "surfaces",
-    "optical", "water", "memory", "virtual",
+    "optical", "water", "memory", "virtual", "reconstruction", "calibration",
+    "calibrated", "indicator", "residual", "estimator", "baseline",
 })
+# A score key is a review key unless a scientific measure is present and no
+# hard review word is. ``overall_score`` stays blocked; ``similarity_score`` does not.
+_HARD_REVIEW_SCORE = frozenset({"overall", "reviewer", "reviewers", "meta", "official"})
+_FORMAT_COMMANDS = frozenset({
+    "mathrm", "text", "textbf", "textit", "emph", "operatorname", "mathbf", "textrm",
+})
+_KEY_BLOCK_TOKENS = frozenset({
+    "venue", "venues", "disposition", "dispositions", "desk",
+    "autor", "autores", "afiliacion", "institucion", "universidad",
+    "correo", "telefono", "dictamen", "puntuacion", "calificacion", "puntaje",
+    "rechazo", "aceptacion",
+})
+_KEY_CJK = re.compile("作者|署名|单位|机构|邮箱|电话|大学|决定|录用|拒稿|总分|总评|审稿|评审")
 
 
 def _key_tokens(key: object) -> list[str]:
@@ -422,6 +427,7 @@ def _key_tokens(key: object) -> list[str]:
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
     spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", spaced)
     tokens = [token for token in re.split(r"[^0-9A-Za-z]+", spaced.casefold()) if token]
+    tokens = [token for token in tokens if token not in _FORMAT_COMMANDS]
     if len(tokens) > 1 and all(len(token) == 1 for token in tokens):
         tokens = ["".join(tokens)]
     return tokens
@@ -459,13 +465,10 @@ def _structured_key(tokens: list[str]) -> bool:
     if ("reviewer" in tokens or "reviewers" in tokens) and not (set(tokens) & _SCIENTIFIC_MEASURES):
         return True
     if "score" in tokens or "scores" in tokens:
-        reviewish = set(tokens) & _REVIEW_ONLY
+        # Unknown score keys fail closed. A scientific measure keeps the key,
+        # unless a hard review word (overall, reviewer, meta, official) is also present.
         scientific = set(tokens) & (_SCIENTIFIC_MEASURES | _SCIENTIFIC_KEY_HEADS)
-        if (reviewish or (set(tokens) & _SOFT_SCORE) or "last" in tokens) and not scientific:
-            return True
-        if head in {"score", "scores"} and not modifiers and not scientific:
-            return True
-        if scientific or head in {"score", "scores"} or head in _SCIENTIFIC_KEY_HEADS:
+        if scientific and not (set(tokens) & _HARD_REVIEW_SCORE):
             return False
         return True
     if head in {"contact", "contacts"}:
@@ -483,7 +486,12 @@ def _structured_key(tokens: list[str]) -> bool:
 
 def score_field(key: object) -> bool:
     """Reject a key that names a decision, score, or identity, in any nesting."""
+    raw = unicodedata.normalize("NFKC", str(key))
+    if _KEY_CJK.search(raw):
+        return True
     tokens = _key_tokens(key)
+    if set(tokens) & _KEY_BLOCK_TOKENS:
+        return True
     # Protocol context, not an identity field. A reviewer token beside a score
     # or contact token is still rejected below.
     if tokens == ["reviewer", "excerpts"]:
@@ -687,10 +695,29 @@ def _planned_before(tokens: list[str], index: int) -> bool:
     return any(word in _PLAN_CUES for word in tokens[max(0, index - 12):index])
 
 
+_RANGE_METRICS = frozenset({
+    "loss", "accuracy", "error", "threshold", "similarity", "distance", "bleu", "f1",
+    "metric", "metrics", "measure", "measurement", "latency", "perplexity", "precision",
+    "recall", "auc", "reconstruction", "calibration", "calibrated",
+})
+_REVIEW_RANGE_ANCHORS = _SCORE_LABELS | _SCORE_QUALIFIERS | {"overall", "total"}
+
+
 def _score_range(tokens: list[str]) -> bool:
+    planned_earlier = False
     for index, token in enumerate(tokens):
+        if token in _PLAN_CUES or token.startswith("计划"):
+            planned_earlier = True
         window = tokens[max(0, index - 6):index]
-        if _planned_before(tokens, index):
+        span = tokens[max(0, index - 8):index + 6]
+        # A review label keeps the short plan window. A scientific metric range
+        # stays planned when the plan cue sits anywhere earlier in the text.
+        scientific_plan = (
+            planned_earlier
+            and any(word in _RANGE_METRICS for word in span)
+            and not any(word in _REVIEW_RANGE_ANCHORS for word in window)
+        )
+        if _planned_before(tokens, index) or scientific_plan:
             continue
         if token in {"range", "between", "entre"} and _range_anchor(window):
             if any(_is_number(word) for word in tokens[index:index + 8]):
@@ -787,6 +814,130 @@ def _preprint_authorship(text: str) -> bool:
     return False
 
 
+_CELL_LABELS = (
+    _STATUS_HEADS | _SCORE_LABELS | _IDENTITY_LABEL_TOKENS | _SCORE_QUALIFIERS
+    | {"score", "scores", "author", "authors", "autor", "autores", "afiliacion", "correo"}
+)
+_HTML_CELL = re.compile(r"(?is)<t[hd][^>]*>(.*?)</t[hd]>")
+_BRACKETED_REVIEW = re.compile(
+    r"(?i)(?P<label>overall|total|final|reviewer|meta|official|rating|ratings|grade|grades|"
+    r"score|scores|puntuacion|calificacion|puntaje|nota|总分|总评|评分)"
+    r"[^.\n]{0,48}"
+    r"[\[(（【]\s*(?P<a>\d+(?:\.\d+)?)"
+    r"(?:\s*(?:[-–—~,，]|to|a|y|到|至)\s*(?P<b>\d+(?:\.\d+)?))?"
+    r"\s*[\]）】\]]"
+)
+_METRIC_NEAR = re.compile(
+    r"(?i)(?:loss|accuracy|error|threshold|similarity|distance|bleu|f1|metric|measure|"
+    r"latency|perplexity|precision|recall|auc|reconstruction|calibration)"
+)
+
+
+def _clean_cell(cell: str) -> str:
+    return re.sub(r"^[\s\"'`]+|[\s\"'`.,;:：]+$", "", cell.casefold())
+
+
+def _cell_label(cell: str) -> str:
+    parts = [part for part in re.split(r"[\s:=：/_-]+", _clean_cell(cell)) if part]
+    for part in reversed(parts):
+        if part in _CELL_LABELS:
+            return part
+    return ""
+
+
+def _review_cell_value(cell: str) -> bool:
+    folded = _clean_cell(cell)
+    return bool(folded) and (
+        _is_number(folded)
+        or folded in _LABEL_VALUES
+        or folded in _DECISION_WORDS
+        or folded in _STATUS_ABBREV
+        or folded in _STATUS_DEGREES
+    )
+
+
+def _identity_cell_value(cell: str) -> bool:
+    folded = _clean_cell(cell)
+    return len(folded) >= 2 and folded not in _CONTENT_SKIP
+
+
+def _row_has_fact(row: list[str]) -> bool:
+    for index, cell in enumerate(row):
+        label = _cell_label(cell)
+        if not label:
+            continue
+        neighbors = row[index + 1:index + 2]
+        identity = label in _IDENTITY_LABEL_TOKENS or label in {
+            "author", "authors", "autor", "autores", "afiliacion", "correo",
+        }
+        for other in neighbors:
+            if identity and _identity_cell_value(other):
+                return True
+            if not identity and _review_cell_value(other):
+                return True
+    return False
+
+
+def _table_rows(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    html_cells = [_without_markup(cell) for cell in _HTML_CELL.findall(text)]
+    if len(html_cells) >= 2:
+        rows.append(html_cells)
+    for line in text.splitlines():
+        if not any(mark in line for mark in ("|", "\t", "&")):
+            continue
+        cells = [cell.strip() for cell in re.split(r"[|\t&]", line)]
+        cells = [cell for cell in cells if cell and not re.fullmatch(r"[:\-\s]+", cell)]
+        if len(cells) >= 2:
+            rows.append(cells)
+    return rows
+
+
+def _tabular_fact(text: str) -> bool:
+    """A label cell beside a decision, score, status, or identity value."""
+    rows = _table_rows(text)
+    if any(_row_has_fact(row) for row in rows):
+        return True
+    for header, body in zip(rows, rows[1:]):
+        for index, cell in enumerate(header):
+            if index >= len(body) or not _cell_label(cell):
+                continue
+            label = _cell_label(cell)
+            identity = label in _IDENTITY_LABEL_TOKENS or label in {
+                "author", "authors", "autor", "autores", "afiliacion", "correo",
+            }
+            other = body[index]
+            if identity and _identity_cell_value(other):
+                return True
+            if not identity and _review_cell_value(other):
+                return True
+    return False
+
+
+def _bracketed_review(text: str) -> bool:
+    """A review label next to a bracketed number or range.
+
+    ``similarity score (0.2)`` and a planned metric range stay scientific.
+    ``overall rating [6, 8]`` and ``score (6-8)`` do not.
+    """
+    for match in _BRACKETED_REVIEW.finditer(text):
+        window = text[max(0, match.start() - 48):match.end() + 8]
+        label = match.group("label").casefold()
+        ranged = match.group("b") is not None
+        reviewish = label not in {"score", "scores", "评分"}
+        metric = _METRIC_NEAR.search(window) is not None
+        earlier = _construct_tokens(text[:match.start()])
+        planned = any(word in _PLAN_CUES or word.startswith("计划") for word in earlier) or "计划" in text[:match.start()]
+        if metric and planned and not reviewish:
+            continue
+        if not reviewish and not ranged:
+            continue
+        if metric and not reviewish:
+            continue
+        return True
+    return False
+
+
 def _explicit_construct(text: str) -> bool:
     """Submission status, total score, score range, or inline preprint authorship.
 
@@ -806,6 +957,8 @@ def _explicit_construct(text: str) -> bool:
         or _score_range(tokens)
         or _preprint_authorship(text)
         or _labeled_fact(tokens)
+        or _tabular_fact(text)
+        or _bracketed_review(text)
         or _REVIEW_STATUS.search(text) is not None
         or _CJK_DECISION.search(text) is not None
         or _CJK_SCORE.search(text) is not None

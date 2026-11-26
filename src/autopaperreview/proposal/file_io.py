@@ -258,20 +258,7 @@ class _Output:
             if file_identity(os.fstat(held)) != original:
                 raise ValueError(_ALIAS)
             _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
-            destination = self._destination_identity()
-            swapped = file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
-            if (
-                destination == created
-                and swapped == file_identity(os.fstat(held))
-                and swapped not in self.inputs.values()
-            ):
-                os.unlink(name, dir_fd=self.directory)
-                return
-            # Do not exchange again. A second exchange can swap away a writer
-            # who published after this check. Restore with one rename only
-            # while the destination is still the file this writer created.
-            self._restore_displaced(name, created)
-            raise ValueError(_ALIAS)
+            self._settle_exchange(name, created, held)
         except BaseException:
             try:
                 info = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
@@ -284,19 +271,53 @@ class _Output:
             if held is not None:
                 os.close(held)
 
-    def _restore_displaced(self, name: str, created: tuple[int, int]) -> None:
-        """Put a displaced winner back without a second exchange."""
+    def _name_identity(self, name: str):
         try:
-            held = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
+            return file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
         except FileNotFoundError:
+            return None
+
+    def _exchange_back(self, name: str) -> None:
+        _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+
+    def _drop_temp(self, name: str, created: tuple[int, int]) -> None:
+        """Remove this writer's leftover, never the live report or an input."""
+        ident = self._name_identity(name)
+        if ident is None:
             return
-        held_id = file_identity(held)
-        destination = self._destination_identity()
-        if destination == created and held_id != created and held_id not in self.inputs.values():
-            os.rename(name, self.path.name, src_dir_fd=self.directory, dst_dir_fd=self.directory)
-            return
-        if held_id != destination and held_id not in self.inputs.values():
+        if ident == created or (
+            ident != self._destination_identity() and ident not in self.inputs.values()
+        ):
             remove_temporary(self.directory, name)
+
+    def _settle_exchange(self, name: str, created: tuple[int, int], held: int) -> None:
+        """Keep a newer report, and put a displaced input back on this name.
+
+        ``os.rename`` replaces the destination inode, so a writer who lands
+        inside that call cannot be put back. Exchange back instead. If that
+        exchange itself swaps in a newer writer, one more exchange restores
+        the newest file. An input moved onto this name is exchanged back and
+        only this writer's temporary file is removed.
+        """
+        destination = self._destination_identity()
+        swapped = self._name_identity(name)
+        original = file_identity(os.fstat(held))
+        if (
+            destination == created
+            and swapped == original
+            and swapped not in self.inputs.values()
+        ):
+            os.unlink(name, dir_fd=self.directory)
+            return
+        if destination == created and swapped is not None:
+            self._exchange_back(name)
+            if self._name_identity(name) == created:
+                remove_temporary(self.directory, name)
+                raise ValueError(_ALIAS)
+            # A publisher landed inside the rollback and was swapped here.
+            self._exchange_back(name)
+        self._drop_temp(name, created)
+        raise ValueError(_ALIAS)
 
 
 def _write_complete(directory: int, name: str, payload: bytes) -> tuple[int, int]:

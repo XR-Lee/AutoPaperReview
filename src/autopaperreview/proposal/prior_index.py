@@ -169,6 +169,77 @@ def development_row(row) -> bool:
     return bool(top) and all(name in _DEVELOPMENT_SPLITS for name in names)
 
 
+def _proposal_texts(value) -> list[str] | None:
+    """String fields that can be compared. None when one field has no tokens."""
+    if isinstance(value, str):
+        texts = [value]
+    elif isinstance(value, Mapping):
+        texts = [item for item in value.values() if isinstance(item, str)]
+    else:
+        return []
+    kept = []
+    for text in texts:
+        if not str(text).strip():
+            continue
+        if _identity(text) is None:
+            return None
+        kept.append(text)
+    return kept
+
+
+def _token_set(texts: list[str]) -> frozenset[str]:
+    found: set[str] = set()
+    for text in texts:
+        found.update(_content_tokens(text))
+    return frozenset(found)
+
+
+def _shingle_set(texts: list[str], size: int = 3) -> frozenset[tuple[str, ...]]:
+    """Within-field token shingles. Splitting a field drops only the cut point."""
+    found: set[tuple[str, ...]] = set()
+    for text in texts:
+        tokens = _content_tokens(text)
+        if len(tokens) < size:
+            continue
+        found.update(tuple(tokens[index:index + size]) for index in range(0, len(tokens) - size + 1))
+    return frozenset(found)
+
+
+def _covers(found: frozenset, wanted: frozenset) -> bool:
+    """True when both texts are the same content, ignoring order and repeats.
+
+    A longer document that merely contains the target is not a copy. Both
+    sides have to cover the other, so a re-segmented duplicate matches and a
+    shared phrase does not.
+    """
+    if not wanted or not found:
+        return False
+    if len(wanted) < 4 or len(found) < 4:
+        return found == wanted
+    shared = len(found & wanted)
+    return shared / len(wanted) >= 0.9 and shared / len(found) >= 0.9
+
+
+def _same_content(proposal, exclude_text: str) -> bool:
+    """True when the row repeats the target after a re-segmentation.
+
+    Segment-set equality misses a paragraph that was duplicated, merged,
+    split, or reordered. Token containment and within-field shingles do not.
+    A short peer that merely shares a few words does not cover the target.
+    """
+    if not exclude_text or exclude_text == _UNCOMPARABLE:
+        return False
+    fields = _proposal_texts(proposal)
+    if not fields:
+        return False
+    target = [line for line in exclude_text.split("\n") if line.strip()]
+    if not target:
+        return False
+    return _covers(_token_set(fields), _token_set(target)) or _covers(
+        _shingle_set(fields), _shingle_set(target)
+    )
+
+
 def proposal_body(value) -> str:
     """Normalized segments of a proposal, ignoring key names and key order.
 
@@ -324,7 +395,10 @@ def eligible_history(
         return False
     body = proposal_body(row.get("proposal"))
     if exclude_text and (
-        exclude_text == _UNCOMPARABLE or body == _UNCOMPARABLE or body == exclude_text
+        exclude_text == _UNCOMPARABLE
+        or body == _UNCOMPARABLE
+        or body == exclude_text
+        or _same_content(row.get("proposal"), exclude_text)
     ):
         return False
     years: list = []
@@ -578,16 +652,13 @@ def retrieve(
         return []
     with closing(_connect(db, readonly=True)) as conn:
         columns = set(_columns(conn))
+        # An older or unknown schema is not a safe filter. Missing columns,
+        # alias columns, and a version other than this build all fail closed.
+        if columns != _CURRENT_INDEX_COLUMNS or _index_version(conn) != INDEX_CLOCK_VERSION:
+            raise ValueError("prior index is stale; rebuild it before retrieval")
         split_fields = tuple(k for k in _SPLIT_FIELDS if k in columns)
         revision_fields = tuple(k for k in _REVISION_FIELDS if k in columns)
         required = ("title", "abstract", "year", "forum")
-        if not split_fields or not revision_fields or not set(required).issubset(columns):
-            return []
-        if exclude_key and "key" not in columns:
-            return []
-        # Same columns cannot show that an older build dropped nested clocks.
-        if _CURRENT_INDEX_COLUMNS.issubset(columns) and _index_version(conn) != INDEX_CLOCK_VERSION:
-            raise ValueError("prior index is stale; rebuild it before retrieval")
         arxiv_fields = tuple(k for k in _ARXIV_FIELDS if k in columns)
         timeline_fields = tuple(k for k in _HISTORY_TIME_FIELDS if k in columns)
         aliases = (*timeline_fields, *split_fields, *arxiv_fields)

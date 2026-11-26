@@ -5,7 +5,8 @@ from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
 from .leak_audit import (
-    _contains_reported_result, payload_sha256, require_leak_judge, serialize_payload, strict_model_value,
+    _contains_reported_result, payload_sha256, require_business_receipt, require_leak_judge,
+    same_model_value, serialize_payload, strict_model_value,
 )
 from .sanitized import seal
 from .stages import PROMPTS, audit_packet, audit_spans, invoke, proposal_text, validate
@@ -102,11 +103,12 @@ def stage_result(root, case, stage):
         or req["system_sha256"] != digest(PROMPTS[stage])
     ):
         raise ValueError(f"stale {stage} result; rerun this stage")
+    require_business_receipt(entry, stage)
     reply = entry.get("reply")
     if not isinstance(reply, str) or payload_sha256(reply) != entry.get("reply_sha256"):
         raise ValueError(f"stale {stage} result; rerun this stage")
     parsed = strict_model_value(reply)
     validated = validate(stage, parsed, source, spans=spans)
-    if entry.get("output") != validated:
+    if not same_model_value(entry.get("output"), validated):
         raise ValueError(f"stale {stage} result; rerun this stage")
     return entry
