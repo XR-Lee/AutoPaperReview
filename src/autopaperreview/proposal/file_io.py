@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import errno
-import fcntl
 import hashlib
 import os
 import shutil
@@ -32,8 +31,6 @@ _PROTECTED_GUARD = threading.Lock()
 # generation must not drop the input.
 _PROTECTED_FILES: dict[tuple[int, int], tuple[int | None, Path]] = {}
 _FS_IOC_GETVERSION = 0x80087601
-_REPORT_XATTR = "user.apr.report"
-_REPORT_MARK = b"apr-report-v1"
 
 
 def _destination_lock(key: tuple) -> threading.Lock:
@@ -48,6 +45,8 @@ def _destination_lock(key: tuple) -> threading.Lock:
 
 def _generation_fd(fd: int) -> int | None:
     """Filesystem generation for the inode behind ``fd``. Unchanged by rename."""
+    import fcntl
+
     try:
         info = os.fstat(fd)
     except OSError:
@@ -93,8 +92,8 @@ def _protect_inode(info: os.stat_result, path: Path) -> None:
     """Remember a regular input file so a later publish can recognize a move.
 
     A filesystem that cannot report a generation still leaves a record. The
-    overwrite decision does not depend on that record: only a marked report
-    may be replaced.
+    overwrite decision does not depend on that record: a regular file that is
+    not a protected input from another path may be replaced.
     """
     if not stat.S_ISREG(info.st_mode):
         return
@@ -178,6 +177,21 @@ def _protected_alias(info: os.stat_result, destination: Path | None) -> bool:
     if file_identity(current) != file_identity(info):
         return False
     return _absolute(destination) != origin
+
+
+def _empty_directory(directory: int) -> None:
+    """Unlink every name in an open directory. Do not follow a symlink."""
+    for name in os.listdir(directory):
+        info = os.lstat(name, dir_fd=directory)
+        if stat.S_ISDIR(info.st_mode):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            try:
+                _empty_directory(child)
+            finally:
+                os.close(child)
+            os.rmdir(name, dir_fd=directory)
+        else:
+            os.unlink(name, dir_fd=directory)
 
 
 def _directory_path(directory: int) -> Path:
@@ -276,37 +290,12 @@ RENAME_NOREPLACE = 1
 RENAME_EXCHANGE = 2
 
 
-def _mark_fd(fd: int) -> None:
-    """Mark an inode this tool finished writing. The mark stays with the inode."""
-    os.setxattr(fd, _REPORT_XATTR, _REPORT_MARK)
-    os.fsync(fd)
-
-
-def _fd_is_report(fd: int) -> bool:
-    try:
-        return os.getxattr(fd, _REPORT_XATTR) == _REPORT_MARK
-    except OSError:
-        return False
-
-
-def _path_is_report(directory: int, name: str) -> bool:
-    try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
-    except OSError:
-        return False
-    try:
-        return _fd_is_report(fd)
-    finally:
-        os.close(fd)
-
-
 def _same_report(info: os.stat_result, expected: tuple[int, int], fd: int, output: Path) -> bool:
-    """True when ``fd`` is the marked report inode ``expected`` and not an input."""
+    """True when ``fd`` is the regular inode ``expected`` and not an input."""
     return (
         stat.S_ISREG(info.st_mode)
         and info.st_nlink >= 1
         and file_identity(info) == expected
-        and _fd_is_report(fd)
         and not _blocks_unlink(info, _generation_fd(fd), output)
     )
 
@@ -316,13 +305,12 @@ def _unlink_if_same(
     name: str,
     expected: tuple[int, int],
     *,
-    require_mark: bool,
     output: Path | None = None,
 ) -> bool:
     """Unlink ``name`` only when a fresh ``fstat`` is still ``expected``.
 
-    A protected inode is left in place. ``require_mark`` is for a finished
-    report. An incomplete temporary file is removed without a mark.
+    A protected inode is left in place. An unmarked legacy report is not
+    protected by this check.
     """
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
@@ -341,8 +329,6 @@ def _unlink_if_same(
             blocked = _blocks_unlink(info, found, output)
         if blocked:
             return False
-        if require_mark and not _fd_is_report(fd):
-            return False
     finally:
         os.close(fd)
     try:
@@ -360,18 +346,18 @@ def _unlink_created(directory: int, name: str, fd: int) -> None:
         expected = file_identity(os.fstat(fd))
     except OSError:
         return
-    _unlink_if_same(directory, name, expected, require_mark=False)
+    _unlink_if_same(directory, name, expected)
 
 
 def _renameat2(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str, flags: int) -> None:
-    """Rename without replacing, or exchange a marked report, and fail closed otherwise.
+    """Rename without replacing, or exchange a regular file, and fail closed otherwise.
 
     The destination check runs for every flag, including ``RENAME_NOREPLACE``
     and ``RENAME_EXCHANGE``. A check limited to a plain rename never saw the
     flags this publisher uses. The check is inside this function so a caller
     that moves an input onto the name before the real syscall still leaves
-    that input in place. An exchange also requires the destination inode to
-    be a report this tool wrote.
+    that input in place. An unmarked file is not refused: the overwrite
+    decision is the round-9 rule, a regular file that is not a protected input.
     """
     try:
         info = os.stat(dst_name, dir_fd=dst_dirfd, follow_symlinks=False)
@@ -380,8 +366,6 @@ def _renameat2(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str, fla
     if info is not None:
         dest = _directory_path(dst_dirfd) / dst_name
         if not stat.S_ISREG(info.st_mode) or _protected_alias(info, dest):
-            raise ValueError(_ALIAS)
-        if flags == RENAME_EXCHANGE and not _path_is_report(dst_dirfd, dst_name):
             raise ValueError(_ALIAS)
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
@@ -427,9 +411,8 @@ def stage_output(directory: int, content: str) -> str:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-            _mark_fd(handle.fileno())
     except BaseException:
-        _unlink_if_same(directory, name, created, require_mark=False)
+        _unlink_if_same(directory, name, created)
         raise
     return name
 
@@ -506,11 +489,11 @@ class _Output:
         """Publish one complete file while holding the destination lock.
 
         The lock is the destination directory, so deleting a lock file cannot
-        split two publishers onto different inodes. A new file still comes from
-        a fresh directory. An existing file is exchanged only when it is a
-        marked report and not a protected input. A protected input left on the
-        destination or moved onto the temporary name stays on the destination.
-        A short write deletes only its own temporary inode.
+        split two publishers onto different inodes. A new file is staged in
+        the destination directory. An existing regular file is exchanged when
+        it is not a protected input. A protected input left on the destination
+        or moved onto the temporary name stays on the destination. A short
+        write deletes only its own temporary inode.
         """
         lock = _destination_lock((*self.parent_identity, self.path.name))
         with lock:
@@ -519,6 +502,9 @@ class _Output:
     def _publish_locked(self, content: str, *, replace: bool) -> None:
         # flock is on the directory the caller already holds open. Deleting or
         # replacing a lock file cannot give a second process a different inode.
+        # Imported here so the main CLI can load on a platform without fcntl.
+        import fcntl
+
         fcntl.flock(self.directory, fcntl.LOCK_EX)
         try:
             self._publish_critical(content, replace=replace)
@@ -532,8 +518,6 @@ class _Output:
         if info is not None and not replace:
             raise ValueError(_ALIAS)
         if self._blocked(info):
-            raise ValueError(_ALIAS)
-        if info is not None and not _path_is_report(self.directory, self.path.name):
             raise ValueError(_ALIAS)
         if info is None:
             self._publish_fresh(content, original)
@@ -553,20 +537,21 @@ class _Output:
             self._unlink_ours(name, created)
 
     def _replace_existing(self, name: str, created: tuple[int, int], original: tuple[int, int]) -> None:
-        """Exchange a finished temp file with a marked report.
+        """Exchange a finished temp file with the current regular report.
 
-        The exchange is one ``renameat2`` call, and that call refuses an
-        unmarked or protected destination before the syscall. After it returns,
-        a protected input sitting on the destination stays there. A protected
-        input sitting on the temporary name is moved back onto the destination.
-        Only a marked report inode is unlinked, and the unlink checks the inode
-        again. If ``renameat2`` is unavailable the previous report stays.
+        The exchange is one ``renameat2`` call, and that call refuses a
+        protected destination before the syscall. An unmarked legacy report
+        is a normal destination. After the call returns, a protected input
+        sitting on the destination stays there. A protected input sitting on
+        the temporary name is moved back onto the destination. The unlink
+        checks the inode again. If ``renameat2`` is unavailable the previous
+        report stays.
         """
         dest_fd = os.open(self.path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=self.directory)
         try:
             held = os.fstat(dest_fd)
             held_id = file_identity(held)
-            if held_id != original or self._blocked(held) or not _fd_is_report(dest_fd):
+            if held_id != original or self._blocked(held):
                 raise ValueError(_ALIAS)
             _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
             self._settle_exchange(name, created, held_id)
@@ -631,12 +616,12 @@ class _Output:
         try:
             info = os.fstat(fd)
             found = _generation_fd(fd)
-            return info, _fd_is_report(fd), _blocks_unlink(info, found, self.path)
+            return info, stat.S_ISREG(info.st_mode), _blocks_unlink(info, found, self.path)
         finally:
             os.close(fd)
 
     def _discard_report(self, name: str, expected: tuple[int, int]) -> bool:
-        """Delete a marked report inode we created. Leave any other inode in place.
+        """Delete a report inode we created. Leave any other inode in place.
 
         The public name is checked with ``fstat`` after it is opened. A match
         is moved into a private directory and unlinked there, so a rename onto
@@ -660,14 +645,14 @@ class _Output:
             private_fd = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError:
             os.rmdir(private)
-            return _unlink_if_same(self.directory, name, expected, require_mark=True, output=self.path)
+            return _unlink_if_same(self.directory, name, expected, output=self.path)
         try:
             try:
                 _renameat2(self.directory, name, private_fd, "item", RENAME_NOREPLACE)
             except ValueError:
                 return False
             except OSError:
-                return _unlink_if_same(self.directory, name, expected, require_mark=True, output=self.path)
+                return _unlink_if_same(self.directory, name, expected, output=self.path)
             try:
                 item = os.open("item", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=private_fd)
             except FileNotFoundError:
@@ -703,7 +688,10 @@ class _Output:
             return
 
     def _publish_fresh(self, content: str, original: tuple[int, int] | None) -> None:
-        staging = Path(tempfile.mkdtemp(prefix="apr-output-"))
+        # Stage beside the destination. A temp directory on another filesystem
+        # makes the publish rename fail with EXDEV after the judge has run.
+        parent = _directory_path(self.directory)
+        staging = Path(tempfile.mkdtemp(prefix=".apr-staging-", dir=parent))
         staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             staging_identity = file_identity(os.fstat(staging_fd))
@@ -719,8 +707,17 @@ class _Output:
             os.fsync(self.directory)
             self.check()
         finally:
+            # The destination directory can be renamed while this fd is open.
+            # Remove the staging inode through the fd, not the old path.
+            try:
+                _empty_directory(staging_fd)
+            except OSError:
+                pass
             os.close(staging_fd)
-            shutil.rmtree(staging, ignore_errors=True)
+            try:
+                os.rmdir(staging.name, dir_fd=self.directory)
+            except OSError:
+                shutil.rmtree(staging, ignore_errors=True)
 
     def _unlink_ours(self, name: str, created: tuple[int, int] | None) -> None:
         """Delete this writer's temporary file, never the destination or an input."""
@@ -764,7 +761,6 @@ def _write_complete(directory: int, name: str, payload: bytes, beside: str) -> t
                 raise OSError(errno.ENOSPC, "No space left on device")
             offset += wrote
         os.fsync(fd)
-        _mark_fd(fd)
         _stamp_fresh(fd, directory, beside)
         os.fsync(fd)
         return file_identity(os.fstat(fd))

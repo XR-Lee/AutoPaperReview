@@ -560,6 +560,8 @@ def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
         else:
             answer = judge(packet)
         verdict = validate_verdict(answer)
+    except OSError:
+        raise
     except Exception as exc:
         raise ValueError("leak audit blocked the proposal") from exc
     if verdict["verdict"] != "clean":

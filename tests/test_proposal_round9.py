@@ -466,7 +466,7 @@ class PublishRound9Tests(TestCase):
             with TemporaryDirectory(prefix="apr-round9-lock-") as folder:
                 root = Path(folder)
                 dest = root / "report.json"
-                file_io.write_text(dest, "OLD")
+                dest.write_text("OLD", encoding="utf-8")
                 log = root / "critical.log"
                 helper = root / "publish.py"
                 helper.write_text(script, encoding="utf-8")
@@ -505,7 +505,7 @@ class PublishRound9Tests(TestCase):
             root = Path(folder)
             fresh = root / "fresh.json"
             existing = root / "existing.json"
-            file_io.write_text(existing, '{"old": 1}\n')
+            existing.write_text('{"old": 1}\n', encoding="utf-8")
             before = existing.read_text(encoding="utf-8")
             for name, error in (
                 ("enosys", OSError(errno.ENOSYS, "renameat2 is not available")),

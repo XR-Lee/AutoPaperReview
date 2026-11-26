@@ -173,6 +173,16 @@ def register(sub):
     p.set_defaults(func=predict_dispatch)
 
 
+def _content_block(exc: BaseException) -> bool:
+    """A per-forum leak or reported-result block, not an I/O or configuration error."""
+    text = str(exc)
+    return (
+        "leak audit blocked" in text
+        or "identity leak" in text
+        or "remove reported outcomes before ranking" in text
+    )
+
+
 def blind_inputs(manifest, proposals):
     cases = sealed_cases(manifest)
     records = index_by_forum(proposals, "blind proposals")
@@ -202,10 +212,15 @@ def blind_inputs(manifest, proposals):
             "abstract": abstract,
             "exclude_key": case.get("key", fid),
             "forum": fid,
-            "legacy": text_packet(row["short_proposal"])
-            if "short_proposal" in row
-            else None,
+            "legacy": None,
         }
+        if "short_proposal" in row:
+            try:
+                metadata["legacy"] = text_packet(row["short_proposal"])
+            except ValueError as exc:
+                if not _content_block(exc):
+                    raise
+                metadata["legacy"] = row["short_proposal"]
         # The cohort lock wins. A row may repeat the locked year, cutoff, or
         # arXiv id, but it cannot replace them or introduce one the lock omitted.
         for dest, fields in (
@@ -216,7 +231,14 @@ def blind_inputs(manifest, proposals):
             metadata[dest] = _locked(case, row, dest, fields)
             if metadata[dest] is None:
                 del metadata[dest]
-        inputs.append((fid, text_packet(row["proposal"]), metadata))
+        # A label leak is decided per forum. Sanitizing here used to abort the batch.
+        try:
+            packet = text_packet(row["proposal"])
+        except ValueError as exc:
+            if not _content_block(exc):
+                raise
+            packet = row["proposal"]
+        inputs.append((fid, packet, metadata))
     return inputs
 
 
@@ -240,40 +262,46 @@ def predict_dispatch(args):
 
     def one(item):
         fid, proposal, metadata = item
-        audit = {}
-        if provider or getattr(args, "screen_outcomes", False):
-            proposal, legacy, evidence, assessable = screen_rank_inputs(
+        try:
+            audit = {}
+            if provider or getattr(args, "screen_outcomes", False):
+                proposal, legacy, evidence, assessable = screen_rank_inputs(
+                    proposal,
+                    metadata["legacy"],
+                    root,
+                    profile,
+                    cached_only=args.cached_only,
+                    provider=provider,
+                    leak_judge=judge,
+                )
+                audit["outcome_screen"] = evidence
+                if not assessable:
+                    return {
+                        "forum": fid,
+                        "overall": None,
+                        "status": "insufficient_prospective_text",
+                        **audit,
+                    }
+                metadata = {
+                    **metadata,
+                    "legacy": legacy,
+                    "screen_receipt": evidence["proposal"],
+                }
+            judged = rank(
                 proposal,
-                metadata["legacy"],
                 root,
                 profile,
+                folder,
                 cached_only=args.cached_only,
-                provider=provider,
                 leak_judge=judge,
-            )
-            audit["outcome_screen"] = evidence
-            if not assessable:
-                return {
-                    "forum": fid,
-                    "overall": None,
-                    "status": "insufficient_prospective_text",
-                    **audit,
-                }
-            metadata = {
                 **metadata,
-                "legacy": legacy,
-                "screen_receipt": evidence["proposal"],
-            }
-        judged = rank(
-            proposal,
-            root,
-            profile,
-            folder,
-            cached_only=args.cached_only,
-            leak_judge=judge,
-            **metadata,
-        )
-        return {"forum": fid, "overall": judged["overall"], **audit}
+            )
+            return {"forum": fid, "overall": judged["overall"], **audit}
+        except ValueError as exc:
+            # One frozen leak rule must not discard the rest of the batch.
+            if not _content_block(exc):
+                raise
+            return {"forum": fid, "overall": None, "status": "leak_blocked"}
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         predictions = map_with_input_tracking(pool, one, inputs)

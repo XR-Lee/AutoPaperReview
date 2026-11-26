@@ -270,7 +270,7 @@ class ProposalOutputSafetyTests(unittest.TestCase):
     def test_a_short_overwrite_leaves_the_previous_report(self):
         destination = self.root / "report.json"
         original = '{"kept": true}\n'
-        file_io.write_text(destination, original)
+        destination.write_text(original, encoding="utf-8")
         real_write = os.write
 
         def short_write(fd, data):
@@ -287,7 +287,7 @@ class ProposalOutputSafetyTests(unittest.TestCase):
     def test_missing_rename_and_cross_device_leave_the_destination(self):
         fresh = self.root / "fresh.json"
         existing = self.root / "existing.json"
-        file_io.write_text(existing, '{"old": 1}\n')
+        existing.write_text('{"old": 1}\n', encoding="utf-8")
         before = existing.read_text(encoding="utf-8")
         for name, error in (
             ("renameat2", OSError(errno.ENOSYS, "renameat2 is not available")),

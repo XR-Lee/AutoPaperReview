@@ -80,12 +80,14 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         descriptor["version"] = 1
     key = digest(descriptor)
     path = cache / "panel" / stage / (key + ".json")
-    if not path.is_file():
-        legacy = cache / stage / (key + ".json")
-        if legacy.is_file():
-            loaded = read(legacy)
-            if isinstance(loaded, dict) and same_model_value(loaded.get("request"), descriptor):
-                path = legacy
+    legacy = cache / stage / (key + ".json")
+    cached = path if path.is_file() else None
+    from_legacy = False
+    if cached is None and legacy.is_file():
+        loaded = read(legacy)
+        if isinstance(loaded, dict) and same_model_value(loaded.get("request"), descriptor):
+            cached = legacy
+            from_legacy = True
     empty = {} if source_stage else None
     missing = None
     if source_stage:
@@ -93,22 +95,30 @@ def request(stage, body, cache, offline, *, leak_judge=None):
             missing = "no_proposal"
         elif not body["sources"]:
             missing = "no_source"
-    if path.is_file():
-        r = read(path)
+
+    def promote(stored):
+        # An fd9799e receipt is a read-only input. An online run copies it
+        # into the current layout and leaves the legacy file untouched.
+        if from_legacy and not offline:
+            write(path, stored)
+        return key, stored
+
+    if cached is not None:
+        r = read(cached)
         states = {missing} if missing else {"response", "refusal", "invalid"}
         if not isinstance(r, dict) or not same_model_value(r.get("request"), descriptor) or r.get("state") not in states or "output" not in r:
             raise ValueError("invalid reviewer panel receipt")
         if r["state"] != "response":
             if r["output"] != empty:
                 raise ValueError("incomplete receipt contains unexpected judgments")
-            return key, r
+            return promote(r)
         reply = r.get("reply")
         if isinstance(reply, str) and payload_sha256(reply) == r.get("reply_sha256"):
             parsed = strict_model_value(reply)
             validate(parsed, body)
             if not same_model_value(r.get("output"), parsed):
                 raise ValueError("cached output does not match the strict reply")
-            return key, r
+            return promote(r)
         if offline and not missing:
             raise ValueError(f"missing cached {stage} receipt {key}")
     if offline and not missing:

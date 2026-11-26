@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import unicodedata
@@ -828,18 +829,50 @@ def _training_grade_ready(row, bounds, excerpt_field) -> bool:
     return True
 
 
+def _anchor_key(value) -> str | None:
+    """Casefolded record identity. Empty and non-text keys are not anchors."""
+    try:
+        text = canonical_key(value)
+    except ValueError:
+        return None
+    folded = text.casefold()
+    return folded or None
+
+
+def _seen_anchor_keys(seen_keys) -> set[str]:
+    return {anchor for key in seen_keys if (anchor := _anchor_key(key))}
+
+
+def _training_value_ready(value) -> bool:
+    """A library grade is a finite number. Booleans and other types are not."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
+def _library_proposal_ready(value) -> bool:
+    """A library proposal is a field map of text. Other shapes are not scored."""
+    if not isinstance(value, Mapping):
+        return False
+    return all(item is None or isinstance(item, str) for item in value.values())
+
+
 def pre_judge_eligible(row, bounds, *, seen_keys=(), excerpt_field=None, **exclusions) -> bool:
     """Local calibration eligibility. This function does not call the history judge.
 
     A missing target, a key that is not text or an integer, a key already selected
-    as an anchor, a missing training-value time, and every history filter that
-    does not need a judge are decided here.
+    as an anchor after NFC, trim, and casefold, a malformed training value, a
+    malformed proposal, a missing training-value time, and every history filter
+    that does not need a judge are decided here.
     """
     local = {key: value for key, value in exclusions.items() if key != "history_judge"}
     if not isinstance(row, dict) or "key" not in row or "target" not in row:
         return False
     key = row.get("key")
-    if type(key) not in (int, str) or key in seen_keys:
+    anchor = _anchor_key(key)
+    if anchor is None or anchor in _seen_anchor_keys(seen_keys):
+        return False
+    if not _training_value_ready(row.get("target")) or not _library_proposal_ready(row.get("proposal")):
         return False
     if excerpt_field is not None and bounds is not None and not _training_grade_ready(row, bounds, excerpt_field):
         return False
@@ -864,7 +897,9 @@ def calibration_rows(bank, bounds, *, excerpt_field, **exclusions):
         dated = historical_opinions(
             opinions, bounds[1], snapshot_ms=row.get("opinion_ms"), target_year=bounds[0],
         )
-        keys.add(row["key"])
+        anchor = _anchor_key(row.get("key"))
+        if anchor is not None:
+            keys.add(anchor)
         yield row, dated
 
 

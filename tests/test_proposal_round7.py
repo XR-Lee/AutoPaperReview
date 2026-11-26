@@ -426,7 +426,7 @@ class PublishStressTests(TestCase):
                             pass
                         source.replace(destination)
                 else:
-                    file_io.write_text(destination, "OLD")
+                    destination.write_text("OLD", encoding="utf-8")
                 errors = []
 
                 def publish(text, gate=run):

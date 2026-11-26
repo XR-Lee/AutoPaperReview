@@ -293,7 +293,7 @@ class PublishRound8Tests(TestCase):
             with TemporaryDirectory(prefix="apr-round8-lock-") as folder:
                 root = Path(folder)
                 dest = root / "report.json"
-                file_io.write_text(dest, "OLD")
+                dest.write_text("OLD", encoding="utf-8")
                 log = root / "critical.log"
                 helper = root / "publish.py"
                 helper.write_text(script, encoding="utf-8")
@@ -417,7 +417,7 @@ class PublishRound8Tests(TestCase):
                 root = Path(folder)
                 payload = b'{"files": {"synthetic": "abc"}}\n'
                 destination = root / "report.json"
-                file_io.write_text(destination, '{"old": 1}\n')
+                destination.write_text('{"old": 1}\n', encoding="utf-8")
                 source = root / ("notes.txt" if kind == "input" else "external-hmac-sha256.json")
                 if kind == "manifest":
                     folder_path = root / "checksums"

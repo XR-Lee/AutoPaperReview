@@ -1,6 +1,7 @@
 """Retrieve disjoint topical counterexamples with materially different human concept opinions."""
 
 from collections import Counter
+from collections.abc import Mapping
 from math import log, sqrt
 from statistics import mean
 
@@ -13,6 +14,16 @@ PROMPT = """Predict the prospective scientific merit assigned by domain experts 
 
 def terms(proposal):
     return set(words(" ".join(v for v in proposal.values() if isinstance(v, str))))
+
+
+def _local_overlap(query, proposal) -> float:
+    """Token overlap used to drop a calibration row before the history judge."""
+    if not query or not isinstance(proposal, Mapping):
+        return 0.0
+    tokens = terms(proposal)
+    if not tokens:
+        return 0.0
+    return len(query & tokens) / len(query | tokens)
 
 
 def packet(
@@ -34,6 +45,11 @@ def packet(
         matching_query = seal(matching_query)
     bounds = historical_bounds(target_year, cutoff_ms)
     query = terms(target)
+    # Drop a local 85% overlap before calibration can call the history judge.
+    bank = [
+        row for row in bank
+        if not (isinstance(row, dict) and _local_overlap(query, row.get("proposal")) >= 0.85)
+    ]
     items = []
     excerpts = {}
     for example, dated in calibration_rows(
@@ -42,8 +58,6 @@ def packet(
         exclude_abstract=exclude_abstract, exclude_text=exclude_text,
     ):
         tokens = terms(example["proposal"])
-        if query and len(query & tokens) / len(query | tokens) >= 0.85:
-            continue
         excerpts[example["key"]] = [text for item in dated if (text := filter_conclusion_sentences(item))]
         items.append((example, tokens))
     vocab = Counter(k for _, xs in items for k in xs)

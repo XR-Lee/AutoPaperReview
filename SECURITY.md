@@ -13,3 +13,11 @@ AutoPaperReview treats unpublished manuscripts, reviewer identities, prompts, re
 - The bundled chat adapter allows loopback endpoints by default. A hostname that resolves only to loopback addresses is loopback; a resolution failure or any other address is remote. A remote endpoint requires `allow_remote`, `network_policy = allow`, and an API key in the named environment variable. The key is not written to stored requests, manifests, or errors, and its value is not part of the stage signature. A remote call records `manuscript_left_machine` on the run.
 
 Report vulnerabilities privately to the repository owner before opening a public issue.
+
+## Threat model
+
+AutoPaperReview is a single-user local tool. It is not a boundary between users.
+
+Same-uid races on publish are out of scope and will not be fixed. Linux provides no atomic unlink-if-inode syscall, so another process running as the same user can rename a file onto a temporary name between a check and an unlink. Same-uid forgery of a `user.*` extended attribute is also out of scope. Publish does not use an extended attribute to decide whether a file may be replaced. An unmarked legacy report can be overwritten. A protected input that this process opened from another path is still refused.
+
+The proposal leak rules are frozen. Changing `sanitized.py` is not part of a merge. Measuring those rules against a real judge is a release gate, not a merge gate.

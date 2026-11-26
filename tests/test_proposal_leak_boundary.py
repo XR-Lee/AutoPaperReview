@@ -381,9 +381,17 @@ class ProposalLeakBoundaryTests(TestCase):
                 return LEAK, 0
 
             with self.subTest(action=args[0]), patch.object(stages, "run_command", side_effect=transport):
-                self.cli(*args, "--screen-outcomes")
+                # predict-rank records the block and scores the other forums.
+                # prioritize still stops.
+                self.cli(*args, "--screen-outcomes", expected=0 if args[0] == "predict-rank" else 2)
             self.assertTrue(seen)
             self.assertTrue(all("u1" in body for body in seen))
+            if args[0] == "predict-rank":
+                rows = json.loads(self.output.read_text(encoding="utf-8"))
+                self.assertEqual(len(rows), 100)
+                self.assertTrue(all(
+                    row["overall"] is None and row["status"] == "leak_blocked" for row in rows
+                ))
 
     def test_source_evidence_reaudits_combined_source_and_proposal(self):
         source = self.document("paired.json", {"source": {"problem": SIGNAL}, "proposal": {"problem": PLAN}})

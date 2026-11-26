@@ -76,14 +76,24 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         descriptor.update(version=1, mode="forecast")
     key = digest(descriptor)
     path = cache / "claims" / stage / (key + ".json")
-    if not path.exists():
-        legacy = cache / stage / (key + ".json")
-        if legacy.is_file():
-            loaded = read(legacy)
-            if isinstance(loaded, dict) and same_model_value(loaded.get("request"), descriptor):
-                path = legacy
-    if path.exists():
-        result = read(path)
+    legacy = cache / stage / (key + ".json")
+    cached = path if path.exists() else None
+    from_legacy = False
+    if cached is None and legacy.is_file():
+        loaded = read(legacy)
+        if isinstance(loaded, dict) and same_model_value(loaded.get("request"), descriptor):
+            cached = legacy
+            from_legacy = True
+
+    def promote(stored):
+        # An fd9799e receipt is a read-only input. An online run copies it
+        # into the current layout and leaves the legacy file untouched.
+        if from_legacy and not offline:
+            write(path, stored)
+        return key, stored
+
+    if cached is not None:
+        result = read(cached)
         if not isinstance(result, dict) or (
                 not same_model_value(result.get("request"), descriptor)
                 or result.get("state") not in {"response", "refusal", "invalid"}
@@ -92,14 +102,14 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         if result["state"] != "response":
             if result["output"]:
                 raise ValueError("incomplete model receipt contains predictions")
-            return key, result
+            return promote(result)
         reply = result.get("reply")
         if isinstance(reply, str) and payload_sha256(reply) == result.get("reply_sha256"):
             parsed = strict_model_value(reply)
             validate(stage, parsed, body)
             if not same_model_value(result.get("output"), parsed):
                 raise ValueError("cached output does not match the strict reply")
-            return key, result
+            return promote(result)
         if offline:
             raise ValueError(f"missing cached {stage} receipt {key}")
     if offline:

@@ -142,7 +142,10 @@ class PreJudgeRound10Tests(TestCase):
         exclude = proposal_body({"problem": TARGET})
         calls = []
         judge = _judge(calls)
-        anchor = _row(key="same-anchor", forum="synthetic-anchor", proposal="Ocean buoy zero tracks kelp drift.")
+        anchor = _row(
+            key="same-anchor", forum="synthetic-anchor",
+            proposal={"problem": "Ocean buoy zero tracks kelp drift."},
+        )
         duplicate = _row(key="same-anchor", forum="synthetic-near", proposal=NEAR)
         rows = list(calibration_rows(
             [anchor, duplicate], bounds, excerpt_field="opinions", exclude_text=exclude, history_judge=judge,
@@ -180,7 +183,7 @@ class PreJudgeRound10Tests(TestCase):
         bounds = (2024, 50)
         exclude = proposal_body({"problem": TARGET})
         calls = []
-        row = _row(proposal=NEAR, forum="synthetic-open", key="synthetic-open")
+        row = _row(proposal={"problem": NEAR}, forum="synthetic-open", key="synthetic-open")
         got = list(calibration_rows(
             [row], bounds, excerpt_field="opinions", exclude_text=exclude, history_judge=_judge(calls),
         ))
@@ -534,25 +537,38 @@ class PublishRound10Tests(TestCase):
             self.assertFalse(list(root.glob(".apr-output-*.tmp")))
             self.assertNotEqual(destination.read_bytes(), b"OLD")
 
-    def test_exchange_refuses_an_unmarked_destination_before_the_syscall(self):
-        # A destination check that runs only for flags == 0 never sees
-        # RENAME_EXCHANGE. Exchange would then swap the bytes.
+    def test_exchange_replaces_an_unmarked_file_and_refuses_a_protected_input(self):
+        # The destination check runs for RENAME_EXCHANGE. An unmarked legacy
+        # report is replaced. A protected input moved onto that name is not.
         with TemporaryDirectory(prefix="apr-round10-flags-") as folder:
             root = Path(folder)
             source = root / "incoming.json"
             destination = root / "report.json"
             file_io.write_text(source, "NEW")
-            destination.write_bytes(_PIN)
+            destination.write_bytes(b"OLD-UNMARKED")
             directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
+                file_io._renameat2(
+                    directory, source.name, directory, destination.name, file_io.RENAME_EXCHANGE,
+                )
+                self.assertEqual(destination.read_text(encoding="utf-8"), "NEW")
+                self.assertEqual(source.read_bytes(), b"OLD-UNMARKED")
+                protected = root / "notes.json"
+                protected.write_bytes(_PIN)
+                with file_io.protected_output(root / "unused.json"):
+                    with file_io.open_input(protected):
+                        pass
+                os.replace(protected, destination)
+                fresh = root / "again.json"
+                fresh.write_text("NEWER", encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "distinct"):
                     file_io._renameat2(
-                        directory, source.name, directory, destination.name, file_io.RENAME_EXCHANGE,
+                        directory, fresh.name, directory, destination.name, file_io.RENAME_EXCHANGE,
                     )
             finally:
                 os.close(directory)
-            self.assertEqual(source.read_text(encoding="utf-8"), "NEW")
             self.assertEqual(destination.read_bytes(), _PIN)
+            self.assertEqual(fresh.read_text(encoding="utf-8"), "NEWER")
 
     def test_an_unreadable_generation_still_records_the_input(self):
         with TemporaryDirectory(prefix="apr-round10-generation-") as folder:
@@ -594,11 +610,10 @@ class PublishRound10Tests(TestCase):
             file_io.write_text(marked, "NEW")
             self.assertEqual(marked.read_text(encoding="utf-8"), "NEW")
             plain.write_bytes(_PIN)
-            with self.assertRaisesRegex(ValueError, "distinct"):
-                file_io.write_text(plain, "NEW")
-            self.assertEqual(plain.read_bytes(), _PIN)
+            file_io.write_text(plain, "NEW")
+            self.assertEqual(plain.read_text(encoding="utf-8"), "NEW")
 
-    def test_a_new_process_refuses_an_unmarked_destination(self):
+    def test_a_new_process_overwrites_an_unmarked_legacy_output(self):
         names = (
             "external-hmac-sha256.json",
             "external-sha256.json",
@@ -612,8 +627,8 @@ class PublishRound10Tests(TestCase):
                     destination = Path(folder) / name
                     destination.write_bytes(_PIN)
                     child = self._child(destination)
-                    self.assertEqual(child.returncode, 2, child.stderr)
-                    self.assertEqual(destination.read_bytes(), _PIN)
+                    self.assertEqual(child.returncode, 0, child.stderr)
+                    self.assertEqual(destination.read_text(encoding="utf-8"), "NEW")
                     self.assertFalse(list(Path(folder).glob(".apr-output-*.tmp")))
 
     def test_a_new_process_replaces_a_marked_report(self):
