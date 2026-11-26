@@ -10,6 +10,7 @@ from statistics import mean
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .data import (
+    cleaning_rules,
     digest,
     neutralize_label_text,
     read,
@@ -31,6 +32,7 @@ def protocol(command):
         "command_sha256": digest(command),
         "aggregation": "mean_available_reviewers",
         "positive_threshold": 3.5,
+        "text_cleaning_sha256": digest(cleaning_rules()),
     }
 
 
@@ -73,11 +75,16 @@ def independent_protocol(command):
 
 
 def reviewer_result(note, units, extracted, grade):
+    """Offsets refer to the original unit, not the cleaned text sent to the model."""
+    original = note.get("units") if isinstance(note.get("units"), dict) else units
     spans = []
     for index in grade["used"]:
         evidence = extracted[index]
         unit, quote = evidence["id"], evidence["quote"]
-        start = units[unit].index(quote)
+        source = original.get(unit, "")
+        if not isinstance(source, str) or not isinstance(quote, str) or not quote or quote not in source:
+            raise ValueError("evidence quote is not in the original review unit")
+        start = source.index(quote)
         spans.append(
             {"unit": unit, "start": start, "end": start + len(quote), "quote": quote}
         )

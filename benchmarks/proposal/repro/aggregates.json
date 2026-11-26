@@ -1,0 +1,72 @@
+{
+  "published_headlines": "headline aggregates are committed; per-paper rows stay outside git",
+  "recomputed": false,
+  "external_dir_env": "APR_PROPOSAL_REPRO_DIR",
+  "salt_env": "APR_PROPOSAL_REPRO_SALT",
+  "resampling": {
+    "iclr_draws": 3000,
+    "iclr_method": "numpy Generator stratified by final-score tier, linear quantile",
+    "iclr_seeds": {
+      "fixed100": 241125,
+      "confirm100": 241126,
+      "replications199": 241127
+    },
+    "nlp84_draws": 2000,
+    "nlp84_method": "random.Random index percentile on an ordinary bootstrap, not the 3000-draw tier bootstrap",
+    "nlp84_seed": 11752,
+    "evaluate_rank_draws": 3000,
+    "evaluate_rank_seed": 61124
+  },
+  "fixed100": {
+    "n": 100,
+    "decision_n": 100,
+    "rho": 0.6768495256982237,
+    "rho_ci95": [0.5592595277263185, 0.7719101281336322],
+    "auc": 0.8120978120978121,
+    "top20": {
+      "included_positive_range": [12, 12],
+      "random_expected": 5.0
+    },
+    "seed": 241125,
+    "draws": 3000
+  },
+  "confirm100": {
+    "n": 100,
+    "decision_n": 100,
+    "rho": 0.5972059705044885,
+    "rho_ci95": [0.4650658687336852, 0.7126145126816626],
+    "auc": 0.7942942942942943,
+    "top20": {
+      "included_positive_range": [11, 11],
+      "random_expected": 5.0
+    },
+    "seed": 241126,
+    "draws": 3000
+  },
+  "replications199": {
+    "n": 199,
+    "decision_n": 141,
+    "enrolled": 200,
+    "rho": 0.5215290007489868,
+    "rho_ci95": [0.40019913238862875, 0.6373511024333817],
+    "auc": 0.8045454545454546,
+    "top20": {
+      "included_positive_range": [23, 23],
+      "random_expected": 10.050251256281406
+    },
+    "seed": 241127,
+    "draws": 3000
+  },
+  "nlp84": {
+    "n": 84,
+    "rho": 0.27260518273206585,
+    "auc": 0.6805555555555556,
+    "rho_ci95": [0.04536137130794999, 0.47156712182523136],
+    "auc_ci95": [0.43415637860082307, 0.8846153846153846],
+    "same_topic_comparable_pairs": 575,
+    "same_topic_concordance": 0.5947826086956521,
+    "draws": 2000,
+    "seed": 11752,
+    "threshold": 6.625
+  }
+}

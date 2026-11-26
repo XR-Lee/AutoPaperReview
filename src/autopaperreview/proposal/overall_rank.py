@@ -189,10 +189,11 @@ def stratum_of(row):
 def stratified_ci(rows, spec, *, draws=STRATIFIED_DRAWS, seed=STRATIFIED_SEED):
     """Percentile interval from resampling inside final-score strata.
 
-    Each draw keeps every stratum's size. Stratum names are sorted so the seed
-    does not depend on row order. A paper with no ``stratum`` uses its official
-    final rating. Draws with an undefined statistic are omitted, and the
-    interval is withheld when fewer than 90% of draws are defined.
+    Each draw keeps every stratum's size. Stratum names are sorted, and the
+    rows inside a stratum are sorted by key, so the seed does not depend on
+    input order. A paper with no ``stratum`` uses its official final rating.
+    Draws with an undefined statistic are omitted, and the interval is
+    withheld when fewer than 90% of draws are defined.
     """
     if draws < 1:
         raise ValueError("stratified draws must be positive")
@@ -202,6 +203,8 @@ def stratified_ci(rows, spec, *, draws=STRATIFIED_DRAWS, seed=STRATIFIED_SEED):
     pools = defaultdict(list)
     for index, row in enumerate(rows):
         pools[stratum_of(row)].append(index)
+    for name in pools:
+        pools[name].sort(key=lambda index: (str(rows[index]["key"]), index))
     names = sorted(pools)
     rng = Random(seed)
     trials = {"rho": [], "auc": [], "apr_rho": [], "apr_auc": []}

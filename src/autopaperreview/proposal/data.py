@@ -66,17 +66,25 @@ def reported_result(text: str) -> bool:
 
 
 # Venue outcome, a numeric rating, an award, or an identity marker. Scientific
-# prose such as "we accept the assumption" does not match.
+# prose such as "we accept the assumption" does not match. The pattern is
+# applied to folded text: full-width punctuation, spelled-out scores, and
+# obfuscated emails are normalized first.
 LABEL_LEAK = re.compile(
     r"\boverall\s+ratings?\b"
     r"|\b(?:final|meta|reviewer|my|our|average)\s+(?:ratings?|scores?|recommendations?)\b"
-    r"|\b(?:ratings?|scores?)\s*[:=]\s*\d"
+    r"|\b(?:ratings?|scores?)\s*(?:[:=]\s*|\s+of\s+)\d+"
+    r"|\b\d+\s+out\s+of\s+10\b"
     r"|\bdecision\s*[:=]\s*(?:accept|reject)\w*"
     r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
-    r"|\b(?:strong|weak|clear|marginal)\s+(?:accept|reject)\b"
+    r"|\b(?:strong|weak|clear|marginal|obvious)\s+(?:accept|reject)(?:ance)?\b"
     r"|\b(?:best|outstanding)\s+paper\b"
     r"|\bpaper\s+award\b"
     r"|\b(?:was|were|been)\s+(?:accept|reject)ed\b"
+    r"|\b(?:should|would|must)\s+be\s+(?:accepted|rejected|published)\b"
+    r"|\bdeserves?\s+to\s+be\s+(?:accepted|rejected|published)\b"
+    r"|\brecommend(?:ing|ation)?\s+(?:acceptance|rejection)\b"
+    r"|\bvote\s+(?:to\s+)?(?:accept|reject)\b"
+    r"|\b(?:i|we)\s+(?:will|would|do)\s+(?:accept|reject)\s+(?:this|the)\s+(?:paper|submission)\b"
     r"|\bacceptance\s+(?:decision|rate|notification)\b"
     r"|\bcamera[- ]ready\b"
     r"|\brecommend(?:ation)?\s*[:=]?\s*(?:to\s+)?(?:accept|reject)\b"
@@ -86,16 +94,113 @@ LABEL_LEAK = re.compile(
     re.IGNORECASE,
 )
 _LABEL_SPLIT = re.compile(
-    r"(?<=[.!?。！？])\s+|\n+"
+    r"(?<=[.!?。！？．])\s+|\n+"
     r"|(?=\bOverall\s+Ratings?\b)"
-    r"|(?=\bDecision\s*:)"
+    r"|(?=\bDecision\s*[:：])"
     r"|(?=\b(?:Final|Meta|Reviewer|My|Our)\s+(?:Rating|Score)s?\b)",
     re.IGNORECASE,
 )
+_FOLD = str.maketrans(
+    {
+        "：": ":",
+        "；": ";",
+        "＠": "@",
+        "．": ".",
+        "（": "(",
+        "）": ")",
+        "０": "0",
+        "１": "1",
+        "２": "2",
+        "３": "3",
+        "４": "4",
+        "５": "5",
+        "６": "6",
+        "７": "7",
+        "８": "8",
+        "９": "9",
+    }
+)
+_NUMBER_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+}
+_SPELLED_NUMBER = re.compile(
+    r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+    re.IGNORECASE,
+)
+_OBFUSCATED_EMAIL = re.compile(
+    r"(?i)([A-Za-z0-9._%+\-]+)\s*(?:@|\[at\]|\(at\))\s*([A-Za-z0-9\-]+)\s*(?:\.|\[dot\]|\(dot\))\s*([A-Za-z]{2,})"
+)
+_SPELLED_EMAIL = re.compile(
+    r"(?i)\b([A-Za-z0-9._%+\-]+)\s+at\s+([A-Za-z0-9\-]+)\s+dot\s+([A-Za-z]{2,})\b"
+)
+# Score and identity fields are never copied into a model packet. "contribution"
+# is not listed: APD uses that key for prose, and the ICLR numeric score is
+# excluded by the review-prose allowlist below.
+SCORE_FIELDS = frozenset(
+    {
+        "rating",
+        "ratings",
+        "recommendation",
+        "recommendations",
+        "decision",
+        "decisions",
+        "confidence",
+        "soundness",
+        "presentation",
+        "award",
+        "awards",
+        "authors",
+        "authorids",
+        "author_ids",
+        "email",
+        "emails",
+        "venue",
+        "venueid",
+        "final_rating",
+        "accept",
+        "meta_review",
+    }
+)
+_REVIEW_PROSE = (
+    "strengths",
+    "weaknesses",
+    "strengths_and_weaknesses",
+    "questions",
+)
+
+
+def _fold_leak_text(text: str) -> str:
+    folded = text.translate(_FOLD)
+    folded = _OBFUSCATED_EMAIL.sub(r"\1@\2.\3", folded)
+    folded = _SPELLED_EMAIL.sub(r"\1@\2.\3", folded)
+    return _SPELLED_NUMBER.sub(lambda match: _NUMBER_WORDS[match.group(0).lower()], folded)
+
+
+def _score_field(key: object) -> bool:
+    return str(key).strip().lower().replace(" ", "_") in SCORE_FIELDS
+
+
+def cleaning_rules() -> dict[str, str]:
+    """Patterns that define prospective-text cleaning. Included in protocol digests."""
+    return {
+        "label_leak": LABEL_LEAK.pattern,
+        "outcome": OUTCOME.pattern,
+        "reported_finding": REPORTED_FINDING.pattern,
+    }
 
 
 def label_leak(text: str) -> bool:
-    return bool(isinstance(text, str) and text and LABEL_LEAK.search(text))
+    return bool(isinstance(text, str) and text and LABEL_LEAK.search(_fold_leak_text(text)))
 
 
 def label_leak_in(value: Any) -> bool:
@@ -269,12 +374,63 @@ def sentences(text: str) -> list[str]:
         for p in parts
         if (len(p.strip(" \t-*")) >= 8 or re.search(r"[\u3400-\u9fff]{3}", p))
         and not OUTCOME.search(p)
+        and not label_leak(p)
     ]
 
 
 def units(fields: dict) -> dict[str, str]:
-    lines = [s for v in fields.values() if isinstance(v, str) for s in sentences(v)]
+    lines = [
+        sentence
+        for key, value in fields.items()
+        if isinstance(value, str) and not _score_field(key)
+        for sentence in sentences(value)
+    ]
     return {f"s{i}": s for i, s in enumerate(dict.fromkeys(lines), 1)}
+
+
+def review_prose(note: dict) -> dict[str, str]:
+    """The four ICLR prose fields, with rating and decision sentences removed.
+
+    Rating, decision, confidence, and identity fields are not read. A decision
+    written inside one of the four prose fields is dropped by the same cleaner
+    before the text can reach a label or an audit.
+    """
+    fields = {}
+    for key in _REVIEW_PROSE:
+        raw = content_value(note, key)
+        if not isinstance(raw, str):
+            continue
+        cleaned = neutralize_label_text(raw)
+        if cleaned and not label_leak(cleaned):
+            fields[key] = cleaned
+    return fields
+
+
+def prospective_comments(comments: dict) -> dict:
+    """Drop score fields and label sentences before label or audit sees comments."""
+    if not isinstance(comments, dict):
+        raise TypeError("comments must be an object")
+    cleaned: dict = {}
+    for reviewer, body in comments.items():
+        if _score_field(reviewer):
+            continue
+        if isinstance(body, str):
+            text = neutralize_label_text(body)
+            if text and not label_leak(text):
+                cleaned[reviewer] = text
+            continue
+        if not isinstance(body, dict):
+            continue
+        kept = {}
+        for key, value in body.items():
+            if _score_field(key) or not isinstance(value, str):
+                continue
+            text = neutralize_label_text(value)
+            if text and not label_leak(text):
+                kept[key] = text
+        cleaned[reviewer] = kept
+    assert_no_label_leak(cleaned, where="review comments")
+    return cleaned
 
 
 def _millis(note: dict, *keys: str) -> int:
@@ -336,26 +492,39 @@ def iclr_case(
         return None
     # Creation time of every official note, before signature dedup. A later
     # revision of the same review must not hide the first review. A missing
-    # timestamp is not an earlier review.
-    created = [ms for n in pool if (ms := _millis(n, "tcdate", "cdate"))]
-    first = min(created) if created else 0
+    # or zero timestamp is not evidence that the submission is pre-review:
+    # one undated review is enough to refuse that claim.
+    stamps = []
+    known = True
+    for note in pool:
+        ms = _millis(note, "tcdate", "cdate")
+        if ms > 0:
+            stamps.append(ms)
+        else:
+            known = False
     reviews = sorted(latest_official_reviews(pool), key=lambda n: n["id"])
     if not reviews:
         return None
-    eligible = [
-        note
-        for note in _submission_revisions(sub, notes, group)
-        if first and 0 < _millis(note, "tmdate", "mdate") < first
-    ]
-    if eligible:
-        chosen = max(
-            eligible,
-            key=lambda note: (_millis(note, "tmdate", "mdate"), str(note.get("id") or "")),
-        )
-        early = True
-    else:
+    if not known or not stamps:
+        first = None
         chosen = sub
         early = False
+    else:
+        first = min(stamps)
+        eligible = [
+            note
+            for note in _submission_revisions(sub, notes, group)
+            if 0 < _millis(note, "tmdate", "mdate") < first
+        ]
+        if eligible:
+            chosen = max(
+                eligible,
+                key=lambda note: (_millis(note, "tmdate", "mdate"), str(note.get("id") or "")),
+            )
+            early = True
+        else:
+            chosen = sub
+            early = False
     if not early and not allow_late:
         return None
     stamp = _millis(chosen, "tmdate", "mdate") or None
@@ -369,17 +538,7 @@ def iclr_case(
     for i, note in enumerate(reviews, 1):
         alias = f"r{i}"
         sources[alias] = note["id"]
-        comments[alias] = units(
-            {
-                key: content_value(note, key)
-                for key in (
-                    "strengths",
-                    "weaknesses",
-                    "strengths_and_weaknesses",
-                    "questions",
-                )
-            }
-        )
+        comments[alias] = units(review_prose(note))
     return {
         "id": sub["id"],
         "candidate": packet,

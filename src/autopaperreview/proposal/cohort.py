@@ -1,10 +1,15 @@
 """Shape of a locked proposal-rank cohort.
 
 The published fixed100, confirm100, replications199, top-20%, and 84-NLP
-numbers are reproduced from committed artifacts by
-``scripts/reproduce_proposal_rank.py``. This module checks a manifest, a
+headline aggregates are committed. Per-paper rows stay outside git and are
+reread by ``scripts/reproduce_proposal_rank.py`` when
+``APR_PROPOSAL_REPRO_DIR`` is set. This module checks a manifest, a
 prediction file, and a reference file so ``evaluate-rank`` can score any
 locked cohort. It does not contain those papers.
+
+``validate_manifest`` is the strict schema (version 1). ``cohort_cases``
+checks the sorted-id digest and also accepts a lock that has no version
+field. A year below 1 is rejected in both.
 """
 
 from __future__ import annotations
@@ -66,8 +71,8 @@ def validate_manifest(doc: Any) -> dict:
         extra = set(row) - case_allowed
         if extra:
             raise ValueError(f"unknown manifest case fields: {sorted(extra)}")
-        if "year" in row and type(row["year"]) is not int:
-            raise ValueError("year must be an integer venue year")
+        if "year" in row and (type(row["year"]) is not int or row["year"] < 1):
+            raise ValueError("year must be a positive integer venue year")
         for stamp in ("cutoff_ms", "submission_ms"):
             if stamp in row and type(row[stamp]) is not int:
                 raise ValueError(f"{stamp} must be an integer millisecond timestamp")
@@ -127,6 +132,8 @@ def validate_references(doc: Any) -> list:
                 raise ValueError(f"{field} must be a number")
         if "accept" in row and row["accept"] is not None and row["accept"] not in (0, 1):
             raise ValueError("accept must be 0, 1, or null")
-        if "year" in row and row["year"] is not None and type(row["year"]) is not int:
-            raise ValueError("year must be an integer venue year")
+        if "year" in row and row["year"] is not None and (
+            type(row["year"]) is not int or row["year"] < 1
+        ):
+            raise ValueError("year must be a positive integer venue year")
     return doc

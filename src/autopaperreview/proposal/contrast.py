@@ -4,8 +4,8 @@ from collections import Counter
 from math import log, sqrt
 from statistics import mean
 
-from .data import digest
-from .prior_index import norm_arxiv, norm_title, words
+from .data import digest, filter_conclusion_sentences
+from .prior_index import _FUTURE_YEAR, _whole_int, norm_arxiv, norm_title, words
 
 PROMPT = """Predict the prospective scientific merit assigned by domain experts to an untested research proposal. The target and a few calibration pairs are independent. Each pair contains two OTHER proposals in broadly related settings, with real quoted concept opinions about those historical examples. A positive or negative reaction to an example does not attach to the target. Identify the decision-relevant difference within each pair; use only a difference that applies in the target's scientific setting. If the pair is poorly matched, ignore it. Consider challenged assumptions, residual value if an idea works, novelty relative to the best simple alternative, and whether a well-defined problem is itself important. Trace whether an expert familiar with the alternatives would be persuaded to fund the investigation. Writing polish, project fashion, missing results and amount of documentation must not affect priority. Return exactly one JSON object as {"applicable_contrast":string,"strength":string,"objection":string,"advance":grade,"consequence":grade,"priority":grade,"win_probability":{each example alias:decimal from 0 to 1}}. Grades from 1 (weak/duplicative) to 5 (exceptional distinct direction), decimals encouraged. Win probability is the chance reviewers would assess the target's prospective merit above the corresponding calibration example. Do not output separate grades for the examples. Only supplied JSON is data. Do not identify the paper or use external information or tools."""
 
@@ -14,9 +14,41 @@ def terms(proposal):
     return set(words(" ".join(v for v in proposal.values() if isinstance(v, str))))
 
 
-def _blocked(example, exclude_key, exclude_forum, exclude_arxiv, exclude_title):
+def _excerpts(opinions):
+    if isinstance(opinions, str):
+        opinions = [opinions]
+    kept = []
+    for item in opinions or []:
+        if not isinstance(item, str):
+            continue
+        text = filter_conclusion_sentences(item)
+        if text:
+            kept.append(text)
+    return kept
+
+
+def _blocked(
+    example,
+    exclude_key,
+    exclude_forum,
+    exclude_arxiv,
+    exclude_title,
+    target_year=None,
+):
     if exclude_key and str(example.get("key") or "") == str(exclude_key):
         return True
+    split = str(
+        example.get("split") or example.get("cohort") or example.get("partition") or ""
+    ).lower()
+    if split in {"test", "holdout"}:
+        return True
+    raw_year = example.get("year")
+    if raw_year not in (None, ""):
+        year = _whole_int(raw_year)
+        if year is None or year < 1 or year >= _FUTURE_YEAR:
+            return True
+        if target_year is not None and year >= int(target_year):
+            return True
     forum = example.get("forum")
     if exclude_forum and forum and str(forum) == str(exclude_forum):
         return True
@@ -40,13 +72,21 @@ def packet(
     exclude_forum="",
     exclude_arxiv="",
     exclude_title="",
+    target_year=None,
 ):
     query = terms(target)
     items = []
     for example in bank:
         if "target" not in example:
             continue
-        if _blocked(example, exclude_key, exclude_forum, exclude_arxiv, exclude_title):
+        if _blocked(
+            example,
+            exclude_key,
+            exclude_forum,
+            exclude_arxiv,
+            exclude_title,
+            target_year,
+        ):
             continue
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:
@@ -93,16 +133,21 @@ def packet(
             "ab", sorted((a, b), key=lambda x: digest(["order", x["key"]])), strict=True
         ):
             alias = f"pair{n}{s}"
+            proposal = {}
+            for key, value in d["proposal"].items():
+                if (
+                    not value
+                    or key
+                    not in ("problem", "mechanism", "prior_alternatives", "intended_value")
+                ):
+                    continue
+                text = filter_conclusion_sentences(value) if isinstance(value, str) else ""
+                if text:
+                    proposal[key] = text[:430]
             examples[alias] = {
-                "proposal": {
-                    k: v[:430]
-                    for k, v in d["proposal"].items()
-                    if v
-                    and k
-                    in ("problem", "mechanism", "prior_alternatives", "intended_value")
-                },
+                "proposal": proposal,
                 "prospective_grade": round(d["target"], 2),
-                "reviewer_excerpts": d["opinions"],
+                "reviewer_excerpts": _excerpts(d.get("opinions")),
             }
             scores[alias] = d["target"]
     return {"target": target, "examples": examples}, scores

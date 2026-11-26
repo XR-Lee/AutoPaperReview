@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .data import digest, read, write
+from .data import digest, prospective_comments, read, write
 from .stages import PROMPTS, audit_packet, invoke, proposal_text, validate
 
 
@@ -25,7 +25,7 @@ def run_batch(
         bundle = root / "inputs" / case["bundle"]
         target = root / "runs" / case["key"]
         if stage in ("label", "audit"):
-            packet = read(bundle / "comments.json")
+            packet = prospective_comments(read(bundle / "comments.json"))
             if stage == "audit":
                 packet = audit_packet(
                     stage_result(root, case, "label")["output"], packet
@@ -73,11 +73,12 @@ def stage_result(root, case, stage):
         source = proposal_text(stage_result(root, case, "compress")["output"])
     elif stage == "audit":
         source = audit_packet(
-            stage_result(root, case, "label")["output"], read(bundle / "comments.json")
+            stage_result(root, case, "label")["output"],
+            prospective_comments(read(bundle / "comments.json")),
         )
     else:
-        source = read(
-            bundle / ("candidate.json" if stage == "compress" else "comments.json")
+        source = read(bundle / "candidate.json") if stage == "compress" else prospective_comments(
+            read(bundle / "comments.json")
         )
     req = entry["request"]
     if (

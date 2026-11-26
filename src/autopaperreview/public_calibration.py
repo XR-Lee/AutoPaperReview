@@ -368,6 +368,26 @@ def parse_rating(value: Any, *, scale: RatingScale | None = None) -> int | None:
     return number
 
 
+def _review_order(note: dict[str, Any]) -> tuple[int, str]:
+    """Sort key for the review that supplies the official score.
+
+    A missing or non-numeric timestamp loses to any integer timestamp. Equal
+    timestamps break ties on the note id, so the chosen score does not depend
+    on input order.
+    """
+    raw = note.get("tmdate")
+    stamp = -1
+    if type(raw) is int:
+        stamp = raw
+    elif type(raw) is float and raw == raw and raw not in (float("inf"), float("-inf")):
+        whole = int(raw)
+        if whole == raw:
+            stamp = whole
+    elif isinstance(raw, str) and raw.strip().lstrip("-").isdigit():
+        stamp = int(raw.strip())
+    return (stamp, str(note.get("id") or ""))
+
+
 def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best: dict[tuple[str, ...], dict[str, Any]] = {}
     for note in notes:
@@ -375,7 +395,7 @@ def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         signatures = tuple(str(item) for item in (note.get("signatures") or [note.get("id")]))
         current = best.get(signatures)
-        if current is None or int(note.get("tmdate") or 0) >= int(current.get("tmdate") or 0):
+        if current is None or _review_order(note) > _review_order(current):
             best[signatures] = note
     return list(best.values())
 

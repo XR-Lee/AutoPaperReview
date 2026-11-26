@@ -123,9 +123,19 @@ def scale_for_key(key: str | None) -> RatingScale:
 
 
 def scale_for_year(year: int | None, *, venue: str = "ICLR") -> RatingScale:
-    """Discrete scale for a known ICLR year, otherwise the explicit 0–10 range."""
+    """Discrete scale for a known ICLR year, otherwise the explicit 0–10 range.
+
+    ``None`` stays on the generic range. Zero and negative years are not venue
+    years, so they fail instead of falling through to that range. An
+    unregistered positive year, such as 2027, still uses the generic range.
+    """
+    if year is not None:
+        if type(year) is not int:
+            raise ValueError("year must be an integer venue year")
+        if year < 1:
+            raise ValueError("year must be a positive venue year")
     if venue.upper() == "ICLR" and year is not None:
-        key = f"iclr{int(year)}"
+        key = f"iclr{year}"
         registered = registered_scales()
         if key in registered:
             return registered[key]

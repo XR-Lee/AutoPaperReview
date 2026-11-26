@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Regenerate the published proposal-rank headlines, or score a supplied cohort.
 
-With no arguments, this reads ``benchmarks/proposal/repro/`` and prints the
-fixed100, confirm100, replications199, top-20%, and 84-NLP numbers with their
-intervals. Those numbers are reproduced from committed artifacts. The script
-does not download papers and it does not call a model.
+With no arguments, this prints the committed headline aggregates. Set
+``APR_PROPOSAL_REPRO_DIR`` (or pass ``--root``) to recompute them from
+per-paper rows kept outside git. The script does not download papers and it
+does not call a model.
 
 ``--manifest``, ``--predictions``, and ``--references`` score a different
 locked cohort of any size through ``evaluate-rank``.
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -28,7 +29,10 @@ from autopaperreview.proposal.cohort import (  # noqa: E402
 from autopaperreview.proposal.data import read  # noqa: E402
 from autopaperreview.proposal.fixed_benchmark import evaluate_fixed  # noqa: E402
 from autopaperreview.proposal.repro_metrics import (  # noqa: E402
+    EXTERNAL_DIR_ENV,
     PUBLISHED,
+    committed_aggregates,
+    headlines_match,
     reproduce_headlines,
 )
 
@@ -39,7 +43,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--predictions", type=Path)
     parser.add_argument("--references", type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--root", type=Path, default=ROOT / "benchmarks" / "proposal" / "repro")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help=f"external per-paper directory (default: ${EXTERNAL_DIR_ENV})",
+    )
     parser.add_argument("--bootstrap", type=int, default=0)
     parser.add_argument("--stratified-draws", type=int, default=3000)
     args = parser.parse_args(argv)
@@ -66,16 +75,31 @@ def main(argv: list[str] | None = None) -> int:
             stratified_draws=args.stratified_draws,
         )
     else:
-        try:
-            result = reproduce_headlines(args.root)
-        except (FileNotFoundError, RuntimeError) as exc:
-            print(str(exc), file=sys.stderr)
-            print(
-                "The fixed100, confirm100, replications199, top-20%, and 84-NLP "
-                f"headline numbers are {PUBLISHED}.",
-                file=sys.stderr,
-            )
-            return 2
+        external = args.root
+        if external is None and os.environ.get(EXTERNAL_DIR_ENV):
+            external = Path(os.environ[EXTERNAL_DIR_ENV])
+        if external is None:
+            result = committed_aggregates()
+        else:
+            try:
+                result = reproduce_headlines(external)
+            except (FileNotFoundError, RuntimeError) as exc:
+                print(str(exc), file=sys.stderr)
+                print(
+                    "Per-paper rows are not in the repository. "
+                    f"Set {EXTERNAL_DIR_ENV} to a directory outside git. "
+                    f"The headline numbers are {PUBLISHED}.",
+                    file=sys.stderr,
+                )
+                return 2
+            if not headlines_match(result):
+                print(
+                    "recomputed headlines differ from the committed aggregates",
+                    file=sys.stderr,
+                )
+                text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+                sys.stdout.write(text)
+                return 1
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

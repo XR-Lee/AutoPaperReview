@@ -1,15 +1,23 @@
-"""Regenerate the published proposal-rank headlines from committed artifacts.
+"""Regenerate the published proposal-rank headlines from an external directory.
 
-The row files live in ``benchmarks/proposal/repro/``. Review quotes, proposal
-plans, and OpenReview forum URLs are not in those files. The intervals match
-the original resampling: final-score tiers with a numpy Generator, and the
-84-proposal draw with ``random.Random``. This module does not download papers
-and it does not call a model.
+Per-paper rows are not in git. Set ``APR_PROPOSAL_REPRO_DIR`` to a directory
+outside the repository. ``benchmarks/proposal/repro/aggregates.json`` holds the
+headline numbers, and ``external-sha256.json`` holds the checksums of the row
+files. The intervals match the original resampling: final-score tiers with a
+numpy Generator, and the 84-proposal draw with ``random.Random`` (2000 draws,
+not the 3000-draw tier bootstrap). This module does not download papers and
+it does not call a model.
 """
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import hmac
+import io
+import json
 import math
+import os
 from itertools import combinations
 from pathlib import Path
 from random import Random
@@ -20,25 +28,77 @@ from ..public_calibration import roc_auc, spearman
 from .data import read
 from .fixed_benchmark import evaluate_fixed
 
-PUBLISHED = "reproduced from committed artifacts"
+PUBLISHED = "headline aggregates are committed; per-paper rows stay outside git"
+EXTERNAL_DIR_ENV = "APR_PROPOSAL_REPRO_DIR"
+SALT_ENV = "APR_PROPOSAL_REPRO_SALT"
 TIER_DRAWS = 3000
 TIER_SEEDS = {"fixed": 241125, "fresh": 241126, "replications": 241127}
 NLP_SEED = 11752
 NLP_DRAWS = 2000
 NLP_THRESHOLD = 6.625
+_HEADLINE_FIELDS = ("n", "decision_n", "rho", "auc")
 
 
-def default_root() -> Path:
+def repo_repro_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "benchmarks" / "proposal" / "repro"
 
 
+def external_root() -> Path | None:
+    """Directory of per-paper rows, or None when the environment variable is unset."""
+    raw = os.environ.get(EXTERNAL_DIR_ENV)
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def committed_aggregates() -> dict[str, Any]:
+    return json.loads((repo_repro_dir() / "aggregates.json").read_text(encoding="utf-8"))
+
+
+def identifier_key(identifier: str, salt: str) -> str:
+    """HMAC-SHA256 of one identifier. The salt is not stored in git."""
+    if not isinstance(salt, str) or not salt:
+        raise ValueError("HMAC salt must be a non-empty string and must not be committed")
+    return hmac.new(
+        salt.encode("utf-8"), identifier.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def normalize_table(text: str) -> list[list[str]]:
+    """Read a CSV or TSV with CR LF or LF, and strip each cell."""
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
+    return [
+        [cell.strip() for cell in row]
+        for row in csv.reader(io.StringIO(cleaned))
+        if any(cell.strip() for cell in row)
+    ]
+
+
+def verify_external_files(folder: Path) -> None:
+    listed = json.loads((repo_repro_dir() / "external-sha256.json").read_text(encoding="utf-8"))
+    files = listed.get("files")
+    if not isinstance(files, dict) or not files:
+        raise RuntimeError("external-sha256.json has no file checksums")
+    for name, expected in files.items():
+        path = folder / name
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"external proposal rows were not found under {folder} (missing {name})"
+            )
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != expected:
+            raise RuntimeError(f"external proposal file does not match the committed sha256: {name}")
+
+
 def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
-    """Score the committed cohorts and return the published point estimates and intervals."""
-    folder = default_root() if root is None else Path(root)
-    if not (folder / "fixed100" / "fixed-predictions.json").is_file():
+    """Score the external cohorts and return the published point estimates and intervals."""
+    folder = external_root() if root is None else Path(root)
+    if folder is None or not (folder / "fixed100" / "fixed-predictions.json").is_file():
         raise FileNotFoundError(
-            f"committed proposal artifacts were not found under {folder}"
+            "external proposal rows were not found. "
+            f"Set {EXTERNAL_DIR_ENV} to a directory outside git."
         )
+    verify_external_files(folder)
     numpy = _numpy()
     fixed = _iclr_cohort(
         folder / "fixed100",
@@ -56,11 +116,42 @@ def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
     nlp = _nlp_cohort(folder / "nlp84")
     return {
         "published_headlines": PUBLISHED,
+        "recomputed": True,
         "fixed100": fixed,
         "confirm100": fresh,
         "replications199": replications,
         "nlp84": nlp,
     }
+
+
+def headlines_match(recomputed: dict[str, Any], committed: dict[str, Any] | None = None) -> bool:
+    """True when the external recompute agrees with the committed aggregates."""
+    expected = committed_aggregates() if committed is None else committed
+    for name in ("fixed100", "confirm100", "replications199"):
+        got = recomputed[name]
+        want = expected[name]
+        for field in _HEADLINE_FIELDS:
+            if abs(float(got[field]) - float(want[field])) > 1e-6:
+                return False
+        if abs(got["rho_ci95"][0] - want["rho_ci95"][0]) > 1e-6:
+            return False
+        if abs(got["rho_ci95"][1] - want["rho_ci95"][1]) > 1e-6:
+            return False
+        if got["top20"]["included_positive_range"] != want["top20"]["included_positive_range"]:
+            return False
+        if abs(got["top20"]["random_expected"] - want["top20"]["random_expected"]) > 1e-6:
+            return False
+    if recomputed["replications199"]["enrolled"] != expected["replications199"]["enrolled"]:
+        return False
+    got_nlp = recomputed["nlp84"]
+    want_nlp = expected["nlp84"]
+    for field in ("n", "rho", "auc", "same_topic_comparable_pairs", "same_topic_concordance"):
+        if abs(float(got_nlp[field]) - float(want_nlp[field])) > 1e-6:
+            return False
+    for field in ("rho_ci95", "auc_ci95"):
+        if abs(got_nlp[field][0] - want_nlp[field][0]) > 1e-6 or abs(got_nlp[field][1] - want_nlp[field][1]) > 1e-6:
+            return False
+    return True
 
 
 def _numpy():
@@ -254,7 +345,10 @@ def _top_fifth(scores, positive, numpy) -> dict[str, Any]:
 
 
 def _nlp_cohort(folder: Path) -> dict[str, Any]:
-    rows = read(folder / "deployed-external-rows.json")
+    return nlp_from_rows(read(folder / "deployed-external-rows.json"))
+
+
+def nlp_from_rows(rows: list[dict]) -> dict[str, Any]:
     overall = [row["overall"] for row in rows]
     human = [row["human"] for row in rows]
     labels = [int(value >= NLP_THRESHOLD) for value in human]

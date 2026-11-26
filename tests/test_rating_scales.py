@@ -61,6 +61,11 @@ class RatingScaleTests(unittest.TestCase):
         self.assertEqual(caught.exception.parsed, 2)
         self.assertIn("5", caught.exception.off_scale_tokens if hasattr(caught.exception, "off_scale_tokens") else str(caught.exception))
 
+    def test_nonpositive_years_do_not_use_the_generic_range(self) -> None:
+        for year in (0, -1):
+            with self.assertRaisesRegex(ValueError, "positive venue year"):
+                scale_for_year(year)
+
     def test_unregistered_year_uses_the_explicit_range(self) -> None:
         scale = scale_for_year(2027)
         self.assertIsNone(scale.values)

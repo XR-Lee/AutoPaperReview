@@ -1,6 +1,6 @@
 # Proposal-rank cohort schema
 
-The fixed100, confirm100, replications199, top-20%, and 84-NLP headline numbers are reproduced from committed artifacts in [benchmarks/proposal/repro](../proposal/repro/README.md).
+The fixed100, confirm100, replications199, top-20%, and 84-NLP headline numbers are committed aggregates. Per-paper rows stay outside git. See [benchmarks/proposal/repro](../proposal/repro/README.md).
 
 This directory holds the schema for a locked cohort. A manifest lists forum ids and the SHA-256 of the sorted test ids. Predictions are one overall score per forum. References are the coded prospective mean, the official final mean, and an optional accept bit. Do not add private holdout ids, review text, or manuscript text.
 

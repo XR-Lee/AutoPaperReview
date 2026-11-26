@@ -21,12 +21,33 @@ def norm_title(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
+# Without a target year, a sentinel this large is not treated as prior work.
+_FUTURE_YEAR = 2099
+
+
 def norm_arxiv(value: str) -> str:
     text = (value or "").strip().lower()
-    text = re.sub(r"^https?://arxiv\.org/(?:abs|pdf)/", "", text)
+    text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    text = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/", "", text)
     text = re.sub(r"^arxiv:", "", text)
     text = re.sub(r"\.pdf$", "", text)
     return re.sub(r"v\d+$", "", text)
+
+
+def _whole_int(value: object) -> int | None:
+    if type(value) is int:
+        return value
+    if type(value) is float and value == value and value not in (float("inf"), float("-inf")):
+        whole = int(value)
+        return whole if whole == value else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lstrip("-").isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
+    return None
 
 
 def _connect(db, *, readonly=False):
@@ -93,9 +114,15 @@ def _blocked_hit(
         or target_arxiv in f"{title} {abstract} {forum}".lower()
     ):
         return True
-    if target_year is not None and int(year) >= int(target_year):
+    year_i = _whole_int(year)
+    rev_i = _whole_int(rev)
+    if year_i is None or year_i < 1 or rev_i is None:
         return True
-    if cutoff_ms is not None and int(rev) >= int(cutoff_ms):
+    if target_year is None and year_i >= _FUTURE_YEAR:
+        return True
+    if target_year is not None and year_i >= int(target_year):
+        return True
+    if cutoff_ms is not None and rev_i >= int(cutoff_ms):
         return True
     return False
 
@@ -136,12 +163,22 @@ def retrieve(
         if exclude_forum and "forum" in columns:
             filters.append("ifnull(forum, '') != ?")
             params.append(str(exclude_forum))
-        if target_year is not None and "year" in columns:
-            filters.append("CAST(year AS INTEGER) < ?")
-            params.append(int(target_year))
-        if cutoff_ms is not None and "revision" in columns:
-            filters.append("CAST(revision AS INTEGER) < ?")
-            params.append(int(cutoff_ms))
+        if "year" in columns:
+            if target_year is not None:
+                filters.append("CAST(year AS INTEGER) > 0 AND CAST(year AS INTEGER) < ?")
+                params.append(int(target_year))
+            else:
+                filters.append(
+                    f"CAST(year AS INTEGER) > 0 AND CAST(year AS INTEGER) < {_FUTURE_YEAR}"
+                )
+        if "revision" in columns:
+            filters.append(
+                "(typeof(revision) = 'integer' OR "
+                "(typeof(revision) = 'text' AND revision GLOB '[0-9]*'))"
+            )
+            if cutoff_ms is not None:
+                filters.append("CAST(revision AS INTEGER) < ?")
+                params.append(int(cutoff_ms))
         selected = "title, abstract, year, revision, forum"
         if has_arxiv:
             selected += ", arxiv"
@@ -177,13 +214,17 @@ def retrieve(
             ):
                 continue
             # Venue outcome, reviewer comments and paper identity of the target are not fields in the critic packet.
+            year_i = _whole_int(year)
+            rev_i = _whole_int(rev)
+            if year_i is None or rev_i is None:
+                continue
             picked.append(
                 {
                     "title": title,
                     "abstract": abstract[:2400],
-                    "year": int(year),
+                    "year": year_i,
                     "forum": forum,
-                    "revision_ms": int(rev),
+                    "revision_ms": rev_i,
                 }
             )
             if len(picked) == limit:

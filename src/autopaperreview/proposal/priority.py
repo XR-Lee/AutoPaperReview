@@ -133,14 +133,24 @@ def rank(
         raise ValueError("empty proposal")
     from .data import reported_result
 
+    def _has_reported(doc):
+        return isinstance(doc, dict) and any(
+            isinstance(value, str) and value and reported_result(value) for value in doc.values()
+        )
+
+    def _cleared(field, doc):
+        return bool(screen_receipt) and screen_receipt.get(field) == digest(doc)
+
     # Main, fallback, and legacy packets can each be the text a stage sends.
     # A screen receipt does not clear a rating, decision, award, or identity.
+    # Reported results in the legacy packet are checked even when no stage
+    # selects that packet, and a receipt for the main packet does not cover it.
     assert_no_label_leak(packet, where="proposal")
     if legacy is not None:
         assert_no_label_leak(legacy, where="fallback proposal")
-    if any(reported_result(v) for v in packet.values() if v) and (
-        not screen_receipt or screen_receipt.get("cleared_packet") != digest(packet)
-    ):
+    if _has_reported(packet) and not _cleared("cleared_packet", packet):
+        raise ValueError("remove reported outcomes before ranking")
+    if _has_reported(legacy) and not _cleared("cleared_legacy", legacy):
         raise ValueError("remove reported outcomes before ranking")
     scores = {}
     judgments = {}
@@ -195,6 +205,7 @@ def rank(
                 exclude_forum=forum,
                 exclude_arxiv=arxiv,
                 exclude_title=title,
+                target_year=year,
             )
         elif stage == "forecast":
             source = legacy or packet
@@ -365,7 +376,10 @@ def screen_rank_inputs(packet, legacy, root, profile, *, cached_only=False, prov
     if legacy is not None and any(
         stage_for_feature(name) == "forecast" for name in profile["ranker"]["names"]
     ):
-        legacy, evidence["short_proposal"] = screen_packet(legacy, root, **options)
+        legacy, legacy_audit = screen_packet(legacy, root, **options)
+        evidence["short_proposal"] = legacy_audit
+        if legacy_audit.get("cleared_packet"):
+            evidence["proposal"]["cleared_legacy"] = legacy_audit["cleared_packet"]
         assessable = assessable and any(legacy.values())
     return packet, legacy, evidence, assessable
 

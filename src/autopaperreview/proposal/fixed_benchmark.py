@@ -14,6 +14,45 @@ from .priority import add_screen_provider, load_profile, rank, screen_rank_input
 from .stages import invoke
 
 
+def _present(source, field):
+    if field not in source:
+        return None
+    value = source[field]
+    if value in (None, ""):
+        return None
+    return value
+
+
+def _locked(case, row, dest, fields):
+    locked = None
+    for field in fields:
+        value = _present(case, field)
+        if value is None:
+            continue
+        if locked is not None and value != locked:
+            raise ValueError(f"cohort lock has conflicting {dest}")
+        locked = value
+    supplied = None
+    for field in fields:
+        value = _present(row, field)
+        if value is None:
+            continue
+        if supplied is not None and value != supplied:
+            raise ValueError(f"proposal has conflicting {dest}")
+        supplied = value
+    if locked is not None and supplied is not None and supplied != locked:
+        raise ValueError(f"{dest} on the proposal disagrees with the cohort lock")
+    if locked is None and supplied is not None:
+        raise ValueError(f"{dest} must be set on the cohort lock")
+    if locked is None:
+        return None
+    if dest == "year" and (type(locked) is not int or locked < 1):
+        raise ValueError("year must be a positive integer venue year")
+    if dest == "cutoff_ms" and type(locked) is not int:
+        raise ValueError("cutoff_ms must be an integer millisecond timestamp")
+    return locked
+
+
 def index(rows, field):
     if not isinstance(rows, list):
         raise TypeError("expected a list of records")
@@ -51,7 +90,8 @@ def evaluate_fixed(
     bootstrap=2000,
     stratified_draws=STRATIFIED_DRAWS,
 ):
-    test = set(cohort_cases(manifest))
+    cases = cohort_cases(manifest)
+    test = set(cases)
     pred = index(predictions, "forum")
     gold = index(references, "forum")
     if set(pred) != test or set(gold) != test:
@@ -72,6 +112,13 @@ def evaluate_fixed(
         if accept is not None and accept not in (0, 1):
             raise ValueError("incomplete reference")
         require_official_mean(rating, scale_for_reference(g))
+        case = cases[fid]
+        if (
+            type(case.get("year")) is int
+            and type(g.get("year")) is int
+            and case["year"] != g["year"]
+        ):
+            raise ValueError("reference year disagrees with the cohort lock")
         row = {
             "key": fid,
             "target": target,
@@ -171,26 +218,25 @@ def blind_inputs(manifest, proposals):
             if "short_proposal" in row
             else None,
         }
+        # The cohort lock wins. A row may repeat the locked year or cutoff,
+        # but it cannot replace them or introduce one the lock did not set.
+        for dest, fields in (
+            ("year", ("year",)),
+            ("cutoff_ms", ("cutoff_ms", "submission_ms")),
+        ):
+            metadata[dest] = _locked(case, row, dest, fields)
+            if metadata[dest] is None:
+                del metadata[dest]
         for source, field, dest in (
-            (row, "year", "year"),
-            (case, "year", "year"),
             (row, "arxiv", "arxiv"),
             (row, "arxiv_id", "arxiv"),
             (case, "arxiv", "arxiv"),
             (case, "arxiv_id", "arxiv"),
-            (row, "cutoff_ms", "cutoff_ms"),
-            (case, "cutoff_ms", "cutoff_ms"),
-            (row, "submission_ms", "cutoff_ms"),
-            (case, "submission_ms", "cutoff_ms"),
         ):
             if dest in metadata or field not in source or source[field] in (None, ""):
                 continue
             value = source[field]
-            if dest == "year" and type(value) is not int:
-                raise ValueError("year must be an integer venue year")
-            if dest == "cutoff_ms" and type(value) is not int:
-                raise ValueError("cutoff_ms must be an integer millisecond timestamp")
-            if dest == "arxiv" and not isinstance(value, str):
+            if not isinstance(value, str):
                 raise ValueError("arxiv must be a string")
             metadata[dest] = value
         inputs.append((fid, text_packet(row["proposal"]), metadata))
