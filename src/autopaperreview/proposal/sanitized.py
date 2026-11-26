@@ -549,6 +549,10 @@ def factual_leak(text: str, *, key: bool = False) -> bool:
     decoded, has_override = _decode(text)
     if has_override:
         return True
+    # Horizontal space is collapsed before the other checks. A tab or a run of
+    # spaces is still a label-value binding, so the record split sees it first.
+    if _record_has_fact(decoded):
+        return True
     for plain in _fact_texts(decoded):
         if _explicit_construct(plain) or _has_signature(plain):
             return True
@@ -1062,8 +1066,12 @@ def _pair_is_fact(label_cell: str, value_cell: str) -> bool:
 
     A bare score next to a decimal, or a score named by a scientific measure,
     stays a measurement. A review qualifier or an integer next to a bare score
-    does not.
+    does not. A scientific compound such as a decision boundary stays a
+    measurement on every separator, including a colon.
     """
+    if _scientific_text(label_cell) and not _review_owner(label_cell):
+        if not (set(_content_tokens(label_cell)) & (_SCORE_QUALIFIERS | _LABEL_QUALIFIERS)):
+            return False
     label = _cell_label(label_cell)
     if not label:
         return False
@@ -1251,15 +1259,271 @@ def _latex_bound_fact(text: str) -> bool:
     return False
 
 
+# Status is a field role, not a list of outcome phrases. Ambiguous heads such as
+# ``state``, ``phase``, and ``decision`` need a review owner before a short value
+# is treated as a review status. ``status`` / ``estado`` / ``状态`` do not.
+_STATUS_ROLE_TOKENS = frozenset({
+    "status", "statuses", "estado", "situacion", "tramite", "seguimiento",
+    "状态", "进度", "流程",
+})
+_AMBIGUOUS_STATUS_HEADS = frozenset({
+    "state", "states", "phase", "phases", "stage", "stages", "meta",
+    "result", "results", "review", "reviews", "decision", "decisions",
+    "verdict", "verdicts", "outcome", "outcomes", "recommendation",
+    "recommendations", "disposition", "resolution", "progress", "workflow",
+    "fase", "etapa", "决定", "结论", "结果", "阶段", "建议", "推荐",
+})
+_REVIEW_OWNERS = frozenset({
+    "review", "reviews", "reviewer", "reviewers", "manuscript", "submission",
+    "editorial", "meta", "chair", "referee", "editor", "paper", "article",
+})
+_SCIENTIFIC_CONTEXT = frozenset({
+    "boundary", "boundaries", "vector", "vectors", "transition", "transitions",
+    "tree", "trees", "variable", "variables", "function", "functions",
+    "latent", "hidden", "steady", "ground", "diagram", "matrix", "matrices",
+    "process", "processes", "machine", "machines", "space", "spaces",
+    "equation", "equations", "distribution", "distributions",
+})
+_CJK_SCIENTIFIC = ("空间", "向量", "方程", "分布", "边界", "转移", "隐变量", "潜变量", "梯度", "损失", "误差")
+_CLAUSE_VERBS = frozenset({
+    "is", "was", "are", "were", "be", "been", "has", "have", "had",
+})
+_CJK_GLUE_MARKS = tuple(sorted(
+    set(_CJK_STATUS_MARK) | set(_CJK_IDENTITY_MARK) | set(_CJK_SCORE_MARK),
+    key=len,
+    reverse=True,
+))
+
+
+def _content_tokens(text: str) -> list[str]:
+    return [token for token in _construct_tokens(_clean_cell(text)) if token not in _CONTENT_SKIP]
+
+
+def _token_is_status_role(token: str) -> bool:
+    """A status field, including one glued to another word. Not an outcome phrase."""
+    if token in _STATUS_ROLE_TOKENS or _cjk_kind(token) == "status":
+        return True
+    folded = token.casefold()
+    if any(folded.startswith(stem) and len(folded) >= len(stem) + 4 for stem in ("status", "estado")):
+        return True
+    return folded.endswith("status") and len(folded) >= len("status") + 3
+
+
+def _review_owner(text: str) -> bool:
+    if set(_content_tokens(text)) & _REVIEW_OWNERS:
+        return True
+    raw = _clean_cell(text)
+    return any(mark in raw for mark in ("审稿", "评审", "投稿", "稿件", "本稿", "本文", "论文"))
+
+
+def _scientific_text(text: str) -> bool:
+    tokens = set(_content_tokens(text))
+    if tokens & (_RANGE_METRICS | _SCIENTIFIC_MEASURES | _SCIENTIFIC_CONTEXT):
+        return True
+    raw = _clean_cell(text)
+    return any(mark in raw for mark in _CJK_SCIENTIFIC)
+
+
+def _label_shaped(text: str) -> bool:
+    if not text or len(text) > 80:
+        return False
+    tokens = _content_tokens(text)
+    if not tokens or len(tokens) > 8:
+        return False
+    return not any(token in _CLAUSE_VERBS or token in _STATUS_MODALS for token in tokens)
+
+
+def _measurement_value(value: str) -> bool:
+    folded = _clean_cell(value)
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?%?", folded):
+        return True
+    tokens = _content_tokens(value)
+    if tokens and all(
+        _is_number(token) or token in _RANGE_MARKS or token in {"%", "/", "±"}
+        for token in tokens
+    ):
+        return True
+    return _numeric_range_tokens(_construct_tokens(folded))
+
+
+def _short_category(value: str) -> bool:
+    """A non-sentence value. The words themselves are not looked up."""
+    if not value or len(_clean_cell(value)) > 80 or _measurement_value(value):
+        return False
+    tokens = _content_tokens(value)
+    if not tokens or len(tokens) > 6:
+        return False
+    if any(token in _STATUS_MODALS or token in _CLAUSE_VERBS for token in tokens):
+        return False
+    if len(tokens) == 1 and _token_is_status_role(tokens[0]):
+        return False
+    return not _scientific_text(value)
+
+
+def _status_role(text: str) -> bool:
+    if _scientific_text(text) and not _review_owner(text):
+        return False
+    tokens = _content_tokens(text)
+    if any(_token_is_status_role(token) for token in tokens):
+        return True
+    return _review_owner(text) and any(
+        token in _AMBIGUOUS_STATUS_HEADS or "status" in _label_kinds(token)
+        for token in tokens
+    )
+
+
+def _status_value(value: str) -> bool:
+    return _short_category(value)
+
+
+def _binding_word(char: str, prev: str, nxt: str) -> bool:
+    if char.isalnum() or "\u3400" <= char <= "\u9fff" or "\u3040" <= char <= "\u30ff" or "\uac00" <= char <= "\ud7af":
+        return True
+    if char in "'’":
+        return True
+    if char in "-‐‑‒–—－" and prev.isalnum() and nxt.isalnum():
+        return True
+    # Underscore joins an identifier. It is not the boundary between a field and a value.
+    if char == "_" and (prev.isalnum() or "\u3400" <= prev <= "\u9fff") and (
+        nxt.isalnum() or "\u3400" <= nxt <= "\u9fff"
+    ):
+        return True
+    if char == "." and prev.isdigit() and nxt.isdigit():
+        return True
+    return char == "%" and prev.isdigit()
+
+
+def _unglue(text: str) -> str:
+    """Split camel case and script changes. The inserted break is just a separator."""
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "\n", text)
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "\n", text)
+    text = re.sub(r"(?<=[A-Za-z])(?=[\u3400-\u9fff])", "\n", text)
+    text = re.sub(r"(?<=[\u3400-\u9fff])(?=[A-Za-z0-9])", "\n", text)
+    return text
+
+
+def _binding_pieces(text: str) -> list[str]:
+    """Split on any separator run. A single space stays inside a label or a value.
+
+    A newline, a tab, two spaces, or any symbol is a binding, so the same
+    splitter reads a comment, a footnote, a table, a brace, or an unknown mark.
+    """
+    chars = list(text)
+    pieces: list[str] = []
+    buf: list[str] = []
+    sep_bind = False
+    sep_len = 0
+    count = len(chars)
+
+    def flush_sep() -> None:
+        nonlocal sep_bind, sep_len
+        if sep_bind or sep_len >= 2:
+            piece = "".join(buf).strip()
+            if piece:
+                pieces.append(piece)
+            buf.clear()
+        elif sep_len == 1:
+            buf.append(" ")
+        sep_bind = False
+        sep_len = 0
+
+    for index, char in enumerate(chars):
+        prev = chars[index - 1] if index else ""
+        nxt = chars[index + 1] if index + 1 < count else ""
+        if _binding_word(char, prev, nxt):
+            if sep_len:
+                flush_sep()
+            buf.append(char)
+            continue
+        sep_len += 1
+        if char in "\n\t" or not char.isspace():
+            sep_bind = True
+    if sep_len:
+        flush_sep()
+    elif buf:
+        piece = "".join(buf).strip()
+        if piece:
+            pieces.append(piece)
+    return pieces
+
+
+def _cjk_glued_pairs(piece: str) -> list[tuple[str, str]]:
+    if not any("\u3400" <= char <= "\u9fff" for char in piece):
+        return []
+    for mark in _CJK_GLUE_MARKS:
+        start = piece.find(mark)
+        if start < 0:
+            continue
+        tail = piece[start + len(mark):].strip()
+        head = piece[:start + len(mark)].strip()
+        if head and tail:
+            return [(head, tail)]
+    return []
+
+
+def _glued_role_pair(piece: str) -> tuple[str, str] | None:
+    """A status stem glued to a short remainder is one field, not one word."""
+    if not piece.isascii() or not piece.isalpha():
+        return None
+    folded = piece.casefold()
+    for stem in ("status", "estado"):
+        if not folded.startswith(stem) or len(folded) < len(stem) + 4:
+            continue
+        remainder = folded[len(stem):]
+        # ``estado_del_arte`` loses its underscores in the markup pass and
+        # would otherwise look like one glued status value.
+        if stem == "estado" and remainder.startswith("del"):
+            continue
+        return piece[:len(stem)], piece[len(stem):]
+    return None
+
+
+def _record_pairs(text: str) -> list[tuple[str, str]]:
+    pieces = _binding_pieces(_unglue(text))
+    pairs: list[tuple[str, str]] = []
+    for index, left in enumerate(pieces):
+        pairs.extend(_cjk_glued_pairs(left))
+        glued = _glued_role_pair(left)
+        if glued is not None:
+            pairs.append(glued)
+        if index + 1 < len(pieces):
+            pairs.append((left, pieces[index + 1]))
+    return pairs
+
+
+def _normalized_pair_is_fact(left: str, right: str) -> bool:
+    """Classify one normalized label and value.
+
+    A status field blocks a short category without consulting an outcome list.
+    A scientific compound, a metric quantity, or a prose clause does not.
+    """
+    if not _label_shaped(left) or not str(right).strip():
+        return False
+    scientific = _scientific_text(left) and not _review_owner(left)
+    qualified = bool(set(_content_tokens(left)) & (_SCORE_QUALIFIERS | _LABEL_QUALIFIERS))
+    if scientific and not qualified:
+        return False
+    if _status_role(left) and _status_value(right):
+        return True
+    return _pair_is_fact(left, right)
+
+
+def _record_has_fact(text: str) -> bool:
+    return any(_normalized_pair_is_fact(left, right) for left, right in _record_pairs(text))
+
+
 def _explicit_construct(text: str) -> bool:
     """Submission status, total score, score range, or inline preprint authorship.
 
     The decision is the shape of the normalized tokens. A following content word
     keeps ``accepted practice`` and ``acceptance rate`` scientific, and a metric
-    named ``similarity score`` is not an overall rating.
+    named ``similarity score`` is not an overall rating. Any label-value record
+    is split before that classification, independent of the separator or wrapper.
     """
     if not text:
         return False
+    if _record_has_fact(text):
+        return True
     tokens = _construct_tokens(text)
     planned = any(word in _PLAN_CUES or word.startswith("计划") for word in tokens) or "计划" in text
     if _CJK_RANGE.search(text) and not planned:

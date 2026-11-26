@@ -84,10 +84,20 @@ def run_batch(
 
 
 def stage_result(root, case, stage):
+    message = f"stale {stage} result; rerun this stage"
     ptr = read(root / "runs" / case["key"] / (stage + ".json"))
-    if ptr["bundle"] != case["bundle"]:
+    # A JSON array, string, or number is not a pointer. Raise a stale result
+    # instead of indexing it.
+    if not isinstance(ptr, dict):
+        raise ValueError(message)
+    if ptr.get("bundle") != case["bundle"]:
         raise ValueError(f"{stage} from a different input bundle")
-    entry = read(root / ptr["cache"])
+    cache = ptr.get("cache")
+    if not isinstance(cache, str) or not cache:
+        raise ValueError(message)
+    entry = read(root / cache)
+    if not isinstance(entry, dict):
+        raise ValueError(message)
     bundle = root / "inputs" / case["bundle"]
     spans = None
     if stage in ("review", "forecast"):
@@ -102,7 +112,6 @@ def stage_result(root, case, stage):
             read(bundle / "comments.json")
         )
     req = entry.get("request")
-    message = f"stale {stage} result; rerun this stage"
     if not isinstance(req, dict):
         raise ValueError(message)
     # The pointer records the model and command used for this run. A pointer

@@ -382,8 +382,12 @@ def _usage(values):
     return True
 
 
-def _validate_result(value):
+def _validate_result(value, *, allow_object_result=False):
     safety_stops = value.get("safety_stops", 0)
+    result = value.get("result")
+    # History accepts the relation object or the JSON string of that object.
+    # Leak audit keeps the string requirement.
+    result_ok = isinstance(result, str) or (allow_object_result and isinstance(result, dict))
     if (
         set(value) - _RESULT_FIELDS
         or value.get("is_error", False) is not False
@@ -398,7 +402,7 @@ def _validate_result(value):
         or ("subagent_stats" in value and not same_model_value(value.get("subagent_stats"), _EMPTY_SUBAGENT_STATS))
         or value.get("fast_mode_state") not in (None, "off", "cooldown", "on")
         or value.get("fast_mode_disabled_reason") not in _FAST_MODE_REASONS
-        or not isinstance(value.get("result"), str)
+        or not result_ok
     ):
         raise ValueError("unsuccessful or unexpected CLI result")
     if any(not _metric(value[key]) for key in _METRIC_FIELDS & value.keys()):
@@ -465,9 +469,9 @@ def parse_history_reply(stdout):
     """Decode a same-study answer. A leak verdict is not a history answer."""
     try:
         value = _decode_reply(stdout)
-        if value.get("type") == "result":
-            _validate_result(value)
-            inner = value["result"]
+        if isinstance(value, dict) and value.get("type") == "result":
+            _validate_result(value, allow_object_result=True)
+            inner = value.get("result")
             value = inner if isinstance(inner, dict) else _decode_reply(inner)
         return validate_history_relation(value)
     except (ValueError, TypeError, RecursionError) as exc:

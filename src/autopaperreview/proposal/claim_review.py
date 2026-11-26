@@ -84,7 +84,8 @@ def request(stage, body, cache, offline, *, leak_judge=None):
                 path = legacy
     if path.exists():
         result = read(path)
-        if (not same_model_value(result.get("request"), descriptor)
+        if not isinstance(result, dict) or (
+                not same_model_value(result.get("request"), descriptor)
                 or result.get("state") not in {"response", "refusal", "invalid"}
                 or not isinstance(result.get("output"), dict)):
             raise ValueError("invalid model receipt")

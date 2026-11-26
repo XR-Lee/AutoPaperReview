@@ -639,20 +639,18 @@ def latest_stamp(values) -> int | None:
     return max(stamps)
 
 
-def eligible_history(
+def _locally_eligible_history(
     row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="",
-    exclude_title="", exclude_abstract="", exclude_text="", history_judge=None,
-):
-    """Check development provenance, all known availability clocks and self-matches.
+    exclude_title="", exclude_abstract="", exclude_text="",
+) -> bool:
+    """History checks that do not need a judge.
 
-    Exact and reordered copies are excluded in code. Year, revision, availability,
-    and known identifiers are applied before any judge call, so a row that fails
-    those checks is dropped even when the judge would not return a relation.
-    A near-copy that survives those checks stays eligible only when the history
-    judge returns ``relation=distinct``. A missing judge, a failed judge, or any
-    answer other than ``relation=same`` or ``relation=distinct`` stops the history step.
+    A key that is not a string or an integer is ineligible here, before any
+    near-copy is sent to the judge.
     """
     if not isinstance(row, dict) or not development_row(row):
+        return False
+    if "key" in row and type(row.get("key")) not in (int, str):
         return False
     body = proposal_body(row.get("proposal"))
     proposal = row.get("proposal")
@@ -703,6 +701,30 @@ def eligible_history(
         searchable = " ".join(str(row.get(field) or "") for field in ("title", "abstract", "forum"))
         if arxiv in identifiers or arxiv in unquote(searchable).casefold():
             return False
+    return True
+
+
+def eligible_history(
+    row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="",
+    exclude_title="", exclude_abstract="", exclude_text="", history_judge=None,
+):
+    """Check development provenance, all known availability clocks and self-matches.
+
+    Exact and reordered copies are excluded in code. Year, revision, availability,
+    known identifiers, and a non-text key are applied before any judge call.
+    A near-copy that survives those checks stays eligible only when the history
+    judge returns ``relation=distinct``. A missing judge, a failed judge, or any
+    answer other than ``relation=same`` or ``relation=distinct`` stops the history step.
+    Calibration rows go through ``pre_judge_eligible`` first, so a duplicate anchor
+    key or a missing training-value time never reaches this judge.
+    """
+    if not _locally_eligible_history(
+        row, bounds, exclude_key=exclude_key, exclude_forum=exclude_forum,
+        exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
+        exclude_abstract=exclude_abstract, exclude_text=exclude_text,
+    ):
+        return False
+    proposal = row.get("proposal")
     judge = history_judge if history_judge is not None else _HISTORY_JUDGE.get()
     if exclude_text and _borderline_history(proposal, exclude_text):
         if judge is None:
@@ -792,26 +814,57 @@ def historical_opinions(items, cutoff_ms, *, snapshot_ms=None, target_year=None)
     return kept
 
 
+def _training_grade_ready(row, bounds, excerpt_field) -> bool:
+    """A training value needs its own time, or every excerpt dated on its own."""
+    opinions = row.get(excerpt_field)
+    dated = historical_opinions(
+        opinions, bounds[1], snapshot_ms=row.get("opinion_ms"), target_year=bounds[0],
+    )
+    grade = latest_stamp(row.get(field) for field in _GRADE_TIME_FIELDS)
+    if grade is None and (
+        not dated or len(dated) != (len(opinions) if isinstance(opinions, list) else 1)
+    ):
+        return False
+    return True
+
+
+def pre_judge_eligible(row, bounds, *, seen_keys=(), excerpt_field=None, **exclusions) -> bool:
+    """Local calibration eligibility. This function does not call the history judge.
+
+    A missing target, a key that is not text or an integer, a key already selected
+    as an anchor, a missing training-value time, and every history filter that
+    does not need a judge are decided here.
+    """
+    local = {key: value for key, value in exclusions.items() if key != "history_judge"}
+    if not isinstance(row, dict) or "key" not in row or "target" not in row:
+        return False
+    key = row.get("key")
+    if type(key) not in (int, str) or key in seen_keys:
+        return False
+    if excerpt_field is not None and bounds is not None and not _training_grade_ready(row, bounds, excerpt_field):
+        return False
+    return _locally_eligible_history(row, bounds, **local)
+
+
 def calibration_rows(bank, bounds, *, excerpt_field, **exclusions):
-    """Yield distinct examples with a dated grade and only eligible opinion text."""
+    """Yield distinct examples with a dated grade and only eligible opinion text.
+
+    ``pre_judge_eligible`` drops every locally decidable row before ``eligible_history``
+    can call the history judge.
+    """
     keys = set()
     for row in bank:
-        # A missing key or target drops the row before eligibility, so a near-copy
-        # without a training target never reaches the history judge.
-        if not isinstance(row, dict) or "key" not in row or "target" not in row:
+        if not pre_judge_eligible(
+            row, bounds, seen_keys=keys, excerpt_field=excerpt_field, **exclusions,
+        ):
             continue
         if not eligible_history(row, bounds, **exclusions):
             continue
-        key = row["key"]
-        if type(key) not in (int, str) or key in keys:
-            continue
         opinions = row.get(excerpt_field)
-        dated = historical_opinions(opinions, bounds[1], snapshot_ms=row.get("opinion_ms"), target_year=bounds[0])
-        grade = latest_stamp(row.get(field) for field in _GRADE_TIME_FIELDS)
-        if grade is None and (not dated or len(dated) != (len(opinions) if isinstance(opinions, list) else 1)):
-            # Undated aggregates may only rely on excerpts with independent dates.
-            continue
-        keys.add(key)
+        dated = historical_opinions(
+            opinions, bounds[1], snapshot_ms=row.get("opinion_ms"), target_year=bounds[0],
+        )
+        keys.add(row["key"])
         yield row, dated
 
 

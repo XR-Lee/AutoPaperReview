@@ -165,6 +165,7 @@ def rank(
         "exclude_forum": forum,
         "exclude_arxiv": arxiv,
         "exclude_title": title,
+        "exclude_abstract": abstract if isinstance(abstract, str) else "",
     }
     packet = sanitize_proposal(packet)
     history_exclusions["exclude_text"] = proposal_body(packet)

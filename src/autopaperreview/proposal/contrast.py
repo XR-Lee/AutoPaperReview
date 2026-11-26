@@ -23,6 +23,7 @@ def packet(
     exclude_forum="",
     exclude_arxiv="",
     exclude_title="",
+    exclude_abstract="",
     exclude_text="",
     target_year=None,
     cutoff_ms=None,
@@ -38,7 +39,7 @@ def packet(
     for example, dated in calibration_rows(
         bank, bounds, excerpt_field="opinions", exclude_key=exclude_key,
         exclude_forum=exclude_forum, exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
-        exclude_text=exclude_text,
+        exclude_abstract=exclude_abstract, exclude_text=exclude_text,
     ):
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:
