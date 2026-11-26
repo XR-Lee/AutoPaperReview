@@ -837,12 +837,11 @@ class Round3BoundaryTests(TestCase):
                         )
         envelope = {"type": "result", "subtype": "success", "result": inner, "modelUsage": None}
         with TemporaryDirectory() as folder, patch.object(stages, "run_command", return_value=(json.dumps(envelope), 0)):
-            path = stages.invoke(
-                "review", packet, Path(folder) / "cache", "synthetic", ["synthetic"], 30,
-                leak_judge=lambda _body: {"verdict": "clean"},
-            )
-            self.assertEqual(read(path)["resolved_models"], [])
-            self.assertEqual(read(path)["output"]["importance"]["score"], 3)
+            with self.assertRaises(CommandTransportError):
+                stages.invoke(
+                    "review", packet, Path(folder) / "cache", "synthetic", ["synthetic"], 30,
+                    leak_judge=lambda _body: {"verdict": "clean"},
+                )
 
     def test_english_search_query_becomes_a_problem_field(self):
         packet = search_query_packet({"query": "violet basket index"})

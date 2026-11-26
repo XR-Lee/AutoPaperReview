@@ -7,15 +7,15 @@ import math
 import re
 from pathlib import Path
 
-from ..command_transport import reply_text, run_command
+from ..command_transport import CommandTransportError, reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .clarification_protocol import outside_scope
 from .data import digest, read, reported_result, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
 from .leak_audit import (
-    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, same_model_value,
-    strict_model_value,
+    apply_leak_audit, hard_model_failure, model_leak_judge, payload_sha256, require_leak_judge,
+    same_model_value, strict_model_value,
 )
 from .material import material
 from .panel_prompts import FORECAST, SOURCE
@@ -90,7 +90,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
     if path.is_file():
         r = read(path)
         states = {missing} if missing else {"response", "refusal", "invalid"}
-        if not isinstance(r, dict) or r.get("request") != descriptor or r.get("state") not in states or "output" not in r:
+        if not isinstance(r, dict) or not same_model_value(r.get("request"), descriptor) or r.get("state") not in states or "output" not in r:
             raise ValueError("invalid reviewer panel receipt")
         if r["state"] != "response":
             if r["output"] != empty:
@@ -122,12 +122,25 @@ def request(stage, body, cache, offline, *, leak_judge=None):
                 r["state"] = "refusal"
                 break
             raise
-        text = reply_text(raw)[0]
-        if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", text, re.I):
-            r["state"] = "refusal"
-            break
         try:
             answer = strict_model_value(raw)
+        except CommandTransportError:
+            raise
+        except (ValueError, TypeError, KeyError) as exc:
+            if hard_model_failure(exc):
+                raise
+            try:
+                text = reply_text(raw)[0]
+            except CommandTransportError:
+                raise
+            if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", text, re.I):
+                r["state"] = "refusal"
+                break
+            if attempt < 2:
+                feedback = "\nReturn the entire corrected JSON with valid references."
+                message = apply_leak_audit(body, leak_judge, feedback=feedback)
+            continue
+        try:
             validate(answer, body)
         except (ValueError, KeyError, TypeError):
             if attempt < 2:

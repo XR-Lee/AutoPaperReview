@@ -380,6 +380,10 @@ _KEY_SUFFIXES = frozenset({
     "text", "value", "values",
 })
 _STATUS_OWNERS = _KEY_PREFIXES | {"decision", "outcome", "paper", "review", "reviewer", "submission", "venue"}
+_REVIEW_STATE_WORDS = frozenset({"status", "statuses", "state", "states", "result", "results"})
+_REVIEW_STATE_OWNERS = _STATUS_OWNERS | {
+    "manuscript", "editorial", "chair", "programme", "program", "acceptance", "rejection",
+}
 _IDENTITY_MODIFIERS = frozenset({
     "author", "authors", "email", "emails", "contact", "contacts", "reviewer", "reviewers",
     "postal", "mailing", "phone", "telephone", "affiliation", "institution", "orcid",
@@ -402,6 +406,9 @@ _SCIENTIFIC_MEASURES = frozenset({
     "recall", "auc", "latency", "perplexity", "threshold", "surface", "surfaces",
     "optical", "water", "memory", "virtual", "reconstruction", "calibration",
     "calibrated", "indicator", "residual", "estimator", "baseline",
+    "gradient", "gradients", "slope", "slopes", "derivative", "derivatives",
+    "curvature", "hessian", "eigenvalue", "eigenvalues", "norm", "norms",
+    "entropy", "divergence",
 })
 # A score key is a review key unless a scientific measure is present and no
 # hard review word is. ``overall_score`` stays blocked; ``similarity_score`` does not.
@@ -436,8 +443,9 @@ def _key_tokens(key: object) -> list[str]:
 def _key_word_blocked(word: str) -> bool:
     if word in _KEY_LEMMAS:
         return True
-    if word.endswith("status") and word[:-len("status")] in _STATUS_OWNERS:
-        return True
+    for stem in ("status", "state", "result"):
+        if len(word) > len(stem) and word.endswith(stem) and word[: -len(stem)] in _REVIEW_STATE_OWNERS:
+            return True
     for lemma in _KEY_LEMMAS:
         if word.startswith(lemma) and word[len(lemma):] in _KEY_SUFFIXES:
             return True
@@ -503,6 +511,10 @@ def score_field(key: object) -> bool:
     if compact in _COMPACT_SCORE_FIELDS or _KEY_OUTCOME.fullmatch(compact) is not None:
         return True
     words = [word for word in re.split(r"[^0-9a-z]+", text) if word]
+    if set(tokens) & _REVIEW_STATE_WORDS and set(tokens) & _REVIEW_STATE_OWNERS:
+        return True
+    if tokens in (["status"], ["state"], ["statuses"], ["states"]):
+        return True
     if "status" in words and set(words) & _STATUS_OWNERS:
         return True
     return any(_key_word_blocked(word) for word in words)
@@ -699,25 +711,21 @@ _RANGE_METRICS = frozenset({
     "loss", "accuracy", "error", "threshold", "similarity", "distance", "bleu", "f1",
     "metric", "metrics", "measure", "measurement", "latency", "perplexity", "precision",
     "recall", "auc", "reconstruction", "calibration", "calibrated",
+    "gradient", "gradients", "slope", "slopes", "derivative", "derivatives",
+    "curvature", "hessian", "norm", "norms", "entropy", "divergence",
 })
 _REVIEW_RANGE_ANCHORS = _SCORE_LABELS | _SCORE_QUALIFIERS | {"overall", "total"}
 
 
 def _score_range(tokens: list[str]) -> bool:
-    planned_earlier = False
     for index, token in enumerate(tokens):
-        if token in _PLAN_CUES or token.startswith("计划"):
-            planned_earlier = True
         window = tokens[max(0, index - 6):index]
         span = tokens[max(0, index - 8):index + 6]
-        # A review label keeps the short plan window. A scientific metric range
-        # stays planned when the plan cue sits anywhere earlier in the text.
-        scientific_plan = (
-            planned_earlier
-            and any(word in _RANGE_METRICS for word in span)
-            and not any(word in _REVIEW_RANGE_ANCHORS for word in window)
-        )
-        if _planned_before(tokens, index) or scientific_plan:
+        # A review anchor keeps the range blocked. A nearby scientific metric
+        # does not need a plan cue: the metric is what makes the range scientific.
+        metric_near = any(word in _RANGE_METRICS for word in span)
+        review_anchor = any(word in _REVIEW_RANGE_ANCHORS for word in window)
+        if _planned_before(tokens, index) or (metric_near and not review_anchor):
             continue
         if token in {"range", "between", "entre"} and _range_anchor(window):
             if any(_is_number(word) for word in tokens[index:index + 8]):
@@ -861,21 +869,46 @@ def _identity_cell_value(cell: str) -> bool:
     return len(folded) >= 2 and folded not in _CONTENT_SKIP
 
 
+def _cell_parts(cell: str) -> set[str]:
+    return {part for part in re.split(r"[\s:=：/_-]+", _clean_cell(cell)) if part}
+
+
+def _pair_is_fact(label_cell: str, value_cell: str) -> bool:
+    """A label beside an exact decision, status, score, or identity value.
+
+    A bare score next to a decimal, or a score named by a scientific measure,
+    stays a measurement. A review qualifier or an integer next to a bare score
+    does not.
+    """
+    label = _cell_label(label_cell)
+    if not label:
+        return False
+    parts = _cell_parts(label_cell)
+    identity = label in _IDENTITY_LABEL_TOKENS or label in {
+        "author", "authors", "autor", "autores", "afiliacion", "correo",
+    }
+    if identity:
+        return _identity_cell_value(value_cell)
+    if label in {"score", "scores"} and not (parts & _SCORE_QUALIFIERS):
+        if parts & (_RANGE_METRICS | _SCIENTIFIC_MEASURES):
+            return False
+        folded = _clean_cell(value_cell)
+        if _is_number(folded) and "." in folded:
+            return False
+    return _review_cell_value(value_cell)
+
+
 def _row_has_fact(row: list[str]) -> bool:
-    for index, cell in enumerate(row):
-        label = _cell_label(cell)
-        if not label:
-            continue
-        neighbors = row[index + 1:index + 2]
-        identity = label in _IDENTITY_LABEL_TOKENS or label in {
-            "author", "authors", "autor", "autores", "afiliacion", "correo",
-        }
-        for other in neighbors:
-            if identity and _identity_cell_value(other):
-                return True
-            if not identity and _review_cell_value(other):
-                return True
-    return False
+    return any(
+        _pair_is_fact(cell, row[index + 1])
+        for index, cell in enumerate(row[:-1])
+    )
+
+
+def _layout_text(text: str) -> str:
+    """Turn a definition item into a label line. A trailing LaTeX rule is not a cell."""
+    text = re.sub(r"\\item\s*\[([^\]]{1,80})\]", r"\1: ", text)
+    return re.sub(r"\\\\+(?=\s|$)", " ", text)
 
 
 def _table_rows(text: str) -> list[list[str]]:
@@ -883,34 +916,51 @@ def _table_rows(text: str) -> list[list[str]]:
     html_cells = [_without_markup(cell) for cell in _HTML_CELL.findall(text)]
     if len(html_cells) >= 2:
         rows.append(html_cells)
-    for line in text.splitlines():
+    for line in _layout_text(text).splitlines():
         if not any(mark in line for mark in ("|", "\t", "&")):
             continue
         cells = [cell.strip() for cell in re.split(r"[|\t&]", line)]
         cells = [cell for cell in cells if cell and not re.fullmatch(r"[:\-\s]+", cell)]
-        if len(cells) >= 2:
+        if cells:
             rows.append(cells)
     return rows
 
 
 def _tabular_fact(text: str) -> bool:
-    """A label cell beside a decision, score, status, or identity value."""
+    """A label cell beside a decision, score, status, or identity value.
+
+    A one-column Markdown table still aligns the header with the next row.
+    """
     rows = _table_rows(text)
     if any(_row_has_fact(row) for row in rows):
         return True
     for header, body in zip(rows, rows[1:]):
-        for index, cell in enumerate(header):
-            if index >= len(body) or not _cell_label(cell):
-                continue
-            label = _cell_label(cell)
-            identity = label in _IDENTITY_LABEL_TOKENS or label in {
-                "author", "authors", "autor", "autores", "afiliacion", "correo",
-            }
-            other = body[index]
-            if identity and _identity_cell_value(other):
+        width = min(len(header), len(body))
+        for index in range(width):
+            if _pair_is_fact(header[index], body[index]):
                 return True
-            if not identity and _review_cell_value(other):
-                return True
+    return False
+
+
+_LINE_SPLIT = re.compile(r"\s*(?:[:：=]|->|=>|→|—|–|－|\t|\s{2,})\s*")
+
+
+def _line_facts(text: str) -> bool:
+    """A label and a value on one line, or a label whose value is the next line."""
+    lines = [line.strip() for line in _layout_text(text).splitlines()]
+    for index, line in enumerate(lines):
+        if not line or any(mark in line for mark in ("|", "&")):
+            continue
+        parts = [part.strip() for part in _LINE_SPLIT.split(line) if part.strip()]
+        if len(parts) >= 2 and _pair_is_fact(parts[0], parts[1]):
+            return True
+        if index + 1 >= len(lines):
+            continue
+        nxt = lines[index + 1]
+        if nxt.startswith(":"):
+            nxt = nxt[1:].strip()
+        if nxt and _pair_is_fact(line, nxt):
+            return True
     return False
 
 
@@ -958,6 +1008,7 @@ def _explicit_construct(text: str) -> bool:
         or _preprint_authorship(text)
         or _labeled_fact(tokens)
         or _tabular_fact(text)
+        or _line_facts(text)
         or _bracketed_review(text)
         or _REVIEW_STATUS.search(text) is not None
         or _CJK_DECISION.search(text) is not None

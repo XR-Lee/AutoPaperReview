@@ -191,10 +191,11 @@ def _marker_text(value) -> str | None:
 def _reject_unsuccessful_envelope(value: dict) -> None:
     """A business envelope that signals failure is not a result.
 
-    The same failure signals the leak judge rejects are rejected here.
-    ``modelUsage: null`` is an absent usage map, not a failure. A missing
-    status or subtype is still success. A boolean, an abort, an API error,
-    a permission denial, or a stop reason outside the success allowlist is not.
+    Every proposal stage uses this check before a refusal sentence or an
+    abstention. A missing status or usage map can still be success. An
+    explicit null, a negative duration, a boolean where a count belongs,
+    an abort, an API error, a permission denial, or a stop reason outside
+    the success allowlist is not.
     """
     from ..command_transport import CommandTransportError
 
@@ -216,7 +217,7 @@ def _reject_unsuccessful_envelope(value: dict) -> None:
             if reason in {"refusal", "refused"}:
                 fail("command refused: refusal marker")
             fail("command reply stopped unsuccessfully")
-    if "status" in value and value.get("status") is not None:
+    if "status" in value:
         status = _marker_text(value.get("status"))
         if status is None or status not in _SUCCESS_STATUSES:
             fail(f"command status is not success: {value.get('status')}")
@@ -236,12 +237,14 @@ def _reject_unsuccessful_envelope(value: dict) -> None:
         fail("command reported an API error")
     if "errors" in value and value.get("errors") not in (None, [], {}):
         fail("command reported errors")
-    if "subagent_stats" in value and value.get("subagent_stats") != _EMPTY_SUBAGENT_STATS:
+    if "subagent_stats" in value and not same_model_value(value.get("subagent_stats"), _EMPTY_SUBAGENT_STATS):
         fail("command reported a failed subagent")
+    if any(not _metric(value[key]) for key in _METRIC_FIELDS & value.keys()):
+        fail("command reported an invalid metric")
     if "usage" in value and value.get("usage") is not None and not _usage(value["usage"]):
         fail("command reported invalid usage")
     for field in ("modelUsage", "model_usage_since_last_result"):
-        if field not in value or value.get(field) is None:
+        if field not in value:
             continue
         models = value.get(field)
         if not isinstance(models, dict) or not all(
@@ -287,6 +290,15 @@ def same_model_value(left, right) -> bool:
         return False
 
 
+def hard_model_failure(exc: BaseException) -> bool:
+    """Corrupt or non-finite model text is not a schema miss and is not an abstention."""
+    text = str(exc).casefold()
+    return any(
+        mark in text
+        for mark in ("non-finite", "invalid json constant", "invalid utf-8", "invalid unicode")
+    )
+
+
 def require_business_receipt(entry: Mapping, stage: str) -> None:
     """Reject a legacy receipt whose command metadata is not a current success."""
     message = f"stale {stage} result; rerun this stage"
@@ -295,7 +307,8 @@ def require_business_receipt(entry: Mapping, stage: str) -> None:
     request = entry.get("request")
     if not isinstance(request, Mapping):
         raise ValueError(message)
-    if request.get("reply_protocol") != BUSINESS_REPLY_PROTOCOL:
+    protocol = request.get("reply_protocol")
+    if type(protocol) is not int or protocol != BUSINESS_REPLY_PROTOCOL:
         raise ValueError(message)
     model = request.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -351,13 +364,13 @@ def _validate_result(value):
         or value.get("is_error", False) is not False
         or value.get("subtype", "success") != "success"
         or value.get("stop_reason") not in (None, "stop", "end_turn", "stop_sequence")
-        or value.get("status") not in (None, "success", "completed")
+        or ("status" in value and value.get("status") not in ("success", "completed"))
         or value.get("permission_denials", []) != []
         or value.get("terminal_reason", "completed") != "completed"
         or type(safety_stops) is not int or safety_stops != 0
         or value.get("api_error_status") is not None
         or value.get("origin") not in (None, {"kind": "human"})
-        or value.get("subagent_stats", _EMPTY_SUBAGENT_STATS) != _EMPTY_SUBAGENT_STATS
+        or ("subagent_stats" in value and not same_model_value(value.get("subagent_stats"), _EMPTY_SUBAGENT_STATS))
         or value.get("fast_mode_state") not in (None, "off", "cooldown", "on")
         or value.get("fast_mode_disabled_reason") not in _FAST_MODE_REASONS
         or not isinstance(value.get("result"), str)

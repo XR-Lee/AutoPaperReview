@@ -69,6 +69,47 @@ def _token_signature(text: str) -> tuple[str, ...]:
 _UNCOMPARABLE = "\x00uncomparable"
 
 
+_DEHYPHEN = re.compile(r"([A-Za-z]{2,})-\s+([A-Za-z]{2,})")
+_PROPOSAL_TOKEN = re.compile(r"[^\W_]+|[+*/=<>^]", re.UNICODE)
+_CJK_CHAR = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def _proposal_segment_tokens(text: str) -> tuple[str, ...]:
+    """Words plus math operators. A line-break hyphen is not a different word.
+
+    ``a + b`` and ``a - b`` stay different. ``archi- val`` is ``archival``.
+    An unspaced hyphen is punctuation, as it is for titles.
+    """
+    folded = canonical_text(text)
+    previous = None
+    while previous != folded:
+        previous = folded
+        folded = _DEHYPHEN.sub(r"\1\2", folded)
+    folded = re.sub(r"(?<=\s)-(?=\s)", " minusop ", folded)
+    found = _PROPOSAL_TOKEN.findall(folded.casefold())
+    return tuple("-" if token == "minusop" else token for token in found)
+
+
+def _expand_cjk(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    """One token per CJK character so a field-boundary split can be stitched."""
+    expanded: list[str] = []
+    for token in tokens:
+        if len(token) > 1 and all(_CJK_CHAR.fullmatch(char) for char in token):
+            expanded.extend(token)
+        else:
+            expanded.append(token)
+    return tuple(expanded)
+
+
+def _collapse_repeat(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    """A field that repeats itself is the same field, not new text."""
+    count = len(tokens)
+    for size in range(1, count // 2 + 1):
+        if count % size == 0 and tokens == tokens[:size] * (count // size):
+            return tokens[:size]
+    return tokens
+
+
 def _field_segments(value) -> tuple[str, ...] | None:
     """One normalized segment per text field. Field names do not enter the identity."""
     if isinstance(value, str):
@@ -81,10 +122,12 @@ def _field_segments(value) -> tuple[str, ...] | None:
     for text in texts:
         if not str(text).strip():
             continue
-        identity = _identity(text)
-        if identity is None:
+        if _identity(text) is None:
             return None
-        parts.append(identity)
+        tokens = _proposal_segment_tokens(text)
+        if not tokens:
+            return None
+        parts.append(" ".join(tokens))
     return tuple(sorted(parts))
 
 
@@ -187,56 +230,84 @@ def _proposal_texts(value) -> list[str] | None:
     return kept
 
 
-def _token_set(texts: list[str]) -> frozenset[str]:
-    found: set[str] = set()
+def _sequences_from_body(exclude_text: str) -> list[tuple[str, ...]]:
+    sequences = []
+    for line in exclude_text.split("\n"):
+        tokens = _collapse_repeat(_expand_cjk(tuple(line.split())))
+        if tokens:
+            sequences.append(tokens)
+    return sequences
+
+
+def _sequences_from_proposal(proposal) -> list[tuple[str, ...]] | None:
+    texts = _proposal_texts(proposal)
+    if texts is None:
+        return None
+    sequences = []
     for text in texts:
-        found.update(_content_tokens(text))
-    return frozenset(found)
+        tokens = _collapse_repeat(_expand_cjk(_proposal_segment_tokens(text)))
+        if tokens:
+            sequences.append(tokens)
+    return sequences
 
 
-def _shingle_set(texts: list[str], size: int = 3) -> frozenset[tuple[str, ...]]:
-    """Within-field token shingles. Splitting a field drops only the cut point."""
-    found: set[tuple[str, ...]] = set()
-    for text in texts:
-        tokens = _content_tokens(text)
-        if len(tokens) < size:
-            continue
-        found.update(tuple(tokens[index:index + size]) for index in range(0, len(tokens) - size + 1))
-    return frozenset(found)
+def _explains(wholes: list[tuple[str, ...]], pieces: list[tuple[str, ...]], *, allow_leftover: bool) -> bool:
+    """True when every whole sequence is an exact concatenation of pieces.
 
-
-def _covers(found: frozenset, wanted: frozenset) -> bool:
-    """True when both texts are the same content, ignoring order and repeats.
-
-    A longer document that merely contains the target is not a copy. Both
-    sides have to cover the other, so a re-segmented duplicate matches and a
-    shared phrase does not.
+    Pieces are used at most once. Leftover pieces are allowed only when
+    ``allow_leftover`` is set, which is the copy-plus-appendix direction.
+    The other direction requires every piece, so a shared paragraph is not
+    a resegmentation. More than twelve fields is not a similarity match.
     """
-    if not wanted or not found:
+    if not wholes or not pieces or len(wholes) > 12 or len(pieces) > 12:
         return False
-    if len(wanted) < 4 or len(found) < 4:
-        return found == wanted
-    shared = len(found & wanted)
-    return shared / len(wanted) >= 0.9 and shared / len(found) >= 0.9
+
+    def cover(target: tuple[str, ...], used: int) -> int | None:
+        def walk(pos: int, mask: int) -> int | None:
+            if pos == len(target):
+                return mask
+            for index, piece in enumerate(pieces):
+                bit = 1 << index
+                if mask & bit or not piece:
+                    continue
+                size = len(piece)
+                if target[pos:pos + size] == piece:
+                    found = walk(pos + size, mask | bit)
+                    if found is not None:
+                        return found
+            return None
+
+        return walk(0, used)
+
+    def walk_wholes(index: int, used: int) -> bool:
+        if index == len(wholes):
+            if allow_leftover:
+                return True
+            return used == (1 << len(pieces)) - 1
+        covered = cover(wholes[index], used)
+        if covered is None:
+            return False
+        return walk_wholes(index + 1, covered)
+
+    return walk_wholes(0, 0)
 
 
 def _same_content(proposal, exclude_text: str) -> bool:
-    """True when the row repeats the target after a re-segmentation.
+    """True when one document is an exact resegmentation of the other.
 
-    Segment-set equality misses a paragraph that was duplicated, merged,
-    split, or reordered. Token containment and within-field shingles do not.
-    A short peer that merely shares a few words does not cover the target.
+    Field order, a split, a merge, a repeated field, a line-break hyphen,
+    and a CJK field split are the same document. An extra field on the
+    copy is still the copy. A shared quotation, a shared method, or the
+    same words in another order is not.
     """
     if not exclude_text or exclude_text == _UNCOMPARABLE:
         return False
-    fields = _proposal_texts(proposal)
-    if not fields:
+    pieces = _sequences_from_proposal(proposal)
+    wholes = _sequences_from_body(exclude_text)
+    if not pieces or not wholes:
         return False
-    target = [line for line in exclude_text.split("\n") if line.strip()]
-    if not target:
-        return False
-    return _covers(_token_set(fields), _token_set(target)) or _covers(
-        _shingle_set(fields), _shingle_set(target)
+    return _explains(wholes, pieces, allow_leftover=True) or _explains(
+        pieces, wholes, allow_leftover=False
     )
 
 

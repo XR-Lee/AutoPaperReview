@@ -9,6 +9,8 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from functools import wraps
@@ -18,6 +20,8 @@ from uuid import uuid4
 
 _ACTIVE_OUTPUTS = ContextVar("proposal_cli_outputs", default=())
 _ALIAS = "output must be distinct from every input file"
+_STAMP_LOCK = threading.Lock()
+_STAMP = 0
 
 
 def _absolute(path: Path) -> Path:
@@ -241,8 +245,11 @@ class _Output:
     def _exchange_verified(self, content: str, original: tuple[int, int]) -> None:
         """Replace an existing file only after the new bytes are complete."""
         name = f".apr-output-{uuid4().hex}.tmp"
-        created = _write_complete(self.directory, name, content.encode("utf-8"))
+        created = _write_complete(self.directory, name, content.encode("utf-8"), self.path.name)
         held = None
+        created_fd = os.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=self.directory,
+        )
         try:
             self.check()
             current = self._destination_identity()
@@ -255,10 +262,10 @@ class _Output:
                 os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=self.directory,
             )
-            if file_identity(os.fstat(held)) != original:
+            if file_identity(os.fstat(held)) != original or file_identity(os.fstat(created_fd)) != created:
                 raise ValueError(_ALIAS)
             _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
-            self._settle_exchange(name, created, held)
+            self._settle_exchange(name, created, held, created_fd)
         except BaseException:
             try:
                 info = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
@@ -268,12 +275,13 @@ class _Output:
                 remove_temporary(self.directory, name)
             raise
         finally:
+            os.close(created_fd)
             if held is not None:
                 os.close(held)
 
-    def _name_identity(self, name: str):
+    def _named_stat(self, name: str):
         try:
-            return file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
+            return os.stat(name, dir_fd=self.directory, follow_symlinks=False)
         except FileNotFoundError:
             return None
 
@@ -281,46 +289,79 @@ class _Output:
         _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
 
     def _drop_temp(self, name: str, created: tuple[int, int]) -> None:
-        """Remove this writer's leftover, never the live report or an input."""
-        ident = self._name_identity(name)
-        if ident is None:
+        """Remove this writer's leftover, never the live report, a newer report, or an input."""
+        info = self._named_stat(name)
+        if info is None:
             return
-        if ident == created or (
-            ident != self._destination_identity() and ident not in self.inputs.values()
-        ):
+        ident = file_identity(info)
+        if ident in self.inputs.values():
+            return
+        dest = self._named_stat(self.path.name)
+        if dest is not None and ident == file_identity(dest):
+            return
+        # A protected input owns the destination even when this report is newer.
+        if dest is not None and file_identity(dest) in self.inputs.values():
             remove_temporary(self.directory, name)
-
-    def _settle_exchange(self, name: str, created: tuple[int, int], held: int) -> None:
-        """Keep a newer report, and put a displaced input back on this name.
-
-        ``os.rename`` replaces the destination inode, so a writer who lands
-        inside that call cannot be put back. Exchange back instead. If that
-        exchange itself swaps in a newer writer, one more exchange restores
-        the newest file. An input moved onto this name is exchanged back and
-        only this writer's temporary file is removed.
-        """
-        destination = self._destination_identity()
-        swapped = self._name_identity(name)
-        original = file_identity(os.fstat(held))
-        if (
-            destination == created
-            and swapped == original
-            and swapped not in self.inputs.values()
-        ):
-            os.unlink(name, dir_fd=self.directory)
             return
-        if destination == created and swapped is not None:
-            self._exchange_back(name)
-            if self._name_identity(name) == created:
-                remove_temporary(self.directory, name)
-                raise ValueError(_ALIAS)
-            # A publisher landed inside the rollback and was swapped here.
-            self._exchange_back(name)
+        if dest is not None and ident != created and info.st_mtime_ns > dest.st_mtime_ns:
+            return
+        remove_temporary(self.directory, name)
+
+    def _settle_exchange(self, name: str, created: tuple[int, int], held: int, created_fd: int) -> None:
+        """Leave the newest report, or a protected input, on the destination name.
+
+        Exchange does not change an inode's mtime, and each new report is stamped
+        strictly later than the file it replaces. A later writer therefore has a
+        newer stamp no matter which exchange it lands in. A protected input wins
+        over every report. This writer returns only when the destination is the
+        file it created. Anything else is restored by exchange, and only this
+        writer's file or an older non-input leftover is deleted.
+        """
+        original = file_identity(os.fstat(held))
+        inputs = set(self.inputs.values())
+        for _ in range(64):
+            dest_info = self._named_stat(self.path.name)
+            temp_info = self._named_stat(name)
+            if dest_info is None or temp_info is None:
+                break
+            dest_id = file_identity(dest_info)
+            temp_id = file_identity(temp_info)
+            created = file_identity(os.fstat(created_fd))
+            if dest_id == created and temp_id == original and temp_id not in inputs:
+                os.unlink(name, dir_fd=self.directory)
+                return
+            if temp_id in inputs and dest_id not in inputs:
+                self._exchange_back(name)
+                continue
+            if dest_id in inputs and temp_id not in inputs:
+                break
+            if temp_info.st_mtime_ns > dest_info.st_mtime_ns:
+                self._exchange_back(name)
+                continue
+            break
+        dest_info = self._named_stat(self.path.name)
+        created = file_identity(os.fstat(created_fd))
+        if dest_info is not None and file_identity(dest_info) == created:
+            self._drop_temp(name, created)
+            return
         self._drop_temp(name, created)
         raise ValueError(_ALIAS)
 
 
-def _write_complete(directory: int, name: str, payload: bytes) -> tuple[int, int]:
+def _stamp_fresh(fd: int, directory: int, beside: str) -> None:
+    """Give a new report a mtime strictly after every file already published."""
+    global _STAMP
+    try:
+        floor = os.stat(beside, dir_fd=directory, follow_symlinks=False).st_mtime_ns
+    except FileNotFoundError:
+        floor = 0
+    with _STAMP_LOCK:
+        _STAMP = max(_STAMP, time.time_ns(), floor) + 1
+        stamp = _STAMP
+    os.utime(fd, ns=(stamp, stamp))
+
+
+def _write_complete(directory: int, name: str, payload: bytes, beside: str) -> tuple[int, int]:
     """Write every byte to a new file and fsync it. A short write deletes that file only."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     fd = os.open(name, flags, 0o600, dir_fd=directory)
@@ -332,6 +373,8 @@ def _write_complete(directory: int, name: str, payload: bytes) -> tuple[int, int
             if wrote <= 0:
                 raise OSError(errno.ENOSPC, "No space left on device")
             offset += wrote
+        os.fsync(fd)
+        _stamp_fresh(fd, directory, beside)
         os.fsync(fd)
         return file_identity(os.fstat(fd))
     except BaseException:

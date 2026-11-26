@@ -75,7 +75,6 @@ class ReviewerPanelTest(TestCase):
             "subtype": "success",
             "is_error": False,
             "result": json.dumps(profile),
-            "modelUsage": None,
         }
         for raw in (json.dumps(profile), json.dumps(wrapped)):
             with self.subTest(raw=raw[:24]):

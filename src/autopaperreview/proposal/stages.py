@@ -359,7 +359,7 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
     path = cache / stage / (digest(descriptor) + ".json")
     if path.exists():
         old = decode_json_object(read_text(path))
-        check(old.get("request") == descriptor, "cache request mismatch")
+        check(same_model_value(old.get("request"), descriptor), "cache request mismatch")
         reply = old.get("reply")
         check(
             isinstance(reply, str) and payload_sha256(reply) == old.get("reply_sha256"),
@@ -418,7 +418,7 @@ def _invoke_leak_judge(prompt, system, cache, model, command, timeout, *, cached
     if path.exists():
         old = decode_json_object(read_text(path))
         check(old.keys() == {"request", "output", "reply", "reply_sha256"}, "invalid cache receipt")
-        check(old["request"] == descriptor, "cache request mismatch")
+        check(same_model_value(old.get("request"), descriptor), "cache request mismatch")
         reply = old["reply"]
         check(isinstance(reply, str) and payload_sha256(reply) == old["reply_sha256"], "invalid cached reply digest")
         result = parse_reply(reply)

@@ -180,6 +180,8 @@ class ScoreCliTests(TestCase):
                 "    'conflict': {'stop_reason': 'end_turn', 'finish_reason': 'length'},\n"
                 "    'refusal': {'refusal': True},\n"
                 "    'nullusage': {'modelUsage': None},\n"
+                "    'statusnull': {'status': None},\n"
+                "    'negdur': {'duration_ms': -5},\n"
                 "}\n"
                 "if marker == 'nan':\n"
                 "    sys.stdout.write('{\"type\":\"result\",\"result\":' + json.dumps(json.dumps(inner)) + ',\"usage\":NaN}')\n"
@@ -191,6 +193,7 @@ class ScoreCliTests(TestCase):
             for name in (
                 "terminal", "api", "permission", "safety", "stop",
                 "boolstatus", "boolsubtype", "conflict", "refusal", "nan",
+                "nullusage", "statusnull", "negdur",
             ):
                 proposal = root / f"{name}.txt"
                 proposal.write_text(f"CASE_{name} violet tags index baskets.\n", encoding="utf-8")
@@ -199,14 +202,6 @@ class ScoreCliTests(TestCase):
                 self.assertEqual(completed.returncode, 2, (name, completed.stderr))
                 self.assertIn("business", log.read_text(encoding="utf-8"), name)
                 self.assertFalse((root / f"{name}.json").exists())
-            proposal = root / "nullusage.txt"
-            proposal.write_text("CASE_nullusage violet tags index baskets.\n", encoding="utf-8")
-            log.write_text("", encoding="utf-8")
-            kept = root / "nullusage.json"
-            completed = self._score(root / "nullusage", proposal, command, kept)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(log.read_text(encoding="utf-8").split(), ["judge", "business"])
-            self.assertIn("importance", kept.read_text(encoding="utf-8"))
             proposal = root / "clean.txt"
             proposal.write_text(PLAN + "\n", encoding="utf-8")
             output = root / "clean.json"

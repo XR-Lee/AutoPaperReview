@@ -459,6 +459,96 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         self.assertTrue(errors)
         self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
 
+    def _inject_before_worker_exchanges(self, worker_box, actions):
+        real = file_io._renameat2
+        state = {"inject": True}
+
+        def wrapped(*args):
+            if (
+                args[-1] == file_io.RENAME_EXCHANGE
+                and threading.current_thread() is worker_box.get("thread")
+                and state["inject"]
+                and actions
+            ):
+                state["inject"] = False
+                try:
+                    actions.pop(0)()
+                finally:
+                    state["inject"] = True
+            return real(*args)
+
+        return wrapped
+
+    def test_many_writers_keep_the_newest_report_and_a_late_input(self):
+        for count, last in ((4, "DDD"), (6, "FFF")):
+            with self.subTest(count=count):
+                path = self.root / f"report-{count}.json"
+                with file_io.protected_output(path):
+                    file_io.write_text(path, "OLD")
+                names = [chr(ord("B") + index) * 3 for index in range(count - 1)]
+
+                def publish(text, destination=path):
+                    with file_io.protected_output(destination):
+                        file_io.write_text(destination, text)
+
+                actions = [lambda text=text: publish(text) for text in names]
+                errors = []
+                box = {}
+
+                def lose():
+                    try:
+                        publish("AAA")
+                    except ValueError as exc:
+                        errors.append(exc)
+
+                worker = threading.Thread(target=lose)
+                box["thread"] = worker
+                with patch.object(file_io, "_renameat2", self._inject_before_worker_exchanges(box, actions)):
+                    worker.start()
+                    worker.join(5)
+                self.assertFalse(worker.is_alive(), count)
+                self.assertEqual(path.read_text(encoding="utf-8"), last, count)
+                self.assertTrue(errors, count)
+                self.assertFalse(actions, count)
+                self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+
+        folder = self.root / "checksums"
+        folder.mkdir()
+        payload = b'{"files": {"synthetic": "abc"}}\n'
+        destination = self.root / "late-summary.json"
+        with file_io.protected_output(destination):
+            file_io.write_text(destination, "OLD")
+        moved = folder / "external-sha256.json"
+        moved.write_bytes(payload)
+
+        def publish_b():
+            with file_io.protected_output(destination):
+                file_io.write_text(destination, "BBB")
+
+        actions = [publish_b, lambda: moved.replace(destination)]
+        errors = []
+        box = {}
+
+        def lose():
+            try:
+                with file_io.protected_output(destination):
+                    with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
+                        reproduce_proposal_rank._pin_checksum_files()
+                    file_io.write_text(destination, "AAA")
+            except ValueError as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=lose)
+        box["thread"] = worker
+        with patch.object(file_io, "_renameat2", self._inject_before_worker_exchanges(box, actions)):
+            worker.start()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(errors)
+        self.assertEqual(destination.read_bytes(), payload)
+        self.assertFalse(moved.exists())
+        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+
     def test_input_moved_after_the_destination_is_opened_is_restored(self):
         folder = self.root / "checksums"
         folder.mkdir()

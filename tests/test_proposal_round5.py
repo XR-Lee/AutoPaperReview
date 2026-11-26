@@ -102,13 +102,21 @@ class ScoreCliTests(TestCase):
             "| 单位 | 示例研究所 |",
             "review status | major",
             "总分 [8]",
+            "| Decision |\n| --- |\n| accepted |",
+            "Final decision: accepted",
+            "Decision is: accepted",
+            "Decision\n: accepted",
+            "Decision & accepted \\\\",
+            "\\item[Decision] accepted",
         )
         allowed = (
             "We intend, once the controls and the cohort are fixed, a reconstruction score between 0.1 and 0.3.",
+            "The reconstruction error stays between 0.1 and 0.3 under the synthetic control.",
             "the similarity score (0.2) is the planned embedding target",
             "the paper should be accepted",
             "计划评分区间为 6 到 8",
             "we accept the assumption",
+            "A reference cosine similarity score: 0.625 is a design parameter.",
         )
         with TemporaryDirectory(prefix="apr-round5-score-") as folder:
             root = Path(folder)
@@ -144,6 +152,10 @@ class ScoreCliTests(TestCase):
             "评审决定",
             "overall_score",
             "average_score",
+            "review_state",
+            "reviewState",
+            "manuscript_state",
+            "paper_status",
         )
         allowed = (
             "final_reconstruction_score",
@@ -152,6 +164,8 @@ class ScoreCliTests(TestCase):
             "threshold_score",
             "measurement_score",
             "estado_del_arte",
+            "gradient_score",
+            "slope_metric",
         )
         for key in blocked:
             self.assertTrue(score_field(key), key)
@@ -174,13 +188,19 @@ class ScoreCliTests(TestCase):
                 "    'typed': {'usage': {'input_tokens': '3'}},\n"
                 "    'overflow': {'usage': {'input_tokens': 1e9999}},\n"
                 "    'nullusage': {'modelUsage': None},\n"
+                "    'statusnull': {'status': None},\n"
+                "    'negdur': {'duration_ms': -1},\n"
+                "    'boolsub': {'subagent_stats': {'failed': False}},\n"
                 "}\n"
                 "if marker in envelopes:\n"
                 "    sys.stdout.write(json.dumps({'type': 'result', 'subtype': 'success', "
                 "'is_error': False, 'result': json.dumps(inner), **envelopes[marker]}))\n"
                 "    raise SystemExit\n",
             )
-            for marker in ("errors", "subagent", "usage", "typed", "overflow"):
+            for marker in (
+                "errors", "subagent", "usage", "typed", "overflow",
+                "nullusage", "statusnull", "negdur", "boolsub",
+            ):
                 proposal = root / f"{marker}.txt"
                 proposal.write_text(f"CASE_{marker} violet tags index baskets.\n", encoding="utf-8")
                 log.write_text("", encoding="utf-8")
@@ -188,13 +208,6 @@ class ScoreCliTests(TestCase):
                 self.assertEqual(completed.returncode, 2, (marker, completed.stderr, log.read_text()))
                 self.assertIn("business", log.read_text(encoding="utf-8"), marker)
                 self.assertFalse((root / f"{marker}.json").exists(), marker)
-            proposal = root / "nullusage.txt"
-            proposal.write_text("CASE_nullusage violet tags index baskets.\n", encoding="utf-8")
-            log.write_text("", encoding="utf-8")
-            output = root / "nullusage.json"
-            completed = self._score(root / "nullwork", proposal, command, output)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn("importance", output.read_text(encoding="utf-8"))
 
     def test_score_cli_rejects_an_equal_float_in_place_of_an_int(self):
         with TemporaryDirectory(prefix="apr-round5-type-") as folder:
@@ -513,27 +526,26 @@ class PublishRaceTests(TestCase):
     def test_three_publisher_threads_leave_one_report(self):
         from autopaperreview.proposal import file_io
 
-        with TemporaryDirectory(prefix="apr-round5-race-") as folder:
-            path = Path(folder) / "report.json"
-            with file_io.protected_output(path):
-                file_io.write_text(path, "OLD")
-            barrier = threading.Barrier(3)
-            errors = []
+        for _ in range(30):
+            with TemporaryDirectory(prefix="apr-round5-race-") as folder:
+                path = Path(folder) / "report.json"
+                with file_io.protected_output(path):
+                    file_io.write_text(path, "OLD")
+                barrier = threading.Barrier(3)
 
-            def publish(text):
-                try:
-                    barrier.wait(5)
-                    with file_io.protected_output(path):
-                        file_io.write_text(path, text)
-                except ValueError as exc:
-                    errors.append(str(exc))
+                def publish(text, gate=barrier, destination=path):
+                    try:
+                        gate.wait(5)
+                        with file_io.protected_output(destination):
+                            file_io.write_text(destination, text)
+                    except ValueError:
+                        return
 
-            threads = [threading.Thread(target=publish, args=(text,)) for text in ("AAA", "BBB", "CCC")]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(5)
-                self.assertFalse(thread.is_alive())
-            self.assertIn(path.read_text(encoding="utf-8"), {"AAA", "BBB", "CCC"})
-            self.assertFalse(list(Path(folder).glob(".apr-output-*.tmp")))
-            self.assertGreaterEqual(len(errors), 1)
+                threads = [threading.Thread(target=publish, args=(text,)) for text in ("AAA", "BBB", "CCC")]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(5)
+                    self.assertFalse(thread.is_alive())
+                self.assertIn(path.read_text(encoding="utf-8"), {"AAA", "BBB", "CCC"})
+                self.assertFalse(list(Path(folder).glob(".apr-output-*.tmp")))
