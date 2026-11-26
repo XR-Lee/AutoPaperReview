@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from .cohort import case_split, index_by_forum, validate_manifest, validate_pred
 from .data import digest, read, require_distinct_output, require_official_mean, scale_for_reference, write
 from .file_io import local_output, map_with_input_tracking, protect_cli_output
 from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
-from .leak_audit import model_leak_judge, require_leak_judge
+from .leak_audit import LeakBlocked, model_leak_judge, require_leak_judge
 from .priority import (
     add_screen_provider, claude_argv, load_profile, needs_historical_bounds, profile_inputs, rank, screen_rank_inputs, text_packet,
 )
@@ -173,16 +174,6 @@ def register(sub):
     p.set_defaults(func=predict_dispatch)
 
 
-def _content_block(exc: BaseException) -> bool:
-    """A per-forum leak or reported-result block, not an I/O or configuration error."""
-    text = str(exc)
-    return (
-        "leak audit blocked" in text
-        or "identity leak" in text
-        or "remove reported outcomes before ranking" in text
-    )
-
-
 def blind_inputs(manifest, proposals):
     cases = sealed_cases(manifest)
     records = index_by_forum(proposals, "blind proposals")
@@ -217,9 +208,7 @@ def blind_inputs(manifest, proposals):
         if "short_proposal" in row:
             try:
                 metadata["legacy"] = text_packet(row["short_proposal"])
-            except ValueError as exc:
-                if not _content_block(exc):
-                    raise
+            except LeakBlocked:
                 metadata["legacy"] = row["short_proposal"]
         # The cohort lock wins. A row may repeat the locked year, cutoff, or
         # arXiv id, but it cannot replace them or introduce one the lock omitted.
@@ -234,9 +223,7 @@ def blind_inputs(manifest, proposals):
         # A label leak is decided per forum. Sanitizing here used to abort the batch.
         try:
             packet = text_packet(row["proposal"])
-        except ValueError as exc:
-            if not _content_block(exc):
-                raise
+        except LeakBlocked:
             packet = row["proposal"]
         inputs.append((fid, packet, metadata))
     return inputs
@@ -297,14 +284,15 @@ def predict_dispatch(args):
                 **metadata,
             )
             return {"forum": fid, "overall": judged["overall"], **audit}
-        except ValueError as exc:
-            # One frozen leak rule must not discard the rest of the batch.
-            if not _content_block(exc):
-                raise
+        except LeakBlocked:
+            # One frozen rule or explicit non-clean verdict must not discard the batch.
             return {"forum": fid, "overall": None, "status": "leak_blocked"}
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         predictions = map_with_input_tracking(pool, one, inputs)
+    blocked = sum(row.get("status") == "leak_blocked" for row in predictions)
+    if blocked:
+        print(f"leak audit blocked {blocked} of {len(predictions)}", file=sys.stderr)
     write(output, predictions)
     return 0
 

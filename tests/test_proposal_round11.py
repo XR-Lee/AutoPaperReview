@@ -15,7 +15,6 @@ from unittest.mock import patch
 from autopaperreview.cli import main
 from autopaperreview.proposal import claim_review, contrast, file_io, priority, reviewer_panel as panel
 from autopaperreview.proposal.data import digest, write
-from autopaperreview.proposal.fixed_benchmark import _content_block
 from autopaperreview.proposal.leak_audit import (
     HISTORY_PROMPT, PROMPT, apply_leak_audit, model_leak_judge,
 )
@@ -45,6 +44,53 @@ MID = {
         "ledger colour under a cool lantern beside the maple shelf"
     ),
 }
+
+
+def _anchored_predict(root, proposals):
+    """One hundred clean forums and an anchored profile. Returns argv and output path."""
+    ids = [f"synthetic-{index:02d}" for index in range(100)]
+    write(root / "bank.json", [
+        _row(
+            key=f"hist-{index}",
+            forum=f"history-{index}",
+            title=f"Kelp note {index}",
+            abstract=f"Peer note {index}.",
+            target=1 + (index % 5),
+            proposal={"problem": f"Ocean buoy {index} tracks kelp drift."},
+        )
+        for index in range(8)
+    ])
+    write(root / "profile.json", {
+        "ranker": {"method": "mean", "names": ["anchored"]},
+        "prompts": {"match": digest(priority.PROMPTS["match"])},
+    })
+    write(root / "cohort.json", {
+        "version": 1,
+        "cases": [
+            {"forum": fid, "split": "test", "year": 2024, "cutoff_ms": 50}
+            for fid in ids
+        ],
+        "ids_sha256": digest(sorted(ids)),
+    })
+    write(root / "blind.json", [
+        {
+            "forum": fid,
+            "proposal": proposals[index],
+            "title": f"Bay label {index}",
+            "abstract": f"Queue note {index}.",
+        }
+        for index, fid in enumerate(ids)
+    ])
+    output = root / "predictions.json"
+    return [
+        "proposal-review", "predict-rank",
+        "--manifest", str(root / "cohort.json"),
+        "--proposals", str(root / "blind.json"),
+        "--profile", str(root / "profile.json"),
+        "--work", str(root / "work"),
+        "--output", str(output),
+        "--jobs", "1",
+    ], output
 
 
 def _row(**changes):
@@ -285,9 +331,6 @@ class ImportAndLeakRound11Tests(TestCase):
             apply_leak_audit(packet, lambda _body: {"verdict": "leak"})
 
     def test_one_leak_block_does_not_fail_predict_rank(self):
-        self.assertFalse(_content_block(ValueError("empty proposal")))
-        self.assertTrue(_content_block(ValueError("proposal contains an identity leak")))
-
         def transport(_argv, *, system, prompt, **_options):
             if system in (HISTORY_PROMPT, PROMPT):
                 return '{"verdict":"clean"}', 0.01
@@ -353,7 +396,7 @@ class ImportAndLeakRound11Tests(TestCase):
                     "--jobs", "1",
                 ])
             self.assertEqual(code, 0, err.getvalue())
-            self.assertNotIn("leak audit blocked", err.getvalue())
+            self.assertIn("leak audit blocked 1 of 100", err.getvalue())
             predictions = json.loads(output.read_text(encoding="utf-8"))
             by_forum = {row["forum"]: row for row in predictions}
             self.assertEqual(set(by_forum), set(ids))
@@ -398,3 +441,38 @@ class ImportAndLeakRound11Tests(TestCase):
             self.assertEqual(code, 2, err.getvalue())
             self.assertIn("empty proposal", err.getvalue())
             self.assertFalse(empty_output.exists())
+
+    def _assert_batch_failed(self, code, err, output):
+        self.assertNotEqual(code, 0, err.getvalue())
+        self.assertIn("leak audit failed", err.getvalue())
+        self.assertNotIn("leak_blocked", err.getvalue())
+        self.assertFalse(output.exists())
+
+    def test_cached_only_with_an_empty_cache_fails_the_batch(self):
+        with TemporaryDirectory(prefix="apr-round11-empty-cache-") as folder:
+            root = Path(folder)
+            argv, output = _anchored_predict(root, [
+                f"Warehouse bay {index} keeps maple ribbons." for index in range(100)
+            ])
+            err = io.StringIO()
+            with redirect_stderr(err), redirect_stdout(io.StringIO()):
+                code = main([*argv, "--cached-only"])
+            self._assert_batch_failed(code, err, output)
+
+    def test_judge_nonzero_exit_fails_the_batch(self):
+        with TemporaryDirectory(prefix="apr-round11-judge-exit-") as folder:
+            root = Path(folder)
+            argv, output = _anchored_predict(root, [
+                f"Warehouse bay {index} keeps maple ribbons." for index in range(100)
+            ])
+            err = io.StringIO()
+            with (
+                redirect_stderr(err), redirect_stdout(io.StringIO()),
+                patch(
+                    "autopaperreview.proposal.fixed_benchmark.claude_argv",
+                    return_value=[sys.executable, "-c", "import sys; raise SystemExit(1)"],
+                ),
+            ):
+                code = main(argv)
+            self._assert_batch_failed(code, err, output)
+            self.assertIn("command exited 1", err.getvalue())

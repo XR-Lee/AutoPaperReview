@@ -542,6 +542,10 @@ def _contains_reported_result(value):
     return False
 
 
+class LeakBlocked(ValueError):
+    """One forum hit a frozen rule or an explicit non-clean verdict."""
+
+
 def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
     """Return the exact outbound payload only if its audit is clean."""
     require_leak_judge(judge)
@@ -550,7 +554,7 @@ def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
     # Outcome screening is allowed to keep a finding it attributed to earlier work.
     # Rank still rejects an uncleared target result. Reference coding never sees one.
     if stage in _REFERENCE_STAGES and _contains_reported_result(body):
-        raise ValueError("leak audit blocked a reported result in reference evidence")
+        raise LeakBlocked("leak audit blocked a reported result in reference evidence")
     rendered = serialize_payload(body, feedback)
     if feedback:
         packet = seal({"payload": body, "validation_feedback": feedback}, stage=stage)
@@ -562,10 +566,12 @@ def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
         verdict = validate_verdict(answer)
     except OSError:
         raise
+    except LeakBlocked:
+        raise
     except Exception as exc:
-        raise ValueError("leak audit blocked the proposal") from exc
+        raise ValueError(f"leak audit failed: {exc}") from exc
     if verdict["verdict"] != "clean":
-        raise ValueError("leak audit blocked the proposal")
+        raise LeakBlocked("leak audit blocked the proposal")
     return rendered
 
 

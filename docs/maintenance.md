@@ -7,7 +7,7 @@ This policy applies to the `0.1.x` line of AutoPaperReview.
 - CI tests CPython 3.10, 3.11, 3.12, and 3.13.
 - Python versions newer than 3.13 are best-effort until added to the CI matrix.
 - Pydantic `2.x` is the supported validation runtime.
-- Linux is the required CI platform. macOS and Windows are supported when the core tests and synthetic example pass, but optional adapters may have narrower support.
+- Linux is the required CI platform. macOS and Windows are supported for the paper-review core when the core tests and synthetic example pass, but optional adapters may have narrower support. The proposal harness is Linux-only (`fcntl` and `renameat2`).
 
 Dropping a tested Python version requires a documented release note. Adding support requires the full CI matrix, not only a local import check.
 

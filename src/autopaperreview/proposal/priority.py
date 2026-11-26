@@ -8,9 +8,11 @@ from statistics import mean
 
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import apd_cases, assert_no_label_leak, digest, read, require_distinct_output, write
+from .data import (
+    apd_cases, assert_no_label_leak, digest, label_leak_in, read, require_distinct_output, write,
+)
 from .file_io import input_sha256, local_output, protect_cli_output, read_text
-from .leak_audit import apply_leak_audit, model_leak_judge, require_leak_judge
+from .leak_audit import LeakBlocked, apply_leak_audit, model_leak_judge, require_leak_judge
 from .sanitized import sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
@@ -109,7 +111,12 @@ def stage_features(stage, verdict):
 
 def text_packet(doc):
     """Allowlisted flat proposal. Nested objects and score fields do not pass."""
-    return sanitize_proposal(doc)
+    try:
+        return sanitize_proposal(doc)
+    except ValueError as exc:
+        if label_leak_in(doc):
+            raise LeakBlocked(str(exc)) from exc
+        raise
 
 
 _PRIOR_STAGES = {"challenge", "delta", "opinion", "field"}
@@ -167,13 +174,13 @@ def rank(
         "exclude_title": title,
         "exclude_abstract": abstract if isinstance(abstract, str) else "",
     }
-    packet = sanitize_proposal(packet)
+    packet = text_packet(packet)
     history_exclusions["exclude_text"] = proposal_body(packet)
     history_options = {**history_exclusions, "target_year": year, "cutoff_ms": cutoff_ms}
     history_token = use_history_judge(leak_judge)
     try:
         if legacy is not None:
-            legacy = sanitize_proposal(legacy)
+            legacy = text_packet(legacy)
         if not any(packet.values()):
             raise ValueError("empty proposal")
         from .data import reported_result
@@ -190,13 +197,16 @@ def rank(
         # A screen receipt does not clear a rating, decision, award, or identity.
         # Reported results in the legacy packet are checked even when no stage
         # selects that packet, and a receipt for the main packet does not cover it.
-        assert_no_label_leak(packet, where="proposal")
-        if legacy is not None:
-            assert_no_label_leak(legacy, where="fallback proposal")
+        try:
+            assert_no_label_leak(packet, where="proposal")
+            if legacy is not None:
+                assert_no_label_leak(legacy, where="fallback proposal")
+        except ValueError as exc:
+            raise LeakBlocked(str(exc)) from exc
         if _has_reported(packet) and not _cleared("cleared_packet", packet):
-            raise ValueError("remove reported outcomes before ranking")
+            raise LeakBlocked("remove reported outcomes before ranking")
         if _has_reported(legacy) and not _cleared("cleared_legacy", legacy):
-            raise ValueError("remove reported outcomes before ranking")
+            raise LeakBlocked("remove reported outcomes before ranking")
         apply_leak_audit(packet, leak_judge)
         if legacy is not None:
             apply_leak_audit(legacy, leak_judge)
@@ -372,8 +382,11 @@ def load_profile(path):
 
 def screen_packet(packet, root, *, cached_only=False, provider=None, leak_judge=None):
     require_leak_judge(leak_judge)
-    packet = sanitize_proposal(packet)
-    assert_no_label_leak(packet, where="proposal")
+    packet = text_packet(packet)
+    try:
+        assert_no_label_leak(packet, where="proposal")
+    except ValueError as exc:
+        raise LeakBlocked(str(exc)) from exc
     source = outcome_screen.units(packet)
     if not source:
         clean, audit = outcome_screen.filter_units(packet, source, {"exclude": []})

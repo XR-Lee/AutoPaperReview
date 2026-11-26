@@ -502,7 +502,7 @@ class _Output:
     def _publish_locked(self, content: str, *, replace: bool) -> None:
         # flock is on the directory the caller already holds open. Deleting or
         # replacing a lock file cannot give a second process a different inode.
-        # Imported here so the main CLI can load on a platform without fcntl.
+        # The proposal harness is Linux-only. This lock uses fcntl.
         import fcntl
 
         fcntl.flock(self.directory, fcntl.LOCK_EX)

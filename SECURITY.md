@@ -18,6 +18,8 @@ Report vulnerabilities privately to the repository owner before opening a public
 
 AutoPaperReview is a single-user local tool. It is not a boundary between users.
 
+The proposal harness is Linux-only. Publish and its directory lock use `fcntl` and `renameat2`.
+
 Same-uid races on publish are out of scope and will not be fixed. Linux provides no atomic unlink-if-inode syscall, so another process running as the same user can rename a file onto a temporary name between a check and an unlink. Same-uid forgery of a `user.*` extended attribute is also out of scope. Publish does not use an extended attribute to decide whether a file may be replaced. An unmarked legacy report can be overwritten. A protected input that this process opened from another path is still refused.
 
 The proposal leak rules are frozen. Changing `sanitized.py` is not part of a merge. Measuring those rules against a real judge is a release gate, not a merge gate.

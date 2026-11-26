@@ -708,8 +708,12 @@ class AdversarialRegressionTests(unittest.TestCase):
         for text in paraphrases:
             self.assertFalse(label_leak(text))
             packet = {"proposal": "Index the archive. " + text}
-            for verdict in ("leak", "unsure", {"verdict": "unsure"}):
-                with self.assertRaisesRegex(ValueError, "leak audit blocked"):
+            for verdict, pattern in (
+                ("leak", "leak audit failed"),
+                ("unsure", "leak audit failed"),
+                ({"verdict": "unsure"}, "leak audit blocked"),
+            ):
+                with self.assertRaisesRegex(ValueError, pattern):
                     priority.rank(
                         packet,
                         Path("."),
