@@ -7,13 +7,15 @@ import math
 import re
 from pathlib import Path
 
-from ..command_transport import recover_json, reply_text, run_command
+from ..command_transport import reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .clarification_protocol import outside_scope
 from .data import digest, read, reported_result, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
-from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
+from .leak_audit import (
+    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, strict_model_value,
+)
 from .material import material
 from .panel_prompts import FORECAST, SOURCE
 from .sanitized import require_model_input, seal
@@ -103,7 +105,9 @@ def request(stage, body, cache, offline, *, leak_judge=None):
         return key, r
     for attempt in range(3):
         try:
-            raw, _ = run_command(command, model=model, system=prompt, prompt=message, timeout=240)
+            raw, _ = run_command(
+                command, model=model, system=prompt, prompt=message, timeout=240, strict=True,
+            )
         except RuntimeError as exc:
             if re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 r["state"] = "refusal"
@@ -114,7 +118,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
             r["state"] = "refusal"
             break
         try:
-            answer = json.loads(recover_json(text))
+            answer = strict_model_value(raw)
             validate(answer, body)
         except (ValueError, KeyError, TypeError):
             if attempt < 2:

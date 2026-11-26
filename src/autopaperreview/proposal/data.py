@@ -595,6 +595,9 @@ def archived_notes(path: Path):
                     raise ValueError("incomplete submission snapshot") from None
                 buf += more
                 continue
+            from .leak_audit import decode_json
+
+            item = decode_json(buf[:end])
             yield item
             buf = buf[end:].lstrip()
             while not buf:

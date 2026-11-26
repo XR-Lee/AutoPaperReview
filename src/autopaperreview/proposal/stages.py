@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from statistics import mean
 
-from ..command_transport import recover_json, reply_text, run_command
+from ..command_transport import run_command
 from . import contrast, merit, outcome_screen, source_evidence
 from .data import contiguous_quote, digest, label_leak, read, reported_result, retained_label_text, write
 from .file_io import read_text
@@ -15,9 +15,9 @@ from .leak_audit import PROMPT as LEAK_AUDIT
 from .leak_audit import (
     REPLY_PROTOCOL,
     apply_leak_audit,
-    decode_json,
     decode_json_object,
     parse_reply,
+    strict_model_value,
     payload_sha256,
     require_leak_judge,
     validate_verdict,
@@ -115,18 +115,32 @@ def _matching_spans(body, unit):
     return found
 
 
-def audit_spans(originals, packet):
-    """Map each cleaned audit unit back to contiguous offsets in the original review."""
-    if not isinstance(originals, dict):
+def audit_spans(originals, packet, labels):
+    """Map each cleaned audit unit back to the label-cited source unit only."""
+    if not isinstance(originals, dict) or not isinstance(labels, dict):
         raise TypeError("comments must be an object")
     spans = {}
     for key, row in packet.items():
-        reviewer, _, _dimension = key.partition(".")
-        if reviewer not in originals:
+        reviewer, _, dimension = key.partition(".")
+        items = labels.get(reviewer)
+        cited = None
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and item.get("dimension") == dimension:
+                    cited = item.get("evidence")
+                    break
+        reviewer_body = originals.get(reviewer)
+        if (
+            not isinstance(cited, list)
+            or len(cited) != len(row["units"])
+            or not isinstance(reviewer_body, dict)
+        ):
             raise ValueError("audit unit has no retained source span")
         matched = []
-        for unit in row["units"]:
-            found = _matching_spans(originals[reviewer], unit)
+        for unit_id, unit in zip(cited, row["units"], strict=True):
+            if unit_id not in reviewer_body:
+                raise ValueError("audit unit has no retained source span")
+            found = _matching_spans(reviewer_body[unit_id], unit)
             if not found:
                 raise ValueError("audit unit has no retained source span")
             matched.append(found)
@@ -349,11 +363,10 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")
     for attempt in range(3):
         raw, latency = run_command(
-            command, system=PROMPTS[stage], prompt=prompt, model=model, timeout=timeout
+            command, system=PROMPTS[stage], prompt=prompt, model=model, timeout=timeout, strict=True,
         )
-        body, _ = reply_text(raw)
         try:
-            result = validate(stage, decode_json(recover_json(body)), source, spans=spans)
+            result = validate(stage, strict_model_value(raw), source, spans=spans)
         except (KeyError, TypeError, ValueError) as exc:
             if attempt == 2:
                 raise ValueError(f"{stage} invalid after three calls: {exc}") from exc
@@ -399,7 +412,9 @@ def _invoke_leak_judge(prompt, system, cache, model, command, timeout, *, cached
         return result
     if cached_only:
         raise ValueError(f"missing cached leak audit judgment for request {path.stem}")
-    raw, _ = run_command(command, system=system, prompt=prompt, model=model, timeout=timeout)
+    raw, _ = run_command(
+        command, system=system, prompt=prompt, model=model, timeout=timeout, strict=True,
+    )
     result = parse_reply(raw)
     write(path, {"request": descriptor, "output": result, "reply": raw, "reply_sha256": payload_sha256(raw)})
     return result

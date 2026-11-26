@@ -171,11 +171,13 @@ _DECIMAL_SCORE = r"[+-]?\d+(?:\.\d+)?"
 _SCORE_VALUE = rf"(?:{_DECIMAL_SCORE}|(?=[ivx])x{{0,3}}(?:ix|iv|v?i{{0,3}}))"
 _FACT_SEPARATOR = r"[:=\-\u2010-\u2015\u2212]"
 _LABELED_REVIEW = re.compile(r"\b(?:meta|reviewer|my)\s+(?:ratings?|scores?|recommendations?)\b")
-# A review number may be followed by an explanation. A unit or a planned-test
-# word keeps the phrase in ordinary scientific prose.
+# A review number may end the text, sit before punctuation or a dash, or be
+# followed by an explanation. A unit or a planned-test word stays scientific prose.
 _SCORE_TAIL = (
-    r"(?=\s*(?:$|[.!?;,\]\)\(]|because\b|since\b|which\b|where\b|"
-    r"for\s+the\b|out\s+of\b|and\b|or\b|as\s+(?:an?\s+)?(?:example|review)\b))"
+    r"(?=$|\s*[.!?,;()/\n\u2013\u2014-]|\s+(?:"
+    r"because|since|which|where|out\s+of|or|versus|vs\.?|"
+    r"(?:for|to)\s+(?:the\s+)?(?:submission|paper|proposal)"
+    r")\b)"
 )
 _SCORE = re.compile(
     rf"\b(?P<label>ratings?|scores?|grades?|recommendations?)\s*"
@@ -215,7 +217,11 @@ _DECISION = re.compile(
     r"|\bcamera[\s\-]*ready\b"
     r"|\brecommend(?:ation)?\s+(?:to\s+)?(?:accept|reject)\w*"
     r"|\bvote\s+to\s+(?:accept|reject)\b"
+    r"|\b(?:the\s+)?(?:submission|manuscript|paper)\b(?:\s+\w+){0,6}\s+"
+    r"(?:was|were|is|has been|have been)\s+(?:accepted|rejected)\b"
+    r"(?!\s+(?:practice|assumption|hypothesis|definition|model|method)\b)"
     rf"|(?:决定|建议|推荐|结论)\s*[:=：]\s*{_WRAP}\s*(?:录用|拒稿|接受|拒绝|接收)"
+    r"|(?:投稿|稿件|论文)(?:(?!。).){0,8}(?:已|被)(?:(?!。).){0,4}(?:录取|录用|接收|拒稿)"
     r"|(?:评分|分数|打分|评级)\s*(?:[:=：]\s*)?\d"
 )
 _AWARD = re.compile(r"\b(?:best|outstanding)\s+paper\b|\bpaper\s+award\b")
@@ -373,6 +379,18 @@ _KEY_SUFFIXES = frozenset({
     "text", "value", "values",
 })
 _STATUS_OWNERS = _KEY_PREFIXES | {"decision", "outcome", "paper", "review", "reviewer", "submission", "venue"}
+_KEY_TOKENS = _KEY_LEMMAS | frozenset({
+    "contact", "contacts", "address", "addresses", "reviewer", "reviewers",
+    "phone", "telephone", "affiliation", "institution", "orcid",
+})
+
+
+def _key_tokens(key: object) -> list[str]:
+    """Split a key on separators and camel-case boundaries before markup glues them."""
+    raw = str(key)
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
+    spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", spaced)
+    return [token for token in re.split(r"[^0-9A-Za-z]+", spaced.casefold()) if token]
 
 
 def _key_word_blocked(word: str) -> bool:
@@ -390,6 +408,13 @@ def _key_word_blocked(word: str) -> bool:
 
 def score_field(key: object) -> bool:
     """Reject a key that names a decision, score, or identity, in any nesting."""
+    tokens = _key_tokens(key)
+    # Protocol context, not an identity field. A reviewer token beside a score
+    # or contact token is still rejected below.
+    if tokens == ["reviewer", "excerpts"]:
+        return False
+    if any(token in _KEY_TOKENS for token in tokens):
+        return True
     text = normalized_fact_text(str(key))
     compact = _compact(text)
     if compact in _COMPACT_SCORE_FIELDS or _KEY_OUTCOME.fullmatch(compact) is not None:

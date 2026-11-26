@@ -1,7 +1,9 @@
 """Synthetic command-entry regressions for publication and verified snapshots."""
 
+import errno
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from collections import Counter
@@ -263,3 +265,72 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         self.assertEqual((self.manifests / "external-sha256.json").read_bytes(), before_raw)
         self.assertEqual(prediction.read_bytes(), before_prediction)
         self.assertEqual(repo_file.read_bytes(), before_repo)
+
+    def test_a_short_overwrite_leaves_the_previous_report(self):
+        destination = self.root / "report.json"
+        original = '{"kept": true}\n'
+        destination.write_text(original, encoding="utf-8")
+        real_write = os.write
+
+        def short_write(fd, data):
+            chunk = data[:13] if len(data) > 13 else data
+            real_write(fd, chunk)
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        with patch("os.write", side_effect=short_write):
+            with self.assertRaises(OSError):
+                file_io.write_text(destination, '{"replaced": true, "complete": true}\n')
+        self.assertEqual(destination.read_text(encoding="utf-8"), original)
+        self.assertFalse(list(destination.parent.glob(".apr-output-*.tmp")))
+
+    def test_missing_rename_and_cross_device_leave_the_destination(self):
+        fresh = self.root / "fresh.json"
+        existing = self.root / "existing.json"
+        existing.write_text('{"old": 1}\n', encoding="utf-8")
+        before = existing.read_text(encoding="utf-8")
+        for name, error in (
+            ("renameat2", OSError(errno.ENOSYS, "renameat2 is not available")),
+            ("exdev", OSError(errno.EXDEV, "Invalid cross-device link")),
+        ):
+            with self.subTest(name=name):
+                fresh.unlink(missing_ok=True)
+                with patch.object(file_io, "_renameat2", side_effect=error):
+                    with self.assertRaises(OSError):
+                        file_io.write_text(fresh, "{}\n")
+                    with self.assertRaises(OSError):
+                        file_io.write_text(existing, '{"new": 1}\n')
+                self.assertFalse(fresh.exists())
+                self.assertEqual(existing.read_text(encoding="utf-8"), before)
+                self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+
+    def test_a_moved_checksum_is_not_replaced_by_the_report(self):
+        folder = self.root / "checksums"
+        folder.mkdir()
+        payload = b'{"files": {"synthetic": "abc"}}\n'
+        for name in ("external-sha256.json", "external-hmac-sha256.json", "aggregates.json"):
+            (folder / name).write_bytes(payload)
+        destination = self.root / "summary.json"
+        destination.write_text('{"old": 1}\n', encoding="utf-8")
+        hmac = folder / "external-hmac-sha256.json"
+        with file_io.protected_output(destination):
+            with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
+                reproduce_proposal_rank._pin_checksum_files()
+                hmac.replace(destination)
+                with self.assertRaisesRegex(ValueError, "distinct|disappeared|identity"):
+                    file_io.write_text(destination, '{"summary": true}\n')
+        self.assertEqual(destination.read_bytes(), payload)
+        self.assertFalse(hmac.exists())
+
+    def test_a_symlinked_input_root_is_the_real_directory(self):
+        source = self.root / "inputs"
+        source.mkdir()
+        link = self.root / "linked-inputs"
+        link.symlink_to(source, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            file_io.assert_output_isolated(source / "summary.json", link)
+
+    def test_gitignored_workdir_is_writable_and_tracked_files_are_not(self):
+        repo = Path(file_io.__file__).resolve().parents[3]
+        file_io.assert_output_isolated(repo / "workdir" / "synthetic-round2" / "review.json")
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            file_io.assert_output_isolated(repo / "benchmarks" / "proposal" / "repro" / "aggregates.json")

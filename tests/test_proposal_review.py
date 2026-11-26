@@ -218,7 +218,7 @@ class TestProposalReview(unittest.TestCase):
         self.assertEqual({c["split"] for c in replication["cases"]}, {"holdout"})
         calls = []
 
-        def agent(argv, *, system, prompt, model, timeout):
+        def agent(argv, *, system, prompt, model, timeout, **_extra):
             data = json.loads(prompt)
             calls.append(system)
             if system == COMPRESS:

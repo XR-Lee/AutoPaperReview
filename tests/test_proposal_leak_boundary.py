@@ -126,15 +126,7 @@ class ProposalLeakBoundaryTests(TestCase):
         fields = {k: {"text": None, "evidence": []} for k in stages.SECTIONS}
         fields["problem"] = {"text": PLAN, "evidence": ["s1"]}
         source = self.document("plan.json", {"proposal": fields})
-        fence = chr(96) * 3
-        for i, raw in enumerate((CLEAN, json.dumps({
-            "type": "result", "subtype": "success", "stop_reason": "end_turn",
-            "is_error": False, "result": f"{fence}json\n{CLEAN}\n{fence}",
-            "terminal_reason": "completed", "safety_stops": 0, "permission_denials": [],
-            "duration_ms": 120, "uuid": "00000000-0000-0000-0000-000000000001",
-            "usage": {"input_tokens": 4, "cache_creation": {"ephemeral_5m_input_tokens": 0}},
-            "modelUsage": {"synthetic-model": {"inputTokens": 4, "costUSD": 0}},
-        }))):
+        for i, raw in enumerate((CLEAN,)):
             seen = []
 
             def transport(_command, *, system, prompt, **_options):

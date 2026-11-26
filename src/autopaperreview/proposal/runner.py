@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
-from .leak_audit import payload_sha256, require_leak_judge, serialize_payload
+from .leak_audit import _contains_reported_result, payload_sha256, require_leak_judge, serialize_payload
 from .sanitized import seal
 from .stages import PROMPTS, audit_packet, audit_spans, invoke, proposal_text, validate
 
@@ -33,16 +33,17 @@ def run_batch(
             originals = read(bundle / "comments.json")
             packet = prospective_comments(originals)
             if stage == "audit":
-                packet = audit_packet(
-                    stage_result(root, case, "label")["output"], packet
-                )
-                spans = audit_spans(originals, packet)
+                labels = stage_result(root, case, "label")["output"]
+                packet = audit_packet(labels, packet)
+                spans = audit_spans(originals, packet, labels)
         elif stage == "compress":
             packet = read(bundle / "candidate.json")
         else:
             previous = stage_result(root, case, "compress")
             packet = proposal_text(previous["output"])
         packet = seal(packet, stage=stage)
+        if stage == "compress" and _contains_reported_result(packet):
+            raise ValueError("leak audit blocked a reported result")
         path = invoke(
             stage, packet, root / "cache", model, command, timeout,
             leak_judge=leak_judge, spans=spans,
@@ -85,11 +86,9 @@ def stage_result(root, case, stage):
         source = proposal_text(stage_result(root, case, "compress")["output"])
     elif stage == "audit":
         originals = read(bundle / "comments.json")
-        source = audit_packet(
-            stage_result(root, case, "label")["output"],
-            prospective_comments(originals),
-        )
-        spans = audit_spans(originals, source)
+        labels = stage_result(root, case, "label")["output"]
+        source = audit_packet(labels, prospective_comments(originals))
+        spans = audit_spans(originals, source, labels)
     else:
         source = read(bundle / "candidate.json") if stage == "compress" else prospective_comments(
             read(bundle / "comments.json")

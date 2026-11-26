@@ -54,9 +54,13 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _real(path: Path) -> Path:
+    return Path(os.path.realpath(path))
+
+
 def _within(parent: Path, child: Path) -> bool:
-    parent = _absolute(parent)
-    child = _absolute(child)
+    parent = _real(parent)
+    child = _real(child)
     if child == parent:
         return True
     try:
@@ -76,13 +80,27 @@ def _same_file(path: Path, other: Path) -> bool:
 
 
 def assert_output_isolated(path: Path, *input_roots: Path) -> None:
-    """Refuse an output that overlaps the repository, checksums, or an input directory."""
+    """Refuse an output that overlaps tracked repository files, checksums, or an input directory.
+
+    A gitignored review directory such as ``workdir/`` stays writable. Overlap uses
+    the real path, so a symlink to an input directory is the same directory.
+    """
+    from ..public_calibration import PublicCalibrationError, assert_local_only
     from .repro_metrics import repo_repro_dir
 
-    output = _absolute(path)
-    roots = [_repository_root(), repo_repro_dir(), *input_roots]
+    output = _real(path)
+    try:
+        assert_local_only(output)
+    except PublicCalibrationError as exc:
+        raise ValueError(
+            "output must not overlap committed repository files or the input directory"
+        ) from exc
+    roots = [_real(repo_repro_dir())]
+    for root in input_roots:
+        if root is not None:
+            roots.append(_real(root))
     for root in roots:
-        if root is not None and (_within(root, output) or _within(output, root)):
+        if _within(root, output) or _within(output, root):
             raise ValueError("output must not overlap committed repository files or the input directory")
     checksums = repo_repro_dir()
     for name in ("external-sha256.json", "external-hmac-sha256.json", "aggregates.json"):
@@ -90,10 +108,16 @@ def assert_output_isolated(path: Path, *input_roots: Path) -> None:
             raise ValueError("output must not overlap committed repository files or the input directory")
 
 
-def rename_exclusive(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str) -> None:
-    """Move a new file onto a name that must not already exist."""
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+
+
+def _renameat2(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str, flags: int) -> None:
+    """Rename without replacing, or exchange two names, and fail closed otherwise."""
     libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = libc.renameat2
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is not available", dst_name)
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
     if renameat2(
@@ -101,13 +125,20 @@ def rename_exclusive(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: st
         os.fsencode(src_name),
         int(dst_dirfd),
         os.fsencode(dst_name),
-        1,  # RENAME_NOREPLACE
+        int(flags),
     ) == 0:
         return
     error = ctypes.get_errno()
-    if error == errno.EEXIST:
+    if error == errno.EEXIST and flags == RENAME_NOREPLACE:
         raise ValueError(_ALIAS)
+    if error == errno.EXDEV:
+        raise OSError(error, "output must stay on the same filesystem as its staging file", dst_name)
     raise OSError(error, os.strerror(error), dst_name)
+
+
+def rename_exclusive(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str) -> None:
+    """Move a new file onto a name that must not already exist."""
+    _renameat2(src_dirfd, src_name, dst_dirfd, dst_name, RENAME_NOREPLACE)
 
 
 def remove_temporary(directory: int, name: str) -> None:
@@ -173,11 +204,12 @@ class _Output:
             raise ValueError("input file identity changed while preparing the result")
 
     def publish(self, content: str, *, replace: bool = False) -> None:
-        """Publish content from a fresh directory that cannot be an input file.
+        """Publish a complete file, then make its name visible.
 
-        A new destination is published with a non-replacing rename. An existing
-        file is rewritten through the file descriptor opened after the identity
-        check, so an input moved onto that name is left unchanged.
+        A new destination uses a non-replacing rename from a fresh directory.
+        An existing report is exchanged with a complete temporary file in the
+        same directory. A short write leaves the previous file untouched, and
+        an input moved onto the destination name is not unlinked.
         """
         self.check()
         original = self._destination_identity()
@@ -185,6 +217,10 @@ class _Output:
             raise ValueError(_ALIAS)
         if original is not None and original in self.inputs.values():
             raise ValueError(_ALIAS)
+        if original is not None:
+            self._exchange_verified(content, original)
+            self.check()
+            return
         staging = Path(tempfile.mkdtemp(prefix="apr-output-"))
         staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -196,41 +232,63 @@ class _Output:
             current = self._destination_identity()
             if current != original or (current is not None and current in self.inputs.values()):
                 raise ValueError(_ALIAS)
-            if current is None:
-                rename_exclusive(staging_fd, temp, self.directory, self.path.name)
-            else:
-                self._rewrite_verified(staging_fd, temp, original)
+            rename_exclusive(staging_fd, temp, self.directory, self.path.name)
             self.check()
         finally:
             os.close(staging_fd)
             shutil.rmtree(staging, ignore_errors=True)
 
-    def _rewrite_verified(self, staging_fd: int, temp_name: str, original: tuple[int, int]) -> None:
-        """Write into the already-open destination inode. Never unlink a swapped path."""
+    def _exchange_verified(self, content: str, original: tuple[int, int]) -> None:
+        """Replace an existing file only after the new bytes are complete."""
+        name = f".apr-output-{uuid4().hex}.tmp"
+        created = _write_complete(self.directory, name, content.encode("utf-8"))
         try:
-            dest = os.open(self.path.name, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=self.directory)
-        except OSError as exc:
-            raise ValueError(_ALIAS) from exc
-        try:
-            info = os.fstat(dest)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
-                or file_identity(info) != original
-                or original in self.inputs.values()
-            ):
+            self.check()
+            current = self._destination_identity()
+            if current != original or current in self.inputs.values():
                 raise ValueError(_ALIAS)
-            with os.fdopen(os.open(temp_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=staging_fd), "rb") as source:
-                payload = source.read()
-            os.ftruncate(dest, 0)
-            offset = 0
-            while offset < len(payload):
-                offset += os.write(dest, payload[offset:])
-            os.fsync(dest)
-            if self._destination_identity() != original:
+            _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+            destination = self._destination_identity()
+            swapped = file_identity(os.stat(name, dir_fd=self.directory, follow_symlinks=False))
+            if destination != created or swapped != original or swapped in self.inputs.values():
+                try:
+                    _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+                except OSError:
+                    pass
                 raise ValueError(_ALIAS)
-        finally:
-            os.close(dest)
+            held = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
+            if file_identity(held) != original or original in self.inputs.values():
+                raise ValueError(_ALIAS)
+            os.unlink(name, dir_fd=self.directory)
+        except BaseException:
+            try:
+                info = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
+            except FileNotFoundError:
+                info = None
+            if info is not None and file_identity(info) == created:
+                remove_temporary(self.directory, name)
+            raise
+
+
+def _write_complete(directory: int, name: str, payload: bytes) -> tuple[int, int]:
+    """Write every byte to a new file and fsync it. A short write deletes that file only."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    fd = os.open(name, flags, 0o600, dir_fd=directory)
+    try:
+        view = memoryview(payload)
+        offset = 0
+        while offset < len(view):
+            wrote = os.write(fd, view[offset:])
+            if wrote <= 0:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            offset += wrote
+        os.fsync(fd)
+        return file_identity(os.fstat(fd))
+    except BaseException:
+        remove_temporary(directory, name)
+        raise
+    finally:
+        os.close(fd)
 
 
 @contextmanager

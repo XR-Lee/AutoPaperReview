@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 
 from .sanitized import require_model_input, seal
 
@@ -52,8 +53,7 @@ OUTCOME_SCREEN_PROMPT = _JUDGE_INSTRUCTIONS + (
 
 _REFERENCE_STAGES = {"label", "audit", "ref_extract", "ref_grade"}
 _OUTCOME_SCREEN_STAGES = {"outcome_screen", "outcome_attribution", "outcome_context"}
-_FENCE = re.compile(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
-REPLY_PROTOCOL = 3
+REPLY_PROTOCOL = 4
 
 _RESULT_FIELDS = {
     "type", "result", "subtype", "is_error", "status", "stop_reason",
@@ -134,8 +134,30 @@ def decode_json_object(text):
 def _decode_reply(text):
     if not isinstance(text, str):
         raise ValueError("expected JSON text")
-    fence = _FENCE.fullmatch(text.strip())
-    return decode_json_object(fence[1] if fence else text)
+    return decode_json_object(text)
+
+
+def strict_model_value(stdout: str):
+    """Parse a proposal reply before any envelope merge.
+
+    Duplicate keys fail here, in the outer object and in a CLI ``result``
+    string. A fence or trailing value is not a verdict.
+    """
+    value = decode_json(stdout)
+    if isinstance(value, dict) and value.get("type") == "result" and "result" in value:
+        from ..command_transport import CommandTransportError
+
+        if value.get("is_error"):
+            raise CommandTransportError("command reported an error: " + str(value.get("result"))[:300])
+        if value.get("stop_reason") == "max_tokens":
+            raise CommandTransportError("command reply stopped at max_tokens")
+        inner = value.get("result")
+        if not isinstance(inner, str):
+            raise ValueError("expected a JSON object")
+        value = decode_json(inner)
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
 
 
 def _metric(value):
@@ -241,7 +263,7 @@ def _contains_reported_result(value):
 
     if isinstance(value, str):
         return reported_result(value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return any(_contains_reported_result(item) for item in value.values())
     if isinstance(value, (list, tuple)):
         return any(_contains_reported_result(item) for item in value)
@@ -253,10 +275,10 @@ def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
     require_leak_judge(judge)
     packet = seal(proposal, stage=stage)
     body = require_model_input(packet, stage=stage)
-    if stage not in _OUTCOME_SCREEN_STAGES and _contains_reported_result(body):
-        if stage in _REFERENCE_STAGES:
-            raise ValueError("leak audit blocked a reported result in reference evidence")
-        raise ValueError("leak audit blocked a reported result")
+    # Outcome screening is allowed to keep a finding it attributed to earlier work.
+    # Rank still rejects an uncleared target result. Reference coding never sees one.
+    if stage in _REFERENCE_STAGES and _contains_reported_result(body):
+        raise ValueError("leak audit blocked a reported result in reference evidence")
     rendered = serialize_payload(body, feedback)
     if feedback:
         packet = seal({"payload": body, "validation_feedback": feedback}, stage=stage)

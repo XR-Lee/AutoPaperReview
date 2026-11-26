@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from contextlib import closing
@@ -21,8 +22,28 @@ def words(text):
     return [w for w in re.findall("[a-z][a-z0-9-]{2,}", text.lower()) if w not in STOP]
 
 
+def canonical_text(text: str) -> str:
+    """NFC/NFD-insensitive text with surrounding and repeated whitespace removed."""
+    folded = unicodedata.normalize("NFKC", text or "")
+    folded = "".join(
+        char for char in unicodedata.normalize("NFKD", folded) if unicodedata.category(char) != "Mn"
+    )
+    return re.sub(r"\s+", " ", folded).strip()
+
+
+def canonical_key(value: object) -> str:
+    """The identity used when a record key is stored, excluded, or looked up."""
+    if type(value) is bool or type(value) not in (str, int):
+        raise ValueError("prior record key must be a string or integer")
+    return unicodedata.normalize("NFC", str(value)).strip()
+
+
 def norm_title(text: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    return " ".join(re.findall(r"[a-z0-9]+", canonical_text(text).casefold()))
+
+
+def _token_signature(text: str) -> tuple[str, ...]:
+    return tuple(sorted(re.findall(r"[a-z0-9]+", canonical_text(text).casefold())))
 
 
 _SPLIT_FIELDS = ("split", "partition", "cohort")
@@ -136,7 +157,13 @@ def same_document(proposal, title, abstract) -> bool:
     if row_abstract and (row_abstract in parts or row_abstract == joined):
         return True
     row_joined = norm_title(f"{title or ''} {abstract or ''}".strip())
-    return bool(row_joined) and row_joined == joined
+    if row_joined and row_joined == joined:
+        return True
+    proposal_signature = _token_signature(" ".join(
+        value for value in proposal.values() if isinstance(value, str)
+    ))
+    row_signature = _token_signature(f"{title or ''} {abstract or ''}")
+    return bool(proposal_signature) and proposal_signature == row_signature
 
 
 def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
@@ -188,8 +215,13 @@ def eligible_history(
     identifiers = _arxiv_identifiers(row)
     if identifiers is None or len(identifiers) > 1:
         return False
-    if exclude_key and str(row.get("key") or "") == str(exclude_key):
-        return False
+    row_key = row.get("key")
+    if exclude_key not in ("", None) and row_key is not None:
+        try:
+            if canonical_key(row_key) and canonical_key(row_key) == canonical_key(exclude_key):
+                return False
+        except ValueError:
+            return False
     if exclude_forum and str(row.get("forum") or "") == str(exclude_forum):
         return False
     wanted_title = norm_title(exclude_title)
@@ -204,6 +236,28 @@ def eligible_history(
         if arxiv in identifiers or arxiv in unquote(searchable).casefold():
             return False
     return True
+
+
+def _collect_times(value, found: list) -> None:
+    if isinstance(value, dict):
+        for field in _HISTORY_TIME_FIELDS:
+            if field in value:
+                found.append(value[field])
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                _collect_times(child, found)
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                _collect_times(child, found)
+
+
+def _opinion_splits_allowed(item) -> bool:
+    """A nested split counts. No split fields is not a conflict."""
+    names: list[str] = []
+    if not _collect_splits(item, names):
+        return False
+    return all(name in _DEVELOPMENT_SPLITS for name in names)
 
 
 def historical_opinions(items, cutoff_ms, *, snapshot_ms=None, target_year=None):
@@ -222,10 +276,12 @@ def historical_opinions(items, cutoff_ms, *, snapshot_ms=None, target_year=None)
             year = _positive_stamp(item.get("year"))
             if item.get("year") is not None and (year is None or target_year is not None and year >= target_year):
                 continue
-            if any(item.get(field) is not None for field in _SPLIT_FIELDS) and not development_row(item):
+            if not _opinion_splits_allowed(item):
                 continue
             text = item.get("opinion", item.get("text"))
-            available = latest_stamp(item.get(field) for field in _HISTORY_TIME_FIELDS)
+            times: list = []
+            _collect_times(item, times)
+            available = latest_stamp(times)
         else:
             continue
         if isinstance(text, str) and text.strip() and available is not None and available < cutoff:
@@ -264,9 +320,7 @@ def _record_key(row) -> str:
     key = row.get("key")
     if key is None:
         return ""
-    if type(key) is bool or type(key) not in (str, int):
-        raise ValueError("prior record key must be a string or integer")
-    return str(key).strip()
+    return canonical_key(key)
 
 
 def build(corpus: Path, db: Path):

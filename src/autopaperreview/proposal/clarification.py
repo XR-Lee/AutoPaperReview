@@ -4,13 +4,15 @@ import json
 import re
 from pathlib import Path
 
-from ..command_transport import recover_json, reply_text, run_command
+from ..command_transport import reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
 from .data import digest, read, reported_result, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
-from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
+from .leak_audit import (
+    apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge, strict_model_value,
+)
 from .outcome_screen import units
 from .sanitized import require_model_input, seal
 from .stages import claude_argv
@@ -46,7 +48,9 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
     disposition = "response"
     for attempt in range(3):
         try:
-            raw, _ = run_command(command, system=system, model=model, prompt=message, timeout=timeout)
+            raw, _ = run_command(
+                command, system=system, model=model, prompt=message, timeout=timeout, strict=True,
+            )
         except RuntimeError as exc:
             if not re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 raise
@@ -57,7 +61,7 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
             output, disposition = abstention, "refusal"
             break
         try:
-            output = json.loads(recover_json(body))
+            output = strict_model_value(raw)
             protocol.validate(stage, output, data)
         except (ValueError, TypeError, KeyError):
             if attempt == 2:

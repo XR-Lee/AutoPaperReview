@@ -23,6 +23,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from autopaperreview.proposal.data import read  # noqa: E402
 from autopaperreview.proposal.file_io import (  # noqa: E402
     assert_output_isolated,
+    local_output,
+    open_input,
     protected_output,
     write_text,
 )
@@ -33,8 +35,19 @@ from autopaperreview.proposal.repro_metrics import (  # noqa: E402
     committed_aggregates,
     external_root,
     headlines_match,
+    repo_repro_dir,
     reproduce_headlines,
 )
+
+
+def _pin_checksum_files() -> None:
+    """Remember manifest inodes before verification, including a raw-hash early return."""
+    folder = repo_repro_dir()
+    for name in ("external-sha256.json", "external-hmac-sha256.json", "aggregates.json"):
+        path = folder / name
+        if path.is_file():
+            with open_input(path):
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if args.output is not None:
+            # A symlink in the output path is refused before the realpath overlap check.
+            local_output(args.output)
             assert_output_isolated(args.output, *_input_roots(args, supplied))
         with protected_output(args.output):
             return _run(args, supplied)
@@ -79,6 +94,7 @@ def _input_roots(args, supplied) -> list[Path]:
 def _run(args, supplied) -> int:
     if args.output is not None:
         assert_output_isolated(args.output, *_input_roots(args, supplied))
+        _pin_checksum_files()
     if all(path is not None for path in supplied):
         missing = [str(path) for path in supplied if not path.is_file()]
         if missing:

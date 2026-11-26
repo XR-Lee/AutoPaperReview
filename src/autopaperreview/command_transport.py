@@ -193,8 +193,22 @@ def _require_json_stdout(stdout: str) -> None:
         raise CommandTransportError("command stdout is not JSON")
 
 
-def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeout: float) -> tuple[str, float]:
-    """Run one call. Returns stdout and the latency in seconds."""
+def run_command(
+    argv: list[str],
+    *,
+    system: str,
+    prompt: str,
+    model: str,
+    timeout: float,
+    strict: bool = False,
+) -> tuple[str, float]:
+    """Run one call. Returns stdout and the latency in seconds.
+
+    The paper-review adapter keeps the historical contract: a zero exit returns
+    stdout as written, and the adapter unwraps an envelope or a fenced object.
+    Proposal and leak callers pass ``strict`` so any stderr text, or stdout that
+    is not exactly one JSON value, fails before a verdict is read.
+    """
     work = Path(tempfile.mkdtemp(prefix="apr-command-"))
     holder = Path(tempfile.mkdtemp(prefix="apr-command-system-"))
     try:
@@ -232,9 +246,12 @@ def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeou
         if completed.returncode != 0:
             detail = (stderr or stdout).strip()[:500]
             raise CommandTransportError(f"command exited {completed.returncode}: {detail}")
-        if stderr.strip():
-            raise CommandTransportError("command wrote to stderr")
-        _require_json_stdout(stdout)
+        if not stdout.strip():
+            raise CommandTransportError("command wrote nothing to stdout")
+        if strict:
+            if stderr.strip():
+                raise CommandTransportError("command wrote to stderr")
+            _require_json_stdout(stdout)
         return stdout, latency
     finally:
         shutil.rmtree(work, ignore_errors=True)
