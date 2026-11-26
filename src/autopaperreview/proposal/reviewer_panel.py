@@ -79,7 +79,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
     if not source_stage:
         descriptor["version"] = 1
     key = digest(descriptor)
-    path = cache / stage / (key + ".json")
+    path = cache / "panel" / stage / (key + ".json")
     empty = {} if source_stage else None
     missing = None
     if source_stage:

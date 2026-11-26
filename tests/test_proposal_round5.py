@@ -403,7 +403,7 @@ class ReceiptTests(TestCase):
                 "prompt": digest(claim_review.PROMPTS["forecast"]),
             }
             descriptor.update(version=1, mode="forecast")
-            path = root / "forecast" / (digest(descriptor) + ".json")
+            path = root / "claims" / "forecast" / (digest(descriptor) + ".json")
             stored = {"c1": [0.0, 5, 1]}
             write(path, {
                 "request": descriptor, "state": "response", "output": stored,
@@ -423,7 +423,7 @@ class ReceiptTests(TestCase):
                 "input": payload_sha256(panel_message),
                 "prompt": digest(panel.FORECAST),
             }
-            panel_path = root / "forecast" / (digest(panel_descriptor) + ".json")
+            panel_path = root / "panel" / "forecast" / (digest(panel_descriptor) + ".json")
             swapped = [{"n": True, "grade": 3, "pro": None, "con": None}]
             write(panel_path, {
                 "request": panel_descriptor, "state": "response", "output": swapped,

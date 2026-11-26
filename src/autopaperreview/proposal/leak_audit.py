@@ -254,6 +254,26 @@ def _reject_unsuccessful_envelope(value: dict) -> None:
             fail("command reported invalid usage")
 
 
+def _unwrap_result(value, depth: int = 0):
+    """Require ``result`` on a result wrapper and reject a nested failure first."""
+    from ..command_transport import CommandTransportError
+
+    if depth > 8:
+        raise CommandTransportError("command result wrapper is nested too deeply")
+    if not isinstance(value, dict) or value.get("type") != "result":
+        return value
+    if "result" not in value or value.get("result") is None:
+        raise CommandTransportError("command result wrapper has no result")
+    _reject_unsuccessful_envelope(value)
+    inner = value.get("result")
+    if not isinstance(inner, str):
+        raise ValueError("expected JSON text")
+    decoded = decode_model_json(inner)
+    if isinstance(decoded, dict) and decoded.get("type") == "result":
+        return _unwrap_result(decoded, depth + 1)
+    return decoded
+
+
 def strict_model_value(stdout: str):
     """Parse a proposal reply before any envelope merge.
 
@@ -261,15 +281,11 @@ def strict_model_value(stdout: str):
     string. A fence or trailing value is not a verdict. A JSON array is a
     valid reply for the reviewer-panel forecast; other stages reject it
     when they require an object. An envelope that reports refusal, a failure
-    status, an error subtype, or length truncation is not unwrapped.
+    status, an error subtype, or length truncation is not unwrapped. A
+    ``type=result`` wrapper must carry ``result``, and a wrapper nested inside
+    it is checked again before the business value is accepted.
     """
-    value = decode_model_json(stdout)
-    if isinstance(value, dict) and value.get("type") == "result" and "result" in value:
-        _reject_unsuccessful_envelope(value)
-        inner = value.get("result")
-        if not isinstance(inner, str):
-            raise ValueError("expected JSON text")
-        value = decode_model_json(inner)
+    value = _unwrap_result(decode_model_json(stdout))
     if not isinstance(value, (dict, list)):
         raise ValueError("expected a JSON object or array")
     return value

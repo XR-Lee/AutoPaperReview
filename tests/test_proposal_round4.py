@@ -396,7 +396,7 @@ class StructureTests(TestCase):
                 "input": payload_sha256(message),
                 "prompt": digest(claim_review.PROMPTS["ground"]),
             }
-            path = root / "ground" / (digest(descriptor) + ".json")
+            path = root / "claims" / "ground" / (digest(descriptor) + ".json")
             write(path, {"request": descriptor, "state": "response", "output": {"folded": True}})
             with patch.object(claim_review, "run_command", side_effect=AssertionError("business call")):
                 with self.assertRaises(ValueError):
@@ -410,7 +410,7 @@ class StructureTests(TestCase):
                 "input": payload_sha256(panel_message),
                 "prompt": digest(panel.FORECAST),
             }
-            panel_path = root / "forecast" / (digest(panel_descriptor) + ".json")
+            panel_path = root / "panel" / "forecast" / (digest(panel_descriptor) + ".json")
             write(panel_path, {"request": panel_descriptor, "state": "response", "output": [{"folded": True}]})
             with patch.object(panel, "run_command", side_effect=AssertionError("business call")):
                 with self.assertRaises(ValueError):

@@ -575,8 +575,8 @@ _DECISION_WORDS = frozenset({
 })
 _STATUS_HEADS = frozenset({
     "decision", "verdict", "outcome", "status", "recommendation", "recommendations",
-    "estado", "dictamen", "puntuacion", "calificacion", "puntaje",
-    "决定", "结论", "建议", "推荐", "状态", "总分", "总评", "评分",
+    "estado", "dictamen", "puntuacion", "calificacion", "puntaje", "resultado", "resolucion",
+    "决定", "结论", "建议", "推荐", "状态", "总分", "总评", "评分", "审稿", "评审",
 })
 _STATUS_BINDERS = frozenset({
     "is", "was", "were", "been", "be", "are", "received", "gets", "got", "given",
@@ -586,7 +586,7 @@ _STATUS_BINDERS = frozenset({
 _STATUS_ABBREV = frozenset({"acc", "rej", "rec"})
 _SCORE_LABELS = frozenset({
     "rating", "ratings", "grade", "grades", "recommendation", "recommendations",
-    "puntuacion", "calificacion", "puntaje",
+    "puntuacion", "calificacion", "puntaje", "nota",
 })
 _PLAN_CUES = frozenset({
     "plan", "planned", "propose", "proposed", "will", "intend", "intended",
@@ -749,8 +749,10 @@ _EARLIER_WORD = re.compile(r"(?i)\b(?:earlier|prior|previous)\b")
 _REVIEW_STATUS = re.compile(
     r"(?i)\b(?:review|reviewer|meta-?review)\s*(?:status|state|decision)\s*[:=]\s*\S"
     r"|\b(?:review\s+)?(?:status|decision)\s*[:=]\s*(?:major|minor)\s+revision\b"
+    r"|\b(?:manuscript|submission|paper)\s+status\s*[:=：]\s*(?:under|in|pending|desk|major|minor|awaiting)\b"
+    r"|\bestado\s+(?:de\s+)?(?:la\s+)?(?:revision|manuscrito|articulo)\s*[:：]\s*\S"
     r"|审稿(?:意见)?(?:状态|结论)\s*[:：]\s*\S"
-    r"|(?:评审|审稿)(?:状态|结论)\s*[:：为是]\s*(?:大修|小修|待审|修改|拒稿|录用)"
+    r"|(?:评审|审稿)(?:状态|结论|意见)\s*[:：为是]\s*(?:大修|小修|待审|修改|拒稿|录用)"
 )
 _CJK_DECISION = re.compile(
     r"(?:投稿|稿件|论文|提交|本稿|本文).{0,8}(?:已|被)?(?:录取|录用|拒稿|拒绝)"
@@ -758,8 +760,8 @@ _CJK_DECISION = re.compile(
     r"|(?:录取|录用|拒稿)(?:决定|结论)"
 )
 _CJK_SCORE = re.compile(
-    r"(?:总体|最终|审稿|评审|元评审)?(?:总分|总评)\s*[:：为是]?\s*\d"
-    r"|(?:总体|最终|审稿|评审)(?:评分|分数|得分|评级)\s*[:：为是]?\s*\d"
+    r"(?:总体|最终|审稿|评审|元评审|综合|平均|总)?(?:总分|总评)\s*[:：为是]?\s*\d"
+    r"|(?:总体|最终|审稿|评审|综合|平均|总)(?:评分|分数|得分|评级|成绩)\s*[:：为是]?\s*\d"
 )
 _CJK_RANGE = re.compile(r"(?:评分|总分|总评|评级).{0,12}\d\s*(?:到|至|—|-)\s*\d")
 _IDENTITY_LABEL = re.compile(
@@ -767,28 +769,61 @@ _IDENTITY_LABEL = re.compile(
     r"|\b(?:e-?mail|correo(?:\s+electronico)?)\s*[:：]\s*\S"
     r"|\b(?:phone|telephone)\s*[:：.]?\s*\+?\d[\d\s().-]{6,}"
     r"|\b(?:tel|mobile)\s*[:：.]\s*\+?\d[\d\s().-]{6,}"
-    r"|(?:单位|机构|邮箱|电话|大学)\s*[:：]\s*\S"
+    r"|(?:单位|机构|邮箱|电话|大学|签名|署名人|联系方式|通讯作者)\s*[:：]\s*\S"
     r"|(?:作者|署名)\s*[:：]\s*\S"
     r"|\b(?:authors?|autores|byline)\s*[:：]\s*\S"
 )
+_SIGNATURE_LABEL = re.compile(
+    r"(?i:\b(?:signature|signed|firma|firmado|contacto|institucion)\b)\s*[:：=]\s*[A-Z\u3400-\u9fff]"
+)
 _LABEL_SEPARATORS = frozenset({":", "=", "|", "-", "—", "–", "－"})
 _LABEL_VALUES = _DECISION_WORDS | _STATUS_ABBREV | {"major", "minor", "大修", "小修", "待审"}
+_DECISION_PHRASES = frozenset({
+    "major revision", "minor revision", "weak accept", "strong accept", "weak reject",
+    "strong reject", "conditional accept", "desk reject", "camera ready", "under review",
+    "in review", "pending review", "accept as poster", "accept as oral", "accept as spotlight",
+    "revision mayor", "revision menor", "aceptado condicional", "修改后录用", "弱接收", "强接收",
+})
+_LABEL_QUALIFIERS = frozenset({
+    "final", "global", "oficial", "official", "overall", "total", "meta", "reviewer",
+})
+
+
+def _value_phrase(tokens: list[str], start: int) -> str:
+    words = []
+    for token in tokens[start:start + 3]:
+        if token in _LABEL_SEPARATORS or token in _CONTENT_SKIP:
+            break
+        words.append(token)
+        if " ".join(words) in _DECISION_PHRASES or token in _LABEL_VALUES or _is_number(token):
+            return " ".join(words)
+    return " ".join(words)
 
 
 def _labeled_fact(tokens: list[str]) -> bool:
-    """A review or identity label, a separator, and a value in the next token."""
+    """A review or identity label, a separator, and a value in the next tokens.
+
+    One qualifier may sit between the label and the separator, as in
+    ``nota final: 8``. A multi-word decision such as ``major revision`` counts.
+    """
     for index, token in enumerate(tokens):
-        nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
-        value = tokens[index + 2] if index + 2 < len(tokens) else ""
-        if nxt not in _LABEL_SEPARATORS or not value:
+        cursor = index + 1
+        if cursor < len(tokens) and tokens[cursor] in _LABEL_QUALIFIERS:
+            cursor += 1
+        separator = tokens[cursor] if cursor < len(tokens) else ""
+        if separator not in _LABEL_SEPARATORS:
             continue
+        value = _value_phrase(tokens, cursor + 1)
+        if not value:
+            continue
+        head = value.split()[0]
         qualified = token in {"score", "scores"} and index and tokens[index - 1] in _SCORE_QUALIFIERS
         if token in _SCORE_LABELS or qualified or token in {"overall", "total"}:
-            if _is_number(value) or value in _LABEL_VALUES:
+            if _is_number(head) or head in _LABEL_VALUES or value in _DECISION_PHRASES:
                 return True
-        elif token in _IDENTITY_LABEL_TOKENS and value not in _CONTENT_SKIP:
+        elif token in _IDENTITY_LABEL_TOKENS and head not in _CONTENT_SKIP:
             return True
-        elif token in _STATUS_HEADS and value in _LABEL_VALUES:
+        elif token in _STATUS_HEADS and (head in _LABEL_VALUES or value in _DECISION_PHRASES):
             return True
     return False
 
@@ -861,6 +896,8 @@ def _review_cell_value(cell: str) -> bool:
         or folded in _DECISION_WORDS
         or folded in _STATUS_ABBREV
         or folded in _STATUS_DEGREES
+        or folded in _DECISION_PHRASES
+        or any(folded.startswith(phrase + " ") or folded == phrase for phrase in _DECISION_PHRASES)
     )
 
 
@@ -905,8 +942,20 @@ def _row_has_fact(row: list[str]) -> bool:
     )
 
 
+_DT_DD = re.compile(r"(?is)<dt\b[^>]*>(.*?)</dt>\s*<dd\b[^>]*>(.*?)</dd>")
+_SETEXT = re.compile(r"(?m)^([^\n]{1,80})\n[ \t]*[-=]{3,}[ \t]*\n")
+
+
 def _layout_text(text: str) -> str:
-    """Turn a definition item into a label line. A trailing LaTeX rule is not a cell."""
+    """Turn a definition item, heading, or description pair into a label line.
+
+    A trailing LaTeX rule is not a cell.
+    """
+    text = _DT_DD.sub(
+        lambda match: f"{_without_markup(match.group(1)).strip()}: {_without_markup(match.group(2)).strip()}\n",
+        text,
+    )
+    text = _SETEXT.sub(r"\1: ", text)
     text = re.sub(r"\\item\s*\[([^\]]{1,80})\]", r"\1: ", text)
     return re.sub(r"\\\\+(?=\s|$)", " ", text)
 
@@ -926,13 +975,24 @@ def _table_rows(text: str) -> list[list[str]]:
     return rows
 
 
+def _cell_has_labeled_value(cell: str) -> bool:
+    """A one-cell row can still carry ``Label: value`` inside the cell."""
+    parts = [part.strip() for part in _LINE_SPLIT.split(cell) if part.strip()]
+    if len(parts) >= 2 and _pair_is_fact(parts[0], parts[1]):
+        return True
+    return _labeled_fact(_construct_tokens(cell))
+
+
 def _tabular_fact(text: str) -> bool:
     """A label cell beside a decision, score, status, or identity value.
 
     A one-column Markdown table still aligns the header with the next row.
+    A single cell that itself contains a label and a value is the same shape.
     """
     rows = _table_rows(text)
     if any(_row_has_fact(row) for row in rows):
+        return True
+    if any(_cell_has_labeled_value(cell) for row in rows for cell in row):
         return True
     for header, body in zip(rows, rows[1:]):
         width = min(len(header), len(body))
@@ -1014,6 +1074,7 @@ def _explicit_construct(text: str) -> bool:
         or _CJK_DECISION.search(text) is not None
         or _CJK_SCORE.search(text) is not None
         or _IDENTITY_LABEL.search(text) is not None
+        or _SIGNATURE_LABEL.search(text) is not None
     )
 
 

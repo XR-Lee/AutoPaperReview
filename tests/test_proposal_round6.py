@@ -289,11 +289,12 @@ class ReceiptEnvelopeTests(TestCase):
                 (panel, "forecast", {"s1": PLAN}),
             ):
                 with self.subTest(stage=stage_module.__name__):
-                    # Claims and panel both cache under forecast/<key>.json. Open that key.
+                    # Claims and panel keep forecast receipts in separate directories.
                     stage_root = root / stage_module.__name__.rsplit(".", 1)[-1]
                     with patch.object(stage_module, "run_command", return_value=("not json", 0.0)):
                         key, _result = stage_module.request(stage, body, stage_root, False, leak_judge=judge)
-                    path = stage_root / stage / f"{key}.json"
+                    prefix = "claims" if stage_module is claim_review else "panel"
+                    path = stage_root / prefix / stage / f"{key}.json"
                     self.assertTrue(path.is_file(), path)
                     stored = json.loads(path.read_text(encoding="utf-8"))
                     self.assertIs(stored["request"]["version"], 1)

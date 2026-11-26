@@ -5,8 +5,8 @@ from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
 from .leak_audit import (
-    _contains_reported_result, payload_sha256, require_business_receipt, require_leak_judge,
-    same_model_value, serialize_payload, strict_model_value,
+    BUSINESS_REPLY_PROTOCOL, _contains_reported_result, payload_sha256, require_business_receipt,
+    require_leak_judge, same_model_value, serialize_payload, strict_model_value,
 )
 from .sanitized import seal
 from .stages import PROMPTS, audit_packet, audit_spans, invoke, proposal_text, validate
@@ -53,7 +53,12 @@ def run_batch(
         )
         write(
             target / f"{stage}.json",
-            {"bundle": case["bundle"], "cache": str(path.relative_to(root))},
+            {
+                "bundle": case["bundle"],
+                "cache": str(path.relative_to(root)),
+                "model": model,
+                "command_sha256": digest(command),
+            },
         )
 
     selected = [
@@ -96,13 +101,27 @@ def stage_result(root, case, stage):
         source = read(bundle / "candidate.json") if stage == "compress" else prospective_comments(
             read(bundle / "comments.json")
         )
-    req = entry["request"]
-    if (
-        req["stage"] != stage
-        or req["input_sha256"] != payload_sha256(serialize_payload(source))
-        or req["system_sha256"] != digest(PROMPTS[stage])
-    ):
-        raise ValueError(f"stale {stage} result; rerun this stage")
+    req = entry.get("request")
+    message = f"stale {stage} result; rerun this stage"
+    if not isinstance(req, dict):
+        raise ValueError(message)
+    # The pointer records the model and command used for this run. The receipt
+    # must be the same object invoke would store, so an added field or a changed
+    # model or command digest is stale instead of a published export.
+    model = ptr["model"] if isinstance(ptr.get("model"), str) else req.get("model")
+    command_sha256 = (
+        ptr["command_sha256"] if isinstance(ptr.get("command_sha256"), str) else req.get("command_sha256")
+    )
+    descriptor = {
+        "stage": stage,
+        "system_sha256": digest(PROMPTS[stage]),
+        "input_sha256": payload_sha256(serialize_payload(source)),
+        "model": model,
+        "command_sha256": command_sha256,
+        "reply_protocol": BUSINESS_REPLY_PROTOCOL,
+    }
+    if not same_model_value(req, descriptor):
+        raise ValueError(message)
     require_business_receipt(entry, stage)
     reply = entry.get("reply")
     if not isinstance(reply, str) or payload_sha256(reply) != entry.get("reply_sha256"):

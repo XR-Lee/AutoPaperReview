@@ -8,6 +8,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from contextlib import closing
+from contextvars import ContextVar
 from math import log
 from pathlib import Path
 from urllib.parse import unquote
@@ -70,24 +71,67 @@ _UNCOMPARABLE = "\x00uncomparable"
 
 
 _DEHYPHEN = re.compile(r"([A-Za-z]{2,})-\s+([A-Za-z]{2,})")
-_PROPOSAL_TOKEN = re.compile(r"[^\W_]+|[+*/=<>^]", re.UNICODE)
+_PROPOSAL_TOKEN = re.compile(r"(?:[^\W_]|[\u0300-\u036f])+|[+*/=<>^]", re.UNICODE)
 _CJK_CHAR = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_SENTENCE_BREAK = re.compile(r"[.!?。！？；;\n]+")
+_SENTENCE_MARK = "\u241e"
+_OPERATORS = frozenset({"+", "-", "*", "/", "=", "<", ">", "^", "u-"})
+_HISTORY_JUDGE: ContextVar = ContextVar("proposal_history_judge", default=None)
+
+
+def use_history_judge(judge):
+    """Route near-copy history comparisons through this judge until reset."""
+    return _HISTORY_JUDGE.set(judge)
+
+
+def reset_history_judge(token) -> None:
+    _HISTORY_JUDGE.reset(token)
+
+
+def _proposal_fold(text: str) -> str:
+    """Compatibility-normalize without stripping derivative marks.
+
+    Title identity still uses ``canonical_text``. This fold is only for proposal
+    sentences, where a combining mark can change the formula.
+    """
+    folded = unicodedata.normalize("NFKC", text or "")
+    return re.sub(r"\s+", " ", folded).strip()
 
 
 def _proposal_segment_tokens(text: str) -> tuple[str, ...]:
     """Words plus math operators. A line-break hyphen is not a different word.
 
-    ``a + b`` and ``a - b`` stay different. ``archi- val`` is ``archival``.
-    An unspaced hyphen is punctuation, as it is for titles.
+    ``a + b`` and ``a - b`` stay different. ``-x`` stays different from ``x``.
+    ``archi- val`` is ``archival``. An unspaced hyphen is punctuation, as it is
+    for titles. A derivative mark stays on its variable.
     """
-    folded = canonical_text(text)
+    folded = _proposal_fold(text)
     previous = None
     while previous != folded:
         previous = folded
         folded = _DEHYPHEN.sub(r"\1\2", folded)
     folded = re.sub(r"(?<=\s)-(?=\s)", " minusop ", folded)
+    folded = re.sub(r"(?<![\w])-(?=\w)", " unaryminus ", folded)
     found = _PROPOSAL_TOKEN.findall(folded.casefold())
-    return tuple("-" if token == "minusop" else token for token in found)
+    tokens = []
+    for token in found:
+        if token == "minusop":
+            tokens.append("-")
+        elif token == "unaryminus":
+            tokens.append("u-")
+        else:
+            tokens.append(token)
+    return tuple(tokens)
+
+
+def _sentence_keys(text: str) -> list[str]:
+    """Order-insensitive sentence keys. Newlines and CJK stops both split."""
+    keys = []
+    for part in _SENTENCE_BREAK.split(text or ""):
+        tokens = _collapse_repeat(_expand_cjk(_proposal_segment_tokens(part)))
+        if tokens:
+            keys.append(" ".join(tokens))
+    return keys
 
 
 def _expand_cjk(tokens: tuple[str, ...]) -> tuple[str, ...]:
@@ -124,10 +168,12 @@ def _field_segments(value) -> tuple[str, ...] | None:
             continue
         if _identity(text) is None:
             return None
-        tokens = _proposal_segment_tokens(text)
-        if not tokens:
+        keys = sorted(set(_sentence_keys(text)))
+        if not keys:
             return None
-        parts.append(" ".join(tokens))
+        # One sentence keeps the historical field string. Several sentences are
+        # sorted so an in-field reorder is the same document.
+        parts.append(keys[0] if len(keys) == 1 else f" {_SENTENCE_MARK} ".join(keys))
     return tuple(sorted(parts))
 
 
@@ -233,7 +279,9 @@ def _proposal_texts(value) -> list[str] | None:
 def _sequences_from_body(exclude_text: str) -> list[tuple[str, ...]]:
     sequences = []
     for line in exclude_text.split("\n"):
-        tokens = _collapse_repeat(_expand_cjk(tuple(line.split())))
+        tokens = _collapse_repeat(_expand_cjk(tuple(
+            token for token in line.split() if token != _SENTENCE_MARK
+        )))
         if tokens:
             sequences.append(tokens)
     return sequences
@@ -254,54 +302,184 @@ def _sequences_from_proposal(proposal) -> list[tuple[str, ...]] | None:
 def _explains(wholes: list[tuple[str, ...]], pieces: list[tuple[str, ...]], *, allow_leftover: bool) -> bool:
     """True when every whole sequence is an exact concatenation of pieces.
 
-    Pieces are used at most once. Leftover pieces are allowed only when
-    ``allow_leftover`` is set, which is the copy-plus-appendix direction.
-    The other direction requires every piece, so a shared paragraph is not
-    a resegmentation. More than twelve fields is not a similarity match.
+    Pieces are used at most once. The search backtracks, so the first piece
+    that fits a prefix does not hide a later field. Leftover pieces are
+    allowed only when ``allow_leftover`` is set, which is the copy-plus-appendix
+    direction. The other direction requires every piece, so a shared paragraph
+    is not a resegmentation. More than twelve fields is not a similarity match.
     """
     if not wholes or not pieces or len(wholes) > 12 or len(pieces) > 12:
         return False
 
-    def cover(target: tuple[str, ...], used: int) -> int | None:
-        def walk(pos: int, mask: int) -> int | None:
-            if pos == len(target):
-                return mask
-            for index, piece in enumerate(pieces):
-                bit = 1 << index
-                if mask & bit or not piece:
-                    continue
-                size = len(piece)
-                if target[pos:pos + size] == piece:
-                    found = walk(pos + size, mask | bit)
-                    if found is not None:
-                        return found
-            return None
-
-        return walk(0, used)
-
-    def walk_wholes(index: int, used: int) -> bool:
+    def walk(index: int, used: int) -> bool:
         if index == len(wholes):
             if allow_leftover:
                 return True
             return used == (1 << len(pieces)) - 1
-        covered = cover(wholes[index], used)
-        if covered is None:
-            return False
-        return walk_wholes(index + 1, covered)
+        target = wholes[index]
 
-    return walk_wholes(0, 0)
+        def cover(pos: int, mask: int) -> bool:
+            if pos == len(target):
+                return walk(index + 1, mask)
+            for piece_index, piece in enumerate(pieces):
+                bit = 1 << piece_index
+                if mask & bit or not piece:
+                    continue
+                size = len(piece)
+                if target[pos:pos + size] == piece and cover(pos + size, mask | bit):
+                    return True
+            return False
+
+        return cover(0, used)
+
+    return walk(0, 0)
+
+
+def _body_sentences(text: str) -> frozenset[str]:
+    found = set()
+    for line in (text or "").split("\n"):
+        for sentence in line.split(_SENTENCE_MARK):
+            sentence = sentence.strip()
+            if sentence:
+                found.add(sentence)
+    return frozenset(found)
+
+
+def _same_sentence_set(proposal, exclude_text: str) -> bool:
+    """True when both documents have the same sentences, in any order or field."""
+    if not exclude_text or exclude_text == _UNCOMPARABLE:
+        return False
+    left = proposal_body(proposal)
+    if not left or left == _UNCOMPARABLE:
+        return False
+    sentences = _body_sentences(left)
+    return bool(sentences) and sentences == _body_sentences(exclude_text)
+
+
+def _proposal_token_sequence(proposal) -> list[str]:
+    sequences = _sequences_from_proposal(proposal)
+    if not sequences:
+        return []
+    return [token for sequence in sequences for token in sequence]
+
+
+def _without_marks(tokens: list[str]) -> list[str]:
+    """Drop combining marks so a derivative dot is not a different word."""
+    cleaned = []
+    for token in tokens:
+        stripped = "".join(
+            char for char in unicodedata.normalize("NFD", token)
+            if unicodedata.category(char) != "Mn"
+        )
+        if stripped:
+            cleaned.append(stripped)
+    return cleaned
+
+
+def _compared_tokens(proposal, exclude_text: str) -> tuple[list[str], list[str]]:
+    left = _proposal_token_sequence(proposal)
+    right = [token for token in exclude_text.split() if token != _SENTENCE_MARK]
+    return left, right
+
+
+def _operator_only(proposal, exclude_text: str) -> bool:
+    """True when the texts differ only by an operator or a unary minus."""
+    left, right = _compared_tokens(proposal, exclude_text)
+    if not left or not right or left == right:
+        return False
+
+    def content(tokens: list[str]) -> list[str]:
+        return [token for token in tokens if token not in _OPERATORS]
+
+    return content(left) == content(right)
+
+
+def _mark_only(proposal, exclude_text: str) -> bool:
+    """True when the texts differ only by a combining mark, such as a derivative dot."""
+    left, right = _compared_tokens(proposal, exclude_text)
+    if not left or not right or left == right:
+        return False
+    return _without_marks(left) == _without_marks(right)
+
+
+def _token_jaccard(proposal, exclude_text: str) -> float:
+    left = set(_proposal_token_sequence(proposal))
+    right = {token for token in exclude_text.split() if token != _SENTENCE_MARK}
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _borderline_history(proposal, exclude_text: str) -> bool:
+    """A near-copy the code will not decide.
+
+    An operator change or a derivative mark is a different study, not a near-copy,
+    so it is not sent to the judge.
+    """
+    if (
+        not exclude_text
+        or exclude_text == _UNCOMPARABLE
+        or _operator_only(proposal, exclude_text)
+        or _mark_only(proposal, exclude_text)
+    ):
+        return False
+    left = proposal_body(proposal)
+    if not left or left == _UNCOMPARABLE:
+        return False
+    candidate = _body_sentences(left)
+    target = _body_sentences(exclude_text)
+    if not candidate or not target:
+        return False
+    if candidate != target and (candidate <= target or target <= candidate):
+        return True
+    overlap = len(candidate & target) / len(candidate | target)
+    if overlap >= 0.5:
+        return True
+    return _token_jaccard(proposal, exclude_text) >= 0.75
+
+
+def _history_same(answer) -> bool:
+    """Fail closed unless the judge explicitly calls the pair a different study.
+
+    A leak-audit ``verdict: clean`` is not a same-study finding. Any other
+    shape, including an error, excludes the row.
+    """
+    if not isinstance(answer, Mapping):
+        return True
+    relation = answer.get("relation")
+    if relation == "distinct":
+        return False
+    if relation == "same":
+        return True
+    if answer.get("verdict") == "clean" and "relation" not in answer:
+        return False
+    return True
+
+
+def _judge_same_study(proposal, exclude_text: str, judge) -> bool:
+    try:
+        answer = judge({
+            "task": "self_history",
+            "candidate": proposal_body(proposal),
+            "target": exclude_text,
+        })
+    except Exception:
+        return True
+    return _history_same(answer)
 
 
 def _same_content(proposal, exclude_text: str) -> bool:
-    """True when one document is an exact resegmentation of the other.
+    """True for an exact copy, including reordered sentences and resegmentation.
 
     Field order, a split, a merge, a repeated field, a line-break hyphen,
-    and a CJK field split are the same document. An extra field on the
-    copy is still the copy. A shared quotation, a shared method, or the
-    same words in another order is not.
+    a CJK field split, and the same sentences in another order are the same
+    document. An extra field on the copy is still the copy. A shared quotation,
+    a shared method, a changed operator, or the same words in another order is not.
     """
     if not exclude_text or exclude_text == _UNCOMPARABLE:
         return False
+    if _same_sentence_set(proposal, exclude_text):
+        return True
     pieces = _sequences_from_proposal(proposal)
     wholes = _sequences_from_body(exclude_text)
     if not pieces or not wholes:
@@ -459,17 +637,31 @@ def latest_stamp(values) -> int | None:
 
 def eligible_history(
     row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="",
-    exclude_title="", exclude_abstract="", exclude_text="",
+    exclude_title="", exclude_abstract="", exclude_text="", history_judge=None,
 ):
-    """Check development provenance, all known availability clocks and self-matches."""
+    """Check development provenance, all known availability clocks and self-matches.
+
+    Exact and reordered copies are excluded in code. A near-copy is excluded
+    only when a judge is supplied and does not explicitly call it a different
+    study. Without a judge, a near-copy stays eligible.
+    """
     if not isinstance(row, dict) or not development_row(row):
         return False
     body = proposal_body(row.get("proposal"))
+    proposal = row.get("proposal")
     if exclude_text and (
         exclude_text == _UNCOMPARABLE
         or body == _UNCOMPARABLE
         or body == exclude_text
-        or _same_content(row.get("proposal"), exclude_text)
+        or _same_content(proposal, exclude_text)
+    ):
+        return False
+    judge = history_judge if history_judge is not None else _HISTORY_JUDGE.get()
+    if (
+        judge is not None
+        and exclude_text
+        and _borderline_history(proposal, exclude_text)
+        and _judge_same_study(proposal, exclude_text, judge)
     ):
         return False
     years: list = []

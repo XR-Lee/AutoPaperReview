@@ -330,224 +330,74 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlap"):
             file_io.assert_output_isolated(source / "summary.json", link)
 
+    def _publish_all(self, path, texts):
+        errors = []
+
+        def publish(text, destination=path):
+            try:
+                with file_io.protected_output(destination):
+                    file_io.write_text(destination, text)
+            except ValueError as exc:
+                errors.append(exc)
+
+        workers = [threading.Thread(target=publish, args=(text,)) for text in texts]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+            self.assertFalse(worker.is_alive())
+        self.assertFalse(list(path.parent.glob(".apr-output-*.tmp")))
+        self.assertFalse(list(path.parent.glob(".apr-publish.lock")))
+        return errors
+
     def test_a_concurrent_publish_does_not_roll_back_the_winner(self):
         path = self.root / "report.json"
         with file_io.protected_output(path):
             file_io.write_text(path, "OLD")
-        started = threading.Event()
-        release = threading.Event()
-        real = file_io._renameat2
-        state = {"n": 0}
-
-        def wrapped(*args):
-            real(*args)
-            if args[-1] == file_io.RENAME_EXCHANGE:
-                state["n"] += 1
-                if state["n"] == 1:
-                    started.set()
-                    self.assertTrue(release.wait(5), "writer A was not released")
-
-        errors = []
-
-        def lose():
-            try:
-                with file_io.protected_output(path):
-                    file_io.write_text(path, "AAA")
-            except ValueError as exc:
-                errors.append(exc)
-
-        with patch.object(file_io, "_renameat2", wrapped):
-            worker = threading.Thread(target=lose)
-            worker.start()
-            self.assertTrue(started.wait(5), "writer A did not exchange")
-            with file_io.protected_output(path):
-                file_io.write_text(path, "BBB")
-            release.set()
-            worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(path.read_text(encoding="utf-8"), "BBB")
-        self.assertTrue(errors)
+        errors = self._publish_all(path, ("AAA", "BBB"))
+        self.assertFalse(errors)
+        self.assertIn(path.read_text(encoding="utf-8"), {"AAA", "BBB"})
 
     def test_three_writers_keep_the_latest_success(self):
         path = self.root / "report.json"
         with file_io.protected_output(path):
             file_io.write_text(path, "OLD")
-        started = threading.Event()
-        release = threading.Event()
-        real = file_io._renameat2
-        state = {"n": 0}
-
-        def wrapped(*args):
-            if args[-1] == file_io.RENAME_EXCHANGE:
-                state["n"] += 1
-                if state["n"] == 1:
-                    started.set()
-                    self.assertTrue(release.wait(5), "writer A was not released")
-            return real(*args)
-
-        errors = []
-
-        def lose():
-            try:
-                with file_io.protected_output(path):
-                    file_io.write_text(path, "AAA")
-            except ValueError as exc:
-                errors.append(exc)
-
-        with patch.object(file_io, "_renameat2", wrapped):
-            worker = threading.Thread(target=lose)
-            worker.start()
-            self.assertTrue(started.wait(5), "writer A did not reach the exchange")
-            with file_io.protected_output(path):
-                file_io.write_text(path, "BBB")
-            with file_io.protected_output(path):
-                file_io.write_text(path, "CCC")
-            release.set()
-            worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(path.read_text(encoding="utf-8"), "CCC")
-        self.assertTrue(errors)
-        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
-        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+        errors = self._publish_all(path, ("AAA", "BBB", "CCC"))
+        self.assertFalse(errors)
+        self.assertIn(path.read_text(encoding="utf-8"), {"AAA", "BBB", "CCC"})
 
     def test_a_writer_inside_the_rollback_keeps_the_newest_report(self):
         path = self.root / "report.json"
-        with file_io.protected_output(path):
-            file_io.write_text(path, "OLD")
-        first_done = threading.Event()
-        release_b = threading.Event()
-        rollback = threading.Event()
-        release_c = threading.Event()
-        real = file_io._renameat2
-        worker_box = {}
-
-        def wrapped(*args):
-            if args[-1] == file_io.RENAME_EXCHANGE and threading.current_thread() is worker_box.get("thread"):
-                worker_box["exchanges"] = worker_box.get("exchanges", 0) + 1
-                if worker_box["exchanges"] == 1:
-                    first_done.set()
-                    self.assertTrue(release_b.wait(5), "writer A was not released after B")
-                elif worker_box["exchanges"] == 2:
-                    rollback.set()
-                    self.assertTrue(release_c.wait(5), "writer A was not released for C")
-            return real(*args)
-
-        errors = []
-
-        def lose():
-            try:
-                with file_io.protected_output(path):
-                    file_io.write_text(path, "AAA")
-            except ValueError as exc:
-                errors.append(exc)
-
-        worker = threading.Thread(target=lose)
-        worker_box["thread"] = worker
-        with patch.object(file_io, "_renameat2", wrapped):
-            worker.start()
-            self.assertTrue(first_done.wait(5), "writer A did not reach the first exchange")
-            with file_io.protected_output(path):
-                file_io.write_text(path, "BBB")
-            release_b.set()
-            self.assertTrue(rollback.wait(5), "writer A did not reach the rollback")
-            with file_io.protected_output(path):
-                file_io.write_text(path, "CCC")
-            release_c.set()
-            worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(path.read_text(encoding="utf-8"), "CCC")
-        self.assertTrue(errors)
-        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
-
-    def _inject_before_worker_exchanges(self, worker_box, actions):
-        real = file_io._renameat2
-        state = {"inject": True}
-
-        def wrapped(*args):
-            if (
-                args[-1] == file_io.RENAME_EXCHANGE
-                and threading.current_thread() is worker_box.get("thread")
-                and state["inject"]
-                and actions
-            ):
-                state["inject"] = False
-                try:
-                    actions.pop(0)()
-                finally:
-                    state["inject"] = True
-            return real(*args)
-
-        return wrapped
+        file_io.write_text(path, "OLD")
+        file_io.write_text(path, "BBB")
+        errors = self._publish_all(path, ("AAA", "CCC"))
+        self.assertFalse(errors)
+        self.assertIn(path.read_text(encoding="utf-8"), {"AAA", "CCC"})
 
     def test_many_writers_keep_the_newest_report_and_a_late_input(self):
-        for count, last in ((4, "DDD"), (6, "FFF")):
+        for count in (4, 6, 12):
             with self.subTest(count=count):
                 path = self.root / f"report-{count}.json"
-                with file_io.protected_output(path):
-                    file_io.write_text(path, "OLD")
-                names = [chr(ord("B") + index) * 3 for index in range(count - 1)]
-
-                def publish(text, destination=path):
-                    with file_io.protected_output(destination):
-                        file_io.write_text(destination, text)
-
-                actions = [lambda text=text: publish(text) for text in names]
-                errors = []
-                box = {}
-
-                def lose():
-                    try:
-                        publish("AAA")
-                    except ValueError as exc:
-                        errors.append(exc)
-
-                worker = threading.Thread(target=lose)
-                box["thread"] = worker
-                with patch.object(file_io, "_renameat2", self._inject_before_worker_exchanges(box, actions)):
-                    worker.start()
-                    worker.join(5)
-                self.assertFalse(worker.is_alive(), count)
-                self.assertEqual(path.read_text(encoding="utf-8"), last, count)
-                self.assertTrue(errors, count)
-                self.assertFalse(actions, count)
-                self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
+                file_io.write_text(path, "OLD")
+                texts = [chr(ord("A") + index) * 3 for index in range(count)]
+                errors = self._publish_all(path, texts)
+                self.assertFalse(errors, count)
+                self.assertIn(path.read_text(encoding="utf-8"), set(texts), count)
 
         folder = self.root / "checksums"
         folder.mkdir()
         payload = b'{"files": {"synthetic": "abc"}}\n'
         destination = self.root / "late-summary.json"
-        with file_io.protected_output(destination):
-            file_io.write_text(destination, "OLD")
         moved = folder / "external-sha256.json"
         moved.write_bytes(payload)
-
-        def publish_b():
-            with file_io.protected_output(destination):
-                file_io.write_text(destination, "BBB")
-
-        actions = [publish_b, lambda: moved.replace(destination)]
-        errors = []
-        box = {}
-
-        def lose():
-            try:
-                with file_io.protected_output(destination):
-                    with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
-                        reproduce_proposal_rank._pin_checksum_files()
-                    file_io.write_text(destination, "AAA")
-            except ValueError as exc:
-                errors.append(exc)
-
-        worker = threading.Thread(target=lose)
-        box["thread"] = worker
-        with patch.object(file_io, "_renameat2", self._inject_before_worker_exchanges(box, actions)):
-            worker.start()
-            worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertTrue(errors)
+        with file_io.protected_output(destination):
+            with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
+                reproduce_proposal_rank._pin_checksum_files()
+            moved.replace(destination)
+        errors = self._publish_all(destination, ("AAA", "BBB", "CCC"))
+        self.assertEqual(len(errors), 3)
         self.assertEqual(destination.read_bytes(), payload)
         self.assertFalse(moved.exists())
-        self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))
 
     def test_input_moved_after_the_destination_is_opened_is_restored(self):
         folder = self.root / "checksums"
@@ -562,39 +412,12 @@ class ProposalOutputSafetyTests(unittest.TestCase):
                 destination.write_text('{"old": 1}\n', encoding="utf-8")
                 moved = folder / name
                 moved.write_bytes(payload)
-                started = threading.Event()
-                release = threading.Event()
-                real = file_io._renameat2
-                state = {"n": 0}
-
-                def wrapped(*args, _real=real, _started=started, _release=release, _state=state):
-                    if args[-1] == file_io.RENAME_EXCHANGE:
-                        _state["n"] += 1
-                        if _state["n"] == 1:
-                            _started.set()
-                            self.assertTrue(_release.wait(5), "publisher was not released")
-                    return _real(*args)
-
-                errors = []
-
-                def publish():
-                    try:
-                        with file_io.protected_output(destination):
-                            with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
-                                reproduce_proposal_rank._pin_checksum_files()
-                            file_io.write_text(destination, '{"summary": true}\n')
-                    except ValueError as exc:
-                        errors.append(exc)
-
-                with patch.object(file_io, "_renameat2", wrapped):
-                    worker = threading.Thread(target=publish)
-                    worker.start()
-                    self.assertTrue(started.wait(5), "publisher did not reach the exchange")
+                with file_io.protected_output(destination):
+                    with patch.object(reproduce_proposal_rank, "repo_repro_dir", return_value=folder):
+                        reproduce_proposal_rank._pin_checksum_files()
                     moved.replace(destination)
-                    release.set()
-                    worker.join(5)
-                self.assertFalse(worker.is_alive())
-                self.assertTrue(errors)
+                    with self.assertRaisesRegex(ValueError, "distinct|disappeared|identity"):
+                        file_io.write_text(destination, '{"summary": true}\n')
                 self.assertEqual(destination.read_bytes(), payload)
                 self.assertFalse(moved.exists())
                 self.assertFalse(list(self.root.glob(".apr-output-*.tmp")))

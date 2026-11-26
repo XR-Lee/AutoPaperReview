@@ -75,7 +75,7 @@ def request(stage, body, cache, offline, *, leak_judge=None):
     if stage == "forecast":
         descriptor.update(version=1, mode="forecast")
     key = digest(descriptor)
-    path = cache / stage / (key + ".json")
+    path = cache / "claims" / stage / (key + ".json")
     if path.exists():
         result = read(path)
         if (not same_model_value(result.get("request"), descriptor)
