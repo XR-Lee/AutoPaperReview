@@ -18,7 +18,7 @@ from autopaperreview.proposal import claim_review, clarification, reviewer_panel
 from autopaperreview.proposal import file_io, runner, stages
 from autopaperreview.proposal.data import digest, write
 from autopaperreview.proposal.leak_audit import payload_sha256, serialize_payload
-from autopaperreview.proposal.prior_index import eligible_history, proposal_body
+from autopaperreview.proposal.prior_index import HistoryJudgeError, eligible_history, proposal_body
 from autopaperreview.proposal.sanitized import factual_leak
 from autopaperreview.proposal.stages import SECTIONS
 
@@ -137,11 +137,14 @@ class IdentityRound7Tests(TestCase):
         author_eligible = round6._eligible
         _pairs = round6._pairs
 
+        def distinct_judge(_body):
+            return {"relation": "distinct"}
+
         pairs = _pairs()
         self.assertEqual(len(pairs), 26)
         true_positive = false_positive = false_negative = true_negative = 0
         for _name, is_copy, target, proposal in pairs:
-            excluded = not author_eligible(proposal, target)
+            excluded = not author_eligible(proposal, target, distinct_judge)
             if is_copy and excluded:
                 true_positive += 1
             elif is_copy:
@@ -151,18 +154,33 @@ class IdentityRound7Tests(TestCase):
             else:
                 true_negative += 1
         self.assertEqual((false_positive, false_negative, true_positive, true_negative), (0, 0, 9, 17))
+        for _name, is_copy, target, proposal in pairs:
+            if is_copy:
+                self.assertFalse(author_eligible(proposal, target))
         longer = {"problem": PLAN + " A separate cloth study counts dye."}
-        self.assertTrue(author_eligible(longer, {"problem": PLAN}))
+        with self.assertRaises(HistoryJudgeError):
+            author_eligible(longer, {"problem": PLAN})
+        self.assertTrue(author_eligible(longer, {"problem": PLAN}, distinct_judge))
 
         labelled = _labelled_pairs()
         self.assertGreaterEqual(len(labelled), 100)
         code_copies = [item for item in labelled if item[1] == "code"]
         judge_copies = [item for item in labelled if item[1] == "judge"]
         distinct = [item for item in labelled if item[1] == "distinct"]
-        for name, _route, target, proposal in code_copies:
-            self.assertFalse(_eligible(proposal, target), name)
-        for name, _route, target, proposal in judge_copies + distinct:
-            self.assertTrue(_eligible(proposal, target), name)
+        raised = 0
+        for name, route, target, proposal in labelled:
+            try:
+                eligible = _eligible(proposal, target)
+            except HistoryJudgeError:
+                self.assertIn(route, {"judge", "distinct"}, name)
+                raised += 1
+                continue
+            if route == "code":
+                self.assertFalse(eligible, name)
+            else:
+                self.assertTrue(eligible, name)
+        quotes = [item for item in distinct if item[0] == "quote"]
+        self.assertEqual(raised, len(judge_copies) + len(quotes))
 
         def same_judge(_body):
             return {"relation": "same"}
@@ -182,22 +200,19 @@ class IdentityRound7Tests(TestCase):
 
         for name, _route, target, proposal in judge_copies:
             self.assertFalse(_eligible(proposal, target, same_judge), name)
-            self.assertFalse(_eligible(proposal, target, invalid_judge), name)
+            with self.assertRaises(HistoryJudgeError):
+                _eligible(proposal, target, invalid_judge)
         for name, _route, target, proposal in distinct:
             self.assertTrue(_eligible(proposal, target, stubbed_judge), name)
             if name in {"operator", "unary", "derivative"}:
                 self.assertTrue(_eligible(proposal, target, same_judge), name)
             if name == "quote":
-                self.assertFalse(_eligible(proposal, target, invalid_judge), name)
+                with self.assertRaises(HistoryJudgeError):
+                    _eligible(proposal, target, invalid_judge)
             if name == "different":
                 self.assertTrue(_eligible(proposal, target, invalid_judge), name)
         for name, _route, target, proposal in code_copies:
             self.assertFalse(_eligible(proposal, target, stubbed_judge), name)
-
-        precision, recall, tp, fp, fn, tn, misses = _scores(labelled, None)
-        self.assertEqual((fp, fn), (0, len(judge_copies)), misses)
-        self.assertEqual(tp, len(code_copies))
-        self.assertEqual(round(precision, 3), 1.0)
 
         precision, recall, tp, fp, fn, tn, misses = _scores(labelled, stubbed_judge)
         self.assertEqual((fp, fn), (0, 0), misses)

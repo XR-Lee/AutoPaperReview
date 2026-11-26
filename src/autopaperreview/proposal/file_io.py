@@ -74,6 +74,27 @@ def _protect_inode(info: os.stat_result, path: Path) -> None:
         _PROTECTED_FILES[file_identity(info)] = (generation, absolute)
 
 
+def _stolen_input(info: os.stat_result, path: Path, destination: Path) -> bool:
+    """True when this inode is a protected input that did not start at ``destination``.
+
+    An input moved onto the output name keeps its inode and generation. The
+    output path itself may be rewritten. A generation that cannot be read stays
+    protected. A reused inode has a new generation and is not the old input.
+    """
+    if not stat.S_ISREG(info.st_mode):
+        return False
+    identity = file_identity(info)
+    with _PROTECTED_GUARD:
+        record = _PROTECTED_FILES.get(identity)
+    if record is None:
+        return False
+    generation, origin = record
+    found = _generation(path)
+    if found != generation:
+        return found is None
+    return _absolute(destination) != origin
+
+
 def _protected_alias(info: os.stat_result, destination: Path | None) -> bool:
     """True when replacing this inode would destroy a protected input.
 
@@ -334,30 +355,25 @@ class _Output:
     def publish(self, content: str, *, replace: bool = False) -> None:
         """Publish one complete file while holding the destination lock.
 
-        The lock covers validation, the temporary write, fsync, and the rename.
-        A new file still comes from a fresh directory. An existing report is
-        replaced only when its inode is not a protected input. Nothing here
-        moves or restores an input. A short write deletes only its temporary file.
+        The lock is the destination directory, so deleting a lock file cannot
+        split two publishers onto different inodes. A new file still comes from
+        a fresh directory. An existing report is exchanged with the finished
+        temp file. If the displaced inode is a protected input, one exchange
+        puts it back and the publish fails. A short write deletes only its
+        temporary file.
         """
         lock = _destination_lock((*self.parent_identity, self.path.name))
         with lock:
             self._publish_locked(content, replace=replace)
 
     def _publish_locked(self, content: str, *, replace: bool) -> None:
-        flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-        lock_fd = os.open(".apr-publish.lock", flags, 0o600, dir_fd=self.directory)
+        # flock is on the directory the caller already holds open. Deleting or
+        # replacing a lock file cannot give a second process a different inode.
+        fcntl.flock(self.directory, fcntl.LOCK_EX)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            try:
-                self._publish_critical(content, replace=replace)
-            finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            self._publish_critical(content, replace=replace)
         finally:
-            os.close(lock_fd)
-            try:
-                os.unlink(".apr-publish.lock", dir_fd=self.directory)
-            except FileNotFoundError:
-                pass
+            fcntl.flock(self.directory, fcntl.LOCK_UN)
 
     def _publish_critical(self, content: str, *, replace: bool) -> None:
         self.check()
@@ -378,11 +394,46 @@ class _Output:
             current = self._destination_info()
             if current is None or file_identity(current) != original or self._blocked(current):
                 raise ValueError(_ALIAS)
-            _renameat2(self.directory, name, self.directory, self.path.name, 0)
+            self._replace_existing(name, created, original)
             os.fsync(self.directory)
             self.check()
         finally:
             self._unlink_ours(name, created)
+
+    def _replace_existing(self, name: str, created: tuple[int, int], original: tuple[int, int]) -> None:
+        """Exchange a finished temp file with the destination, then undo a stolen input.
+
+        The exchange is one ``renameat2`` call. A file moved onto the destination
+        after the last check is the inode returned under the temp name. When that
+        inode is a protected input from another path, one more exchange puts it
+        back and the publish fails. The previous report is removed only after
+        that check. If ``renameat2`` is unavailable the previous report stays.
+        """
+        dest_fd = os.open(self.path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=self.directory)
+        try:
+            held = os.fstat(dest_fd)
+            if file_identity(held) != original or self._blocked(held):
+                raise ValueError(_ALIAS)
+            _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+            try:
+                displaced = os.stat(name, dir_fd=self.directory, follow_symlinks=False)
+                current = os.stat(self.path.name, dir_fd=self.directory, follow_symlinks=False)
+            except FileNotFoundError:
+                displaced = None
+                current = None
+            stolen = (
+                displaced is None
+                or current is None
+                or file_identity(displaced) != file_identity(held)
+                or file_identity(current) != created
+                or _stolen_input(displaced, _directory_path(self.directory) / name, self.path)
+            )
+            if stolen:
+                _renameat2(self.directory, name, self.directory, self.path.name, RENAME_EXCHANGE)
+                raise ValueError(_ALIAS)
+            os.unlink(name, dir_fd=self.directory)
+        finally:
+            os.close(dest_fd)
 
     def _publish_fresh(self, content: str, original: tuple[int, int] | None) -> None:
         staging = Path(tempfile.mkdtemp(prefix="apr-output-"))

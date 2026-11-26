@@ -105,13 +105,13 @@ def stage_result(root, case, stage):
     message = f"stale {stage} result; rerun this stage"
     if not isinstance(req, dict):
         raise ValueError(message)
-    # The pointer records the model and command used for this run. The receipt
-    # must be the same object invoke would store, so an added field or a changed
-    # model or command digest is stale instead of a published export.
-    model = ptr["model"] if isinstance(ptr.get("model"), str) else req.get("model")
-    command_sha256 = (
-        ptr["command_sha256"] if isinstance(ptr.get("command_sha256"), str) else req.get("command_sha256")
-    )
+    # The pointer records the model and command used for this run. A pointer
+    # that does not store both cannot be compared with the receipt, so an old
+    # pointer is stale even when the receipt itself is unchanged.
+    model = ptr.get("model")
+    command_sha256 = ptr.get("command_sha256")
+    if not isinstance(model, str) or not isinstance(command_sha256, str):
+        raise ValueError(message)
     descriptor = {
         "stage": stage,
         "system_sha256": digest(PROMPTS[stage]),

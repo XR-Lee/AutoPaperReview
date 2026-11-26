@@ -16,7 +16,7 @@ from autopaperreview.proposal import claim_review, clarification, priority, revi
 from autopaperreview.proposal import runner, stages
 from autopaperreview.proposal.data import digest, write
 from autopaperreview.proposal.leak_audit import payload_sha256, same_model_value, serialize_payload
-from autopaperreview.proposal.prior_index import eligible_history, proposal_body
+from autopaperreview.proposal.prior_index import HistoryJudgeError, eligible_history, proposal_body
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = "Could violet tags index archival baskets by location?"
@@ -46,9 +46,11 @@ def _history(**changes):
     return row
 
 
-def _eligible(proposal, target):
+def _eligible(proposal, target, judge=None):
     row = _history(proposal=proposal, key="synthetic-row", forum="synthetic-row")
-    return eligible_history(row, (2024, 50), exclude_text=proposal_body(target))
+    return eligible_history(
+        row, (2024, 50), exclude_text=proposal_body(target), history_judge=judge,
+    )
 
 
 def _pairs():
@@ -142,10 +144,14 @@ class IdentityTests(TestCase):
     def test_labelled_pairs_report_precision_and_recall(self):
         pairs = _pairs()
         self.assertEqual(len(pairs), 26)
+
+        def distinct(_body):
+            return {"relation": "distinct"}
+
         true_positive = false_positive = false_negative = true_negative = 0
         misses = []
         for name, is_copy, target, proposal in pairs:
-            excluded = not _eligible(proposal, target)
+            excluded = not _eligible(proposal, target, distinct)
             if is_copy and excluded:
                 true_positive += 1
             elif is_copy:
@@ -164,8 +170,13 @@ class IdentityTests(TestCase):
             f"precision {precision:.2f} recall {recall:.2f} on {len(pairs)} pairs; misses {misses}",
         )
         self.assertEqual((true_positive, true_negative), (9, 17))
+        for name, is_copy, target, proposal in pairs:
+            if is_copy:
+                self.assertFalse(_eligible(proposal, target), name)
         longer = {"problem": PLAN + " A separate cloth study counts dye."}
-        self.assertTrue(_eligible(longer, {"problem": PLAN}))
+        with self.assertRaises(HistoryJudgeError):
+            _eligible(longer, {"problem": PLAN})
+        self.assertTrue(_eligible(longer, {"problem": PLAN}, distinct))
 
     def test_boundary_pairs_go_through_prioritize(self):
         wanted = {"hyphen", "cjk-split", "appendix", "reversed", "plus"}
@@ -213,7 +224,9 @@ class IdentityTests(TestCase):
                         "--profile", str(root / "profile.json"), "--work", str(root / "work"),
                         "--output", str(root / "out.json"), "--target-year", "2024", "--cutoff-ms", "50",
                     ]
-                    with patch.object(priority, "model_leak_judge", return_value=lambda _body: {"verdict": "clean"}), \
+                    with patch.object(priority, "model_leak_judge", return_value=lambda body: (
+                        {"relation": "distinct"} if body.get("task") == "self_history" else {"verdict": "clean"}
+                    )), \
                             patch.object(stages, "run_command", side_effect=transport):
                         self.assertEqual(main(args), 0)
                 self.assertIn("PEEROPINIONKEEP", prompts[0], name)

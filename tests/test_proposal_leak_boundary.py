@@ -472,6 +472,8 @@ class ProposalLeakBoundaryTests(TestCase):
             receipts = []
 
             def judge(body):
+                if body.get("task") == "self_history":
+                    return {"relation": "distinct"}
                 if marker in body:
                     receipts.append(body)
                     self.assertIn(SIGNAL, str(require_model_input(body, stage=stage)))

@@ -105,7 +105,7 @@ def _proposal_segment_tokens(text: str) -> tuple[str, ...]:
     ``archi- val`` is ``archival``. An unspaced hyphen is punctuation, as it is
     for titles. A derivative mark stays on its variable.
     """
-    folded = _proposal_fold(text)
+    folded = _proposal_fold(text).replace("\u2212", "-")
     previous = None
     while previous != folded:
         previous = folded
@@ -125,9 +125,13 @@ def _proposal_segment_tokens(text: str) -> tuple[str, ...]:
 
 
 def _sentence_keys(text: str) -> list[str]:
-    """Order-insensitive sentence keys. Newlines and CJK stops both split."""
+    """Order-insensitive sentence keys. Newlines and CJK stops both split.
+
+    Compatibility punctuation is folded before the split, so a fullwidth stop
+    is the same boundary as an ASCII stop. Combining marks stay on their words.
+    """
     keys = []
-    for part in _SENTENCE_BREAK.split(text or ""):
+    for part in _SENTENCE_BREAK.split(unicodedata.normalize("NFKC", text or "")):
         tokens = _collapse_repeat(_expand_cjk(_proposal_segment_tokens(part)))
         if tokens:
             keys.append(" ".join(tokens))
@@ -168,11 +172,11 @@ def _field_segments(value) -> tuple[str, ...] | None:
             continue
         if _identity(text) is None:
             return None
-        keys = sorted(set(_sentence_keys(text)))
+        keys = list(dict.fromkeys(_sentence_keys(text)))
         if not keys:
             return None
-        # One sentence keeps the historical field string. Several sentences are
-        # sorted so an in-field reorder is the same document.
+        # Sentence order stays the field's order so a later resegmentation can
+        # be stitched. An in-field reorder still matches as the same sentence set.
         parts.append(keys[0] if len(keys) == 1 else f" {_SENTENCE_MARK} ".join(keys))
     return tuple(sorted(parts))
 
@@ -438,34 +442,34 @@ def _borderline_history(proposal, exclude_text: str) -> bool:
     return _token_jaccard(proposal, exclude_text) >= 0.75
 
 
-def _history_same(answer) -> bool:
-    """Fail closed unless the judge explicitly calls the pair a different study.
-
-    A leak-audit ``verdict: clean`` is not a same-study finding. Any other
-    shape, including an error, excludes the row.
-    """
-    if not isinstance(answer, Mapping):
-        return True
-    relation = answer.get("relation")
-    if relation == "distinct":
-        return False
-    if relation == "same":
-        return True
-    if answer.get("verdict") == "clean" and "relation" not in answer:
-        return False
-    return True
+class HistoryJudgeError(ValueError):
+    """A near-copy needs a history judge and none returned a relation."""
 
 
 def _judge_same_study(proposal, exclude_text: str, judge) -> bool:
+    """Ask the judge whether the pair is the same study.
+
+    The payload is a sealed proposal so the model call can be sent. Only
+    ``relation=same`` excludes the row. ``relation=distinct`` keeps it. A leak
+    verdict, any other shape, or a failed call stops the history step.
+    """
+    from .sanitized import seal
+
+    packet = seal({
+        "task": "self_history",
+        "candidate": proposal_body(proposal),
+        "target": exclude_text,
+    })
     try:
-        answer = judge({
-            "task": "self_history",
-            "candidate": proposal_body(proposal),
-            "target": exclude_text,
-        })
-    except Exception:
-        return True
-    return _history_same(answer)
+        answer = judge(packet)
+    except HistoryJudgeError:
+        raise
+    except Exception as exc:
+        raise HistoryJudgeError("history judge failed") from exc
+    relation = answer.get("relation") if isinstance(answer, Mapping) else None
+    if relation not in ("same", "distinct"):
+        raise HistoryJudgeError("history judge did not return relation=same or relation=distinct")
+    return relation == "same"
 
 
 def _same_content(proposal, exclude_text: str) -> bool:
@@ -641,9 +645,10 @@ def eligible_history(
 ):
     """Check development provenance, all known availability clocks and self-matches.
 
-    Exact and reordered copies are excluded in code. A near-copy is excluded
-    only when a judge is supplied and does not explicitly call it a different
-    study. Without a judge, a near-copy stays eligible.
+    Exact and reordered copies are excluded in code. A near-copy stays eligible
+    only when the history judge returns ``relation=distinct``. A missing judge,
+    a failed judge, or any answer other than ``relation=same`` or
+    ``relation=distinct`` stops the history step.
     """
     if not isinstance(row, dict) or not development_row(row):
         return False
@@ -657,13 +662,11 @@ def eligible_history(
     ):
         return False
     judge = history_judge if history_judge is not None else _HISTORY_JUDGE.get()
-    if (
-        judge is not None
-        and exclude_text
-        and _borderline_history(proposal, exclude_text)
-        and _judge_same_study(proposal, exclude_text, judge)
-    ):
-        return False
+    if exclude_text and _borderline_history(proposal, exclude_text):
+        if judge is None:
+            raise HistoryJudgeError("history comparison requires a judge")
+        if _judge_same_study(proposal, exclude_text, judge):
+            return False
     years: list = []
     _collect_years(row, years, skip_opinions=True)
     parsed_years = [_positive_stamp(value) for value in years]
