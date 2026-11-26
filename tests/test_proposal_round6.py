@@ -289,17 +289,21 @@ class ReceiptEnvelopeTests(TestCase):
                 (panel, "forecast", {"s1": PLAN}),
             ):
                 with self.subTest(stage=stage_module.__name__):
+                    # Claims and panel both cache under forecast/<key>.json. Open that key.
+                    stage_root = root / stage_module.__name__.rsplit(".", 1)[-1]
                     with patch.object(stage_module, "run_command", return_value=("not json", 0.0)):
-                        stage_module.request(stage, body, root / stage, False, leak_judge=judge)
-                    path = next((root / stage).rglob("*.json"))
+                        key, _result = stage_module.request(stage, body, stage_root, False, leak_judge=judge)
+                    path = stage_root / stage / f"{key}.json"
+                    self.assertTrue(path.is_file(), path)
                     stored = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertIs(stored["request"]["version"], 1)
                     for replacement in (True, 1.0):
                         changed = json.loads(json.dumps(stored))
                         changed["request"]["version"] = replacement
                         path.write_text(json.dumps(changed), encoding="utf-8")
                         with patch.object(stage_module, "run_command", side_effect=AssertionError("business call")):
                             with self.assertRaises(ValueError):
-                                stage_module.request(stage, body, root / stage, True, leak_judge=judge)
+                                stage_module.request(stage, body, stage_root, True, leak_judge=judge)
                     path.write_text(json.dumps(stored), encoding="utf-8")
 
     def test_legacy_reply_protocol_bool_and_float_are_stale(self):
