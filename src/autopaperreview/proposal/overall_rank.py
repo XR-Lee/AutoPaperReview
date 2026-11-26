@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from math import ceil, floor, sqrt
+from itertools import chain
+from math import ceil, floor, isfinite, sqrt
 from random import Random
 from statistics import mean
 
@@ -231,6 +232,8 @@ def top_fraction(scores, ratings, *, fraction=0.2, threshold=7.0):
     count = len(scores)
     if count == 0 or len(ratings) != count:
         raise ValueError("scores and ratings must be the same nonempty cohort")
+    if not all(isfinite(value) for value in chain(scores, ratings)) or not isfinite(threshold):
+        raise ValueError("scores, ratings and threshold must be finite")
     if not 0 < fraction <= 1:
         raise ValueError("fraction must be in (0, 1]")
     width = ceil(count * fraction)

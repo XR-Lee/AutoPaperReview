@@ -20,9 +20,9 @@ import stat
 import sys
 from contextlib import ExitStack
 from pathlib import Path
-from uuid import uuid4
 
 from autopaperreview.proposal.data import digest
+from autopaperreview.proposal.file_io import file_identity, open_output_directory, remove_temporary, stage_output
 from autopaperreview.proposal.fixed_benchmark import cohort_cases
 from autopaperreview.proposal.repro_metrics import SALT_ENV, identifier_key, published_external_files
 
@@ -138,31 +138,9 @@ def _check_destination(info):
         raise ValueError("output files must be regular files without other links")
 
 
-def _open_output_directory(path):
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    directory = os.open(path.anchor, flags)
-    try:
-        for part in path.parts[1:]:
-            try:
-                os.mkdir(part, mode=0o700, dir_fd=directory)
-            except FileExistsError:
-                pass
-            child = os.open(part, flags, dir_fd=directory)
-            os.close(directory)
-            directory = child
-    except BaseException:
-        os.close(directory)
-        raise
-    return directory
-
-
-def _identity(info):
-    return info.st_dev, info.st_ino
-
-
 def _verify_directory(path, directory, source_directories):
-    expected = _identity(os.fstat(directory))
-    if expected in source_directories or _identity(path.lstat()) != expected:
+    expected = file_identity(os.fstat(directory))
+    if expected in source_directories or file_identity(path.lstat()) != expected:
         raise ValueError("output directory changed or aliases an input directory")
 
 
@@ -174,26 +152,15 @@ def _verify_destination(directory, name):
     _check_destination(info)
 
 
-def _remove_temporary(directory, name):
-    try:
-        os.unlink(name, dir_fd=directory)
-    except FileNotFoundError:
-        pass
-
-
 def _stage_output(directory, content, cleanup):
-    temp_name = f".rekey-{uuid4().hex}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    fd = os.open(temp_name, flags, 0o600, dir_fd=directory)
-    cleanup.callback(_remove_temporary, directory, temp_name)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(content)
+    temp_name = stage_output(directory, content)
+    cleanup.callback(remove_temporary, directory, temp_name)
     return temp_name
 
 
 def rekey_tree(source: Path, output: Path, salt: str, *, published_only: bool = False) -> int:
     source = source.resolve()
-    source_identity = _identity(source.stat())
+    source_identity = file_identity(source.stat())
     raw_output = output.absolute()
     output = Path(os.path.abspath(raw_output))
     if output.is_relative_to(source) or source.is_relative_to(output):
@@ -213,7 +180,7 @@ def rekey_tree(source: Path, output: Path, salt: str, *, published_only: bool = 
         source_paths.update(parent for parent in path.parents if parent.is_relative_to(source))
         dest = output / path.relative_to(source)
         plan.append((path, dest))
-    source_identities = {path: _identity(path.stat()) for path in source_paths}
+    source_identities = {path: file_identity(path.stat()) for path in source_paths}
     if source_identities[source] != source_identity:
         raise ValueError("input directory changed during preflight")
     source_directories = set(source_identities.values())
@@ -231,12 +198,12 @@ def rekey_tree(source: Path, output: Path, salt: str, *, published_only: bool = 
     with ExitStack() as cleanup:
         directories = {}
         for folder in sorted({dest.parent for _, dest in plan}):
-            directory = _open_output_directory(folder)
+            directory = open_output_directory(folder)
             cleanup.callback(os.close, directory)
             _verify_directory(folder, directory, source_directories)
             directories[folder] = directory
 
-        if any(_identity(path.stat()) != identity for path, identity in source_identities.items()):
+        if any(file_identity(path.stat()) != identity for path, identity in source_identities.items()):
             raise ValueError("input directory changed during preflight")
         cache: dict[str, str] = {}
         rewritten = [(dest, _rekey_text(path, salt, cache)) for path, dest in plan]

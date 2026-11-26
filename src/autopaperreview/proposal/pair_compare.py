@@ -2,12 +2,12 @@
 
 import json
 import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 
 from ..public_calibration import assert_local_only
 from .data import read, require_distinct_output, write
+from .file_io import local_output, open_input, protect_cli_output, temporary_input_dir
 from .leak_audit import model_leak_judge, require_leak_judge
 from .stages import claude_argv
 
@@ -61,25 +61,30 @@ def evaluate_bundle(path, left, right, *, leak_judge=None):
     require_leak_judge(leak_judge)
     if path.is_dir():
         return evaluate(path, left, right, leak_judge=leak_judge)
-    if not zipfile.is_zipfile(path):
-        raise ValueError("expected a local pair-model ZIP or directory")
-    with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory() as tmp:
+    with open_input(path, "rb") as handle:
+        if not zipfile.is_zipfile(handle):
+            raise ValueError("expected a local pair-model ZIP or directory")
+        return _evaluate_archive(handle, left, right, leak_judge)
+
+
+def _evaluate_archive(handle, left, right, leak_judge):
+    with zipfile.ZipFile(handle) as archive, temporary_input_dir(prefix="apr-proposal-pair-model-") as directory:
         names = archive.namelist()
         present = set(names)
         selected = MODEL_FILES | (STABILITY_FILES if STABILITY_FILES & present else set())
         if any(names.count(n) != 1 for n in selected):
             raise ValueError("pair-model ZIP contains missing or duplicate model assets")
-        directory = Path(tmp)
         for name in selected:
             with archive.open(name) as source, (directory / name).open("wb") as output:
                 shutil.copyfileobj(source, output)
         return evaluate(directory, left, right, leak_judge=leak_judge)
 
 
+@protect_cli_output
 def dispatch(args):
     source = assert_local_only(args.input)
     directory = assert_local_only(args.model_dir)
-    output = assert_local_only(args.output) if args.output else None
+    output = local_output(args.output) if args.output else None
     if output is not None:
         require_distinct_output(
             output, source, directory, *(directory / name for name in MODEL_FILES | STABILITY_FILES)
@@ -94,8 +99,8 @@ def dispatch(args):
     elif args.cached_only:
         raise ValueError("--cached-only requires --work for leak audit receipts")
     else:
-        with tempfile.TemporaryDirectory(prefix="apr-proposal-pair-audit-") as cache:
-            result = compare(Path(cache))
+        with temporary_input_dir(prefix="apr-proposal-pair-audit-") as cache:
+            result = compare(cache)
     if output:
         write(output, result)
     else:

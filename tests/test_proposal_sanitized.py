@@ -57,6 +57,8 @@ class SanitizedProposalTests(unittest.TestCase):
         for key in (
             "score", "RAＴING", "rat\u200bing", "rati\u0301ng", "rаting", "rat%69ng",
             "rat&#105;ng", "reviewerMean", "author.name", "rat<!-- split -->ing",
+            "rat\u2061ing", "reviewer-score", "Official.Review.Rating.Mean", "target[reviewer_scores]", "original decision",
+            r"meta.\mbox{ra\,ting}", "overall <mark>score</mark> value",
         ):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "identity leak"):
                 sanitized.seal({"context": [{key: "Index tiles by texture."}]})
@@ -120,24 +122,43 @@ class SanitizedProposalTests(unittest.TestCase):
             "latex_macro": r"Ra\syntheticStyle{ti}ng: 8",
             "latex_color_macro": r"Ra\textcolor{blue}{ti}ng: 8",
             "html_comment": "Ra<!-- split\nword -->ting: 8",
+            "html_generic": 'R<mark data-test="a>b">at</mark>ing: 8',
+            "invisible_operator": "Rat\u2061ing: 8",
+            "invisible_encoded": "Ra&#8289;ting: 8",
+            "compact_form": "R a.t-i_n g: 8",
+            "latex_space_macro": r"Ra\,t\hspace{0.3pt}ing: 8",
             "dash_roman_score": "Rating — Ⅷ",
             "qualified_roman_score": "Rating — VIII (borderline)",
             "extended_roman_score": "Rating — XII",
             "equals_rating": "Rating = 8",
+            "alternative_rating": "Rating: 8 or 6, depending on the response.",
             "equals_decision": "Decision = Accept",
             "recommendation": "Recommendation: Reject",
+            "desk_decision": "The submission was desk rejected.",
             "bare_fraction": "8/10",
             "inline_bare_fraction": "Read the enclosed text again. Good work, 8/10.",
             "bare_integer": "8",
+            "score_heading": "8: Strong submission",
+            "markdown_bare_integer": "Plan description.\n- 8",
+            "markdown_numbered_fraction": "1. (8/10)",
+            "parenthetical_fraction": "Choose this route (8/10).",
+            "parenthetical_integer": "The outline is clear (8).",
             "notes_api": "https://api2.openreview.net/" + "notes?limit=1",
             "attachment": "https://openreview.net/" + "attachment?name=supplementary",
+            "profile_url": "https://openreview.net/" + "profile?id=~Example_Maker1",
+            "profile_handle": "Account ~Example_Maker1",
             "old_arxiv": "arXiv:hep-th/0000000",
             "bare_old_arxiv": "math.AA/0000000v2",
             "bare_modern_arxiv": "0000.12345v9",
             "bare_openreview": "ZzZz" + "765432",
             "bare_alpha_openreview": "XxYy" + "ZzVvWw",
+            "standalone_alpha_openreview": "abcd" + "efghij",
             "byline": "Written by Example Maker.",
             "bare_byline": "By Example Maker",
+            "lowercase_byline": "by example maker",
+            "lowercase_attribution": "The document was written by example maker.",
+            "multiple_signature": "Test the tool.\n— example maker & sample drawer",
+            "single_name_signature_pair": "By Example & Person",
             "corresponding_author": "Corresponding author: Example Maker",
             "author_dash": "Author — Example Maker",
             "signed_line": "Index tile patterns.\n— Example Maker",
@@ -180,7 +201,13 @@ class SanitizedProposalTests(unittest.TestCase):
             "Use accession AB12345678 for the synthetic comparison task. "
             "Plan measurements at 1234.5678 nanometres with a ratio of 1/10. "
             "Define our score as cosine similarity and use a score of 8 units as an example. "
-            "Samples will be prepared by least squares fitting and controls created by iterative simulation."
+            "A reference cosine similarity score: 0.625 is a design parameter. "
+            "The mathematical similarity score = 0.25 in this worked example. "
+            "For this scale the reference score = 0.8. "
+            "Evaluate at 1234.56789±0.01 μm and use a fraction of (1/10). "
+            "Set the balance to 1234.5678 grams. "
+            "Use equation (8). Samples will be prepared by least squares fitting. "
+            "Controls will be created by Monte Carlo.\nBy Monte Carlo."
         )
         with (
             tempfile.TemporaryDirectory(prefix="apr-pr70-fix-r1-") as tmp,

@@ -26,6 +26,7 @@ from typing import Any
 
 from ..public_calibration import roc_auc, spearman
 from .data import read
+from .file_io import read_bytes
 from .fixed_benchmark import evaluate_fixed
 from .overall_rank import top_fraction
 
@@ -54,7 +55,7 @@ def external_root() -> Path | None:
 
 
 def committed_aggregates() -> dict[str, Any]:
-    return json.loads((repo_repro_dir() / "aggregates.json").read_text(encoding="utf-8"))
+    return read(repo_repro_dir() / "aggregates.json")
 
 
 def identifier_key(identifier: str, salt: str) -> str:
@@ -69,20 +70,28 @@ def identifier_key(identifier: str, salt: str) -> str:
 def normalize_table(text: str) -> list[list[str]]:
     """Read a CSV or TSV with CR LF or LF, and strip each cell."""
     cleaned = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-    header = next((line for line in cleaned.splitlines() if line.strip()), "")
+
+    def rows(delimiter):
+        for row in csv.reader(io.StringIO(cleaned), delimiter=delimiter, strict=True):
+            if any(cell.strip() for cell in row):
+                yield [cell.strip() for cell in row]
+
+    widths = {}
+    for delimiter in (",", "\t"):
+        try:
+            widths[delimiter] = len(next(rows(delimiter), []))
+        except csv.Error:
+            continue
+    if not widths:
+        raise ValueError("invalid CSV or TSV header")
     try:
-        delimiter = csv.Sniffer().sniff(header, delimiters=",\t").delimiter
-    except csv.Error:
-        delimiter = ","
-    return [
-        [cell.strip() for cell in row]
-        for row in csv.reader(io.StringIO(cleaned), delimiter=delimiter)
-        if any(cell.strip() for cell in row)
-    ]
+        return list(rows(max(widths, key=widths.__getitem__)))
+    except csv.Error as exc:
+        raise ValueError("invalid CSV or TSV row") from exc
 
 
 def _read_external_manifest(name: str) -> dict[str, str]:
-    listed = json.loads((repo_repro_dir() / name).read_text(encoding="utf-8"))
+    listed = read(repo_repro_dir() / name)
     files = listed.get("files")
     if not isinstance(files, dict) or not files:
         raise RuntimeError(f"{name} has no file checksums")
@@ -94,49 +103,55 @@ def published_external_files() -> tuple[str, ...]:
     return tuple(_read_external_manifest(_RAW_MANIFEST))
 
 
-def verify_external_files(folder: Path) -> None:
+def verify_external_files(folder: Path) -> dict[str, bytes]:
+    """Return the exact bytes validated against one complete release manifest."""
     raw = _read_external_manifest(_RAW_MANIFEST)
-    actual = {}
+    payloads = {}
     for name in raw:
-        path = folder / name
-        if not path.is_file():
+        try:
+            payloads[name] = read_bytes(folder / name)
+        except FileNotFoundError:
             raise FileNotFoundError(
                 f"external proposal rows were not found under {folder} (missing {name})"
-            )
-        actual[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            ) from None
+    actual = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
     if actual == raw:
-        return
-    if (repo_repro_dir() / _HMAC_MANIFEST).is_file():
+        return payloads
+    try:
         hmac_files = _read_external_manifest(_HMAC_MANIFEST)
-        if actual == hmac_files:
-            return
+    except FileNotFoundError:
+        hmac_files = None
+    if actual == hmac_files:
+        return payloads
     raise RuntimeError("external proposal files do not match either committed SHA-256 manifest")
 
 
 def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
     """Score the external cohorts and return the published point estimates and intervals."""
     folder = external_root() if root is None else Path(root)
-    if folder is None or not (folder / "fixed100" / "fixed-predictions.json").is_file():
+    if folder is None:
         raise FileNotFoundError(
             "external proposal rows were not found. "
             f"Set {EXTERNAL_DIR_ENV} to a directory outside git."
         )
-    verify_external_files(folder)
+    payloads = verify_external_files(folder)
     numpy = _numpy()
     fixed = _iclr_cohort(
-        folder / "fixed100",
+        payloads,
+        "fixed100",
         "fixed-predictions.json",
         "fixed",
         numpy,
     )
     fresh = _iclr_cohort(
-        folder / "confirm100",
+        payloads,
+        "confirm100",
         "fresh-predictions.json",
         "fresh",
         numpy,
     )
-    replications = _replication_cohort(folder / "replications199", numpy)
-    nlp = _nlp_cohort(folder / "nlp84")
+    replications = _replication_cohort(json.loads(payloads["replications199/joined.json"]), numpy)
+    nlp = nlp_from_rows(json.loads(payloads["nlp84/deployed-external-rows.json"]))
     return {
         "published_headlines": PUBLISHED,
         "recomputed": True,
@@ -230,10 +245,10 @@ def _numpy():
     return np
 
 
-def _iclr_cohort(folder: Path, predictions_name: str, seed_name: str, numpy) -> dict[str, Any]:
-    lock = read(folder / "lock.json")
-    predictions = read(folder / predictions_name)
-    references = read(folder / "references.json")
+def _iclr_cohort(payloads: dict[str, bytes], folder: str, predictions_name: str, seed_name: str, numpy) -> dict[str, Any]:
+    lock = json.loads(payloads[f"{folder}/lock.json"])
+    predictions = json.loads(payloads[f"{folder}/{predictions_name}"])
+    references = json.loads(payloads[f"{folder}/references.json"])
     tiers = {
         row["forum"]: row["tier"]
         for row in lock["cases"]
@@ -255,12 +270,12 @@ def _iclr_cohort(folder: Path, predictions_name: str, seed_name: str, numpy) -> 
     return _cohort_result(rows, TIER_SEEDS[seed_name], numpy, scored)
 
 
-def _replication_cohort(folder: Path, numpy) -> dict[str, Any]:
+def _replication_cohort(joined: list[dict], numpy) -> dict[str, Any]:
     # The delivered archive has joined.json and no blind index. The row key is
     # the stable identifier. Headlines do not depend on a forum id.
     rows = []
     enrolled = 0
-    for row in read(folder / "joined.json"):
+    for row in joined:
         if row["group"] not in ("replication_A", "replication_B"):
             continue
         enrolled += 1
@@ -403,14 +418,16 @@ def _top_fifth(scores, positive, numpy) -> dict[str, Any]:
     }
 
 
-def _nlp_cohort(folder: Path) -> dict[str, Any]:
-    return nlp_from_rows(read(folder / "deployed-external-rows.json"))
-
-
 def nlp_from_rows(rows: list[dict]) -> dict[str, Any]:
     overall = [row["overall"] for row in rows]
     human = [row["human"] for row in rows]
+    if not all(type(value) in (int, float) and math.isfinite(value) for value in (*overall, *human)):
+        raise ValueError("NLP scores and ratings must be finite numbers")
     labels = [int(value >= NLP_THRESHOLD) for value in human]
+    rho = spearman(overall, human)
+    auc = roc_auc(overall, labels)
+    if rho is None or auc is None:
+        raise ValueError("NLP evaluation needs varying scores and ratings from both classes")
     pairs = []
     for left, right in combinations(rows, 2):
         if left["topic"] != right["topic"] or left["human"] == right["human"]:
@@ -424,17 +441,17 @@ def nlp_from_rows(rows: list[dict]) -> dict[str, Any]:
         sample = rng.choices(rows, k=len(rows))
         sample_score = [row["overall"] for row in sample]
         sample_human = [row["human"] for row in sample]
-        rho = spearman(sample_score, sample_human)
-        auc = roc_auc(sample_score, [int(value >= NLP_THRESHOLD) for value in sample_human])
-        if rho is not None:
-            rho_draws.append(rho)
-        if auc is not None:
-            auc_draws.append(auc)
+        sample_rho = spearman(sample_score, sample_human)
+        sample_auc = roc_auc(sample_score, [int(value >= NLP_THRESHOLD) for value in sample_human])
+        if sample_rho is not None:
+            rho_draws.append(sample_rho)
+        if sample_auc is not None:
+            auc_draws.append(sample_auc)
     return {
         "n": len(rows),
         "positive": sum(labels),
-        "rho": spearman(overall, human),
-        "auc": roc_auc(overall, labels),
+        "rho": rho,
+        "auc": auc,
         "rho_ci95": _index_interval(rho_draws),
         "auc_ci95": _index_interval(auc_draws),
         "same_topic_comparable_pairs": len(pairs),
@@ -446,5 +463,7 @@ def nlp_from_rows(rows: list[dict]) -> dict[str, Any]:
 
 
 def _index_interval(values: list[float]) -> list[float]:
+    if not values:
+        raise ValueError("NLP bootstrap produced no valid draws")
     ordered = sorted(values)
     return [ordered[int(quantile * (len(ordered) - 1))] for quantile in (0.025, 0.975)]

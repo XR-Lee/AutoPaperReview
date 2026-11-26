@@ -90,6 +90,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
             "Our experiments demonstrate that violet bands speed up sorting.",
             "The pilot revealed fewer searches through the box ledger.",
             "The authors measured fewer errors with the new shelf tags.",
+            "The violet tags made the boxes easier to find during the trial.",
             "试验显示紫色标记缩短了清点时间。",
         )
         for report in reports:
@@ -115,7 +116,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
             self.assertEqual(evidence["start"], original.index(opinion))
 
     def test_reference_semantic_audit_blocks_completed_result_paraphrase(self):
-        text = "The violet tags made the boxes easier to find during the trial."
+        text = "Once the baskets wore violet labels, the queue was gone before the kettle boiled."
         self.assertFalse(reported_result(text))
         row = {
             "forum": "synthetic-paraphrase",
@@ -128,7 +129,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
             self.assertEqual(system, REFERENCE_PROMPT)
             self.assertIn("experiment", system.casefold())
             self.assertEqual(json.loads(prompt), {"r1": {"u": text}})
-            return '{"verdict":"leak"}', 0.0
+            return '{"verdict":"reported_result"}', 0.0
 
         with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
             cache = Path(tmp)

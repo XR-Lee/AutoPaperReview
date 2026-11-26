@@ -3,16 +3,17 @@
 from statistics import mean, pstdev
 
 from .data import digest
-from .prior_index import development_row
+from .prior_index import calibration_rows, historical_bounds
 
 
 def excerpts(proposal):
     return {k: v[:750] for k, v in proposal.items() if isinstance(v, str) and v}
 
 
-def panel(proposal, bank, round_number, exclude_key=""):
+def panel(proposal, bank, round_number, exclude_key="", *, target_year=None, cutoff_ms=None, **exclusions):
+    bounds = historical_bounds(target_year, cutoff_ms)
     pool = sorted(
-        (r for r in bank if r["key"] != exclude_key and development_row(r)),
+        (r for r, _ in calibration_rows(bank, bounds, excerpt_field="excerpts", exclude_key=exclude_key, **exclusions)),
         key=lambda r: (r["target"], r["key"]),
     )
     if len(pool) < 15:

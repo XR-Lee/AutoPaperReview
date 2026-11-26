@@ -12,6 +12,7 @@ from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from .clarification_protocol import outside_scope
 from .data import digest, read, reported_result, require_distinct_output, write
+from .file_io import local_output, protect_cli_output
 from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .material import material
 from .panel_prompts import FORECAST, SOURCE
@@ -182,9 +183,10 @@ def evaluate(row, cache, offline, *, leak_judge=None):
     return out
 
 
+@protect_cli_output
 def dispatch(args):
     source, cache = assert_local_only(args.input), assert_local_only(args.work)
-    dest = assert_local_only(args.output) if args.output else None
+    dest = local_output(args.output) if args.output else None
     if dest is not None and dest.is_relative_to(cache):
         raise ValueError("choose an output separate from input and cache")
     if dest is not None:

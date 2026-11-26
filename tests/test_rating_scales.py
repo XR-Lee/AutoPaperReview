@@ -93,6 +93,13 @@ class RatingScaleTests(unittest.TestCase):
                 self.assertIsNone(parse_rating(token))
         self.assertIsNone(parse_rating("not-a-number"))
 
+    def test_signed_text_ratings_follow_the_declared_scale(self) -> None:
+        scale = scale_for_key("range:-2-4")
+        for text, expected in (("-2: lower bound", -2), ("+4 upper bound", 4), ("+0", 0),
+                               ("-3: outside", None), ("+5", None), ("--2", None), ("-1.5", None)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_rating(text, scale=scale), expected)
+
     def test_a_raised_limit_records_the_drop_without_hiding_it(self) -> None:
         scale = scale_for_year(2024)
         notes = [

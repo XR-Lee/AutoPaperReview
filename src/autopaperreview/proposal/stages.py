@@ -4,21 +4,13 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from pathlib import Path
 from statistics import mean
 
 from ..command_transport import recover_json, reply_text, run_command
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import (
-    OUTCOME,
-    REPORTED_FINDING,
-    digest,
-    label_leak,
-    read,
-    reported_result,
-    write,
-)
+from .data import digest, label_leak, read, reported_result, write
+from .file_io import read_text
 from .leak_audit import PROMPT as LEAK_AUDIT
 from .leak_audit import (
     REPLY_PROTOCOL,
@@ -66,6 +58,7 @@ LABEL = (
     + " "
     + SCALE
     + """ The input maps each independent human reviewer to their numbered source units. Assess each reviewer separately. For each reviewer output a list of {"dimension":key,"score":integer,"evidence":[unit ids]}. Include every reviewer key, even with an empty list. Omit unsupported dimensions. Pick one score per reviewer per dimension; if opinions conflict cite both and use an intermediate score. Select up to three units giving direct support. A summary of what the authors claim does not support a reviewer opinion. A question alone does not imply negative sentiment unless it states a concrete criticism. Exclude units whose judgment relies on completed experiments, measurements, achieved bounds or proofs, benchmark wins, ablations, execution quality or decisions. For community impact require explicit beneficiaries, adoption, general reach or reuse; for potential value require an appraisal of the proposed contribution's usefulness. Do not transfer a compliment across dimensions unless the text supports both. Do not infer a score from a reviewer's general tone."""
+    + " A unit that discloses a completed result cannot be used even if a separate clause sounds prospective."
 )
 AUDIT = (
     COMMON
@@ -74,6 +67,7 @@ AUDIT = (
     + " "
     + SCALE
     + """ For each item return its key mapped to a list of zero, one or two SHORT EXACT contiguous excerpts from its units, copied character for character. Use [] to reject. Keep only if the excerpt, on its own, expresses the reviewer's evaluation of this precise dimension and is compatible with the proposed score. Preserve negation and qualifications. Do not use a fragment that reverses or hides the point of the sentence. Reject vague praise, descriptive summaries, requests for more experiments, execution quality, published outcomes and comparisons based on measurements or a proof already completed. A statement about efficacy on a benchmark, or a question about generalization to a device, by itself does not establish community impact. Keep mixed judgments only if both sides have pre-experimental support. Prefer the shortest self-contained clause with the relevant evidence. Output all item keys and no other fields."""
+    + " Inspect the full source unit. Reject it if it discloses a completed result, even if the chosen quote omits that part."
 )
 FORECAST = (
     COMMON
@@ -91,10 +85,6 @@ PROMPTS = {
     "forecast": FORECAST,
     "leak_audit": LEAK_AUDIT,
 }
-MEASURED = re.compile(
-    r"\b(experiments? (?:show|demonstrat|confirm)|performance (?:in|on) (?:the )?(?:experiment|benchmark)|empirical results?|achieved|outperform\w*|state.of.the.art performance)\b",
-    re.IGNORECASE,
-)
 
 
 def audit_packet(labels, comments):
@@ -172,7 +162,9 @@ def validate(stage, data, source):
                     "copy an exact source substring, or use []",
                 )
                 check(
-                    not reported_result(quote) and not MEASURED.search(quote),
+                    not reported_result(quote) and all(
+                        not reported_result(unit) for unit in source[key]["units"] if quote in unit
+                    ),
                     "drop measured outcomes",
                 )
                 check(
@@ -199,6 +191,10 @@ def validate(stage, data, source):
                 seen.add(dim)
                 references(label["evidence"], source[key])
                 check(len(label["evidence"]) <= 3, "maximum three citations")
+                check(
+                    all(not reported_result(source[key][unit]) for unit in label["evidence"]),
+                    "drop measured outcomes",
+                )
         elif stage == "compress":
             check(
                 isinstance(row, dict) and set(row) == {"text", "evidence"},
@@ -209,12 +205,8 @@ def validate(stage, data, source):
             if txt is None:
                 check(not row["evidence"], "use [] for an absent section")
             else:
-                check(
-                    isinstance(txt, str) and txt.strip() and not reported_result(txt),
-                    f"{key}: rewrite the sentence without the phrase {(OUTCOME.search(txt) or REPORTED_FINDING.search(txt)).group()!r}"
-                    if isinstance(txt, str) and reported_result(txt)
-                    else "supply nonempty text",
-                )
+                check(isinstance(txt, str) and txt.strip(), "supply nonempty text")
+                check(not reported_result(txt), f"{key}: drop reported outcomes")
         elif stage == "forecast":
             check(
                 isinstance(row, dict) and set(row) == {"panel", "basis", "rationale"},
@@ -355,7 +347,7 @@ def _invoke_leak_judge(prompt, system, cache, model, command, timeout, *, cached
     }
     path = cache / "leak_audit" / (digest(descriptor) + ".json")
     if path.exists():
-        old = decode_json_object(path.read_text(encoding="utf-8"))
+        old = decode_json_object(read_text(path))
         check(old.keys() == {"request", "output", "reply", "reply_sha256"}, "invalid cache receipt")
         check(old["request"] == descriptor, "cache request mismatch")
         reply = old["reply"]

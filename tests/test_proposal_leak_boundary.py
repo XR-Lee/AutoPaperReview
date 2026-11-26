@@ -11,17 +11,20 @@ from unittest.mock import patch
 
 from autopaperreview.cli import main
 from autopaperreview.proposal import (
-    claim_review, clarification, clarification_protocol, cli, fixed_benchmark, merit,
+    claim_review, clarification, clarification_protocol, cli, evaluation, fixed_benchmark, merit,
     pair_compare, priority, reference_coding, reviewer_panel, stages,
 )
-from autopaperreview.proposal.data import digest, write
-from autopaperreview.proposal.leak_audit import PROMPT, REFERENCE_PROMPT, apply_leak_audit
+from autopaperreview.proposal.data import digest, reported_result, write
+from autopaperreview.proposal.leak_audit import (
+    OUTCOME_SCREEN_PROMPT, PROMPT, REFERENCE_PROMPT, apply_leak_audit,
+)
 from autopaperreview.proposal.sanitized import require_model_input, sanitize_proposal
 
 PLAN = "Could violet tags index archival baskets by location?"
 SIGNAL = "The invitation to the final program arrived at dawn."
 CLEAN = '{"verdict":"clean"}'
 LEAK = '{"verdict":"leak"}'
+RESULT_LEAK = '{"verdict":"reported_result"}'
 
 
 class ProposalLeakBoundaryTests(TestCase):
@@ -146,6 +149,129 @@ class ProposalLeakBoundaryTests(TestCase):
             self.assertEqual([s for s, _ in seen], [PROMPT, stages.JUDGE])
             self.assertEqual(seen[0][1], seen[1][1])
             self.assertEqual(seen[0][1]["problem"], PLAN)
+
+    def test_default_score_and_prioritize_reject_measured_results_but_allow_plans(self):
+        plans = (
+            "We will measure whether the tags reach 91% accuracy.",
+            "A planned test compares whether the tags outperform a manual log.",
+            "将会测量检索速度，并计划比较准确率是否达到 91%。",
+        )
+        reports = (
+            "The violet tags made the boxes easier to find during the trial.",
+            "Our search accuracy was 91%.",
+            "The violet tags outperformed the control slips.",
+            "The storage trays were 3x faster to locate with the violet tags.",
+            "试验显示紫色标记缩短了清点时间。",
+        )
+        source = self.root / "plan.txt"
+        self.profile = self.document("valid-profile.json", {
+            "ranker": {"method": "weighted", "names": ["novelty"], "weights": [1]},
+            "prompts": {"merit": digest(stages.PROMPTS["merit"])},
+        })
+        for text in reports:
+            self.assertTrue(reported_result(text))
+            source.write_text(text, encoding="utf-8")
+            with self.subTest(report=text), patch.object(stages, "run_command") as send:
+                self.cli("score", source, "--work", self.root / "result-score")
+                self.cli(*self.rank_args(source))
+                send.assert_not_called()
+
+        for text in plans:
+            self.assertFalse(reported_result(text))
+            source.write_text(text, encoding="utf-8")
+            sent = []
+
+            def transport(_command, *, system, prompt, **_options):
+                sent.append((system, prompt))
+                if system == PROMPT:
+                    return CLEAN, 0
+                if system == stages.JUDGE:
+                    result = {k: {"score": None, "rationale": "No evidence.", "basis": []} for k in stages.RUBRIC}
+                else:
+                    self.assertEqual(system, merit.MERIT)
+                    result = {
+                        "dimensions": {k: {"score": 3, "why": "A planned comparison."} for k in merit.AXES},
+                        "panel": [[0, 0, 1, 0, 0]] * 3, "strength": "Specific scope.", "objection": "Unclear sampling.",
+                    }
+                return json.dumps(result), 0
+
+            with self.subTest(plan=text), patch.object(stages, "run_command", side_effect=transport):
+                self.cli("score", source, "--work", self.root / "plan-score", expected=0)
+                self.cli(*self.rank_args(source), expected=0)
+            self.assertEqual([system for system, _ in sent], [PROMPT, stages.JUDGE, PROMPT, merit.MERIT])
+            self.assertEqual({json.loads(payload)["proposal"] for _, payload in sent}, {text})
+
+    def test_completed_result_verdict_blocks_indirect_draft_before_default_scoring(self):
+        draft = "Once the baskets wore violet labels, the queue was gone before the kettle boiled."
+        self.assertFalse(reported_result(draft))
+        source = self.root / "draft.txt"
+        source.write_text(draft, encoding="utf-8")
+        for command in (("score", source, "--work", self.root / "score"), self.rank_args(source)):
+            with self.subTest(command=command[0]), patch.object(stages, "run_command", return_value=(RESULT_LEAK, 0)) as send:
+                self.cli(*command)
+                send.assert_called_once()
+                self.assertEqual(send.call_args.kwargs["system"], PROMPT)
+                self.assertIn('Use "reported_result" for completed experiments', PROMPT)
+
+    def test_legacy_references_remove_results_before_label_and_audit(self):
+        root = self.root / "legacy"
+        case = {"bundle": "bundle", "key": "synthetic-case", "split": "dev"}
+        write(root / "manifest.json", {"cases": [case]})
+        bundle = root / "inputs" / case["bundle"]
+        write(bundle / "candidate.json", {"s1": PLAN})
+        write(bundle / "provenance.json", {
+            "forum": "synthetic-paper", "review_ids": {"r1": "synthetic-review"}, "pre_review": True,
+        })
+        report = "The violet tags made the boxes easier to find during the trial."
+        opinion = "The proposed index offers a distinct way to trace lost baskets."
+        write(bundle / "comments.json", {"r1": {"u1": report, "u2": opinion}})
+        sent = []
+
+        def transport(_command, *, system, prompt, **_options):
+            payload = json.loads(prompt)
+            sent.append((system, payload))
+            self.assertNotIn(report, prompt)
+            if system in {PROMPT, REFERENCE_PROMPT}:
+                return CLEAN, 0
+            if system == stages.COMPRESS:
+                result = {key: {"text": None, "evidence": []} for key in stages.SECTIONS}
+                result["problem"] = {"text": PLAN, "evidence": ["s1"]}
+            elif system == stages.JUDGE:
+                result = {key: {"score": None, "rationale": "No evidence.", "basis": []} for key in stages.RUBRIC}
+            elif system == stages.LABEL:
+                self.assertEqual(payload, {"r1": {"u2": opinion}})
+                result = {"r1": [{"dimension": "novelty", "score": 4, "evidence": ["u2"]}]}
+            else:
+                self.assertEqual(system, stages.AUDIT)
+                self.assertEqual(payload["r1.novelty"]["units"], [opinion])
+                result = {"r1.novelty": [opinion]}
+            return json.dumps(result), 0
+
+        with patch.object(stages, "run_command", side_effect=transport):
+            self.cli("run", "--stage", "ideas", "--work", root, "--jobs", 1, expected=0)
+            self.cli("run", "--stage", "references", "--work", root, "--jobs", 1, expected=0)
+        self.assertEqual([system for system, _ in sent[-4:]], [REFERENCE_PROMPT, stages.LABEL, REFERENCE_PROMPT, stages.AUDIT])
+        self.assertEqual(sent[-4][1], sent[-3][1])
+        self.assertEqual(sent[-2][1], sent[-1][1])
+        self.assertEqual(evaluation.collect(root, "dev")[0]["labels"]["novelty"][0]["quotes"], [opinion])
+
+    def test_legacy_references_stop_an_indirect_completed_result_before_label(self):
+        root = self.root / "legacy-indirect"
+        write(root / "manifest.json", {"cases": [{"bundle": "bundle", "key": "synthetic-case", "split": "dev"}]})
+        report = "Once the baskets wore violet labels, the queue was gone before the kettle boiled."
+        self.assertFalse(reported_result(report))
+        write(root / "inputs" / "bundle" / "comments.json", {"r1": {"u1": report}})
+        with patch.object(stages, "run_command", return_value=(RESULT_LEAK, 0)) as send:
+            self.cli("run", "--stage", "references", "--work", root, "--jobs", 1)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["system"], REFERENCE_PROMPT)
+        self.assertEqual(json.loads(send.call_args.kwargs["prompt"]), {"r1": {"u1": report}})
+
+    def test_legacy_audit_rejects_a_partial_quote_from_a_completed_result_unit(self):
+        unit = "The catalogue is simple, and the tray trial showed that it saves time."
+        source = {"r1.novelty": {"dimension": "novelty", "score": 4, "units": [unit]}}
+        with self.assertRaisesRegex(ValueError, "drop measured outcomes"):
+            stages.validate("audit", {"r1.novelty": ["The catalogue is simple"]}, source)
             self.assertNotIn("evidence", str(seen[0][1]))
 
     def test_tampered_judge_receipts_block_new_stage_and_cannot_be_reused(self):
@@ -256,7 +382,7 @@ class ProposalLeakBoundaryTests(TestCase):
             seen = []
 
             def transport(_argv, *, system, prompt, **_options):
-                self.assertEqual(system, PROMPT)
+                self.assertEqual(system, OUTCOME_SCREEN_PROMPT)
                 self.assertIn(SIGNAL, prompt)
                 seen.append(json.loads(prompt))
                 return LEAK, 0
@@ -273,7 +399,7 @@ class ProposalLeakBoundaryTests(TestCase):
         def transport(_argv, *, system, prompt, **_options):
             payload = json.loads(prompt)
             seen.append((system, payload))
-            if system == PROMPT:
+            if system in {PROMPT, OUTCOME_SCREEN_PROMPT}:
                 if set(payload) == {"source", "claims"}:
                     self.assertIn(SIGNAL, str(payload["source"]))
                     self.assertIn(PLAN, str(payload["claims"]))
@@ -285,19 +411,19 @@ class ProposalLeakBoundaryTests(TestCase):
         with patch.object(stages, "run_command", side_effect=transport):
             self.cli(*self.rank_args(source), "--include-source-audit")
         self.assertEqual(seen[-1][0], PROMPT)
-        self.assertTrue(any(SIGNAL in str(body) for system, body in seen[:-1] if system == PROMPT))
+        self.assertTrue(any(SIGNAL in str(body) for system, body in seen[:-1] if system == OUTCOME_SCREEN_PROMPT))
 
     def test_outcome_screen_judges_attribution_and_context_before_sending(self):
         for i, (text, stage) in enumerate((
             ("Could violet tags be faster than a manual log?", "outcome_attribution"),
-            ("A proposed test asks if violet tags outperform the manual log.", "outcome_context"),
+            ("A prior catalogue outperforms the manual log.", "outcome_context"),
         )):
             seen = []
 
             def transport(_argv, *, system, prompt, **_options):
                 body = json.loads(prompt)
                 seen.append(system)
-                if system == PROMPT:
+                if system == OUTCOME_SCREEN_PROMPT:
                     if "context" in body:
                         self.assertEqual(body["context"]["u1"]["text"], text)
                         self.assertEqual(body["candidates"], ["u1"])
@@ -311,7 +437,7 @@ class ProposalLeakBoundaryTests(TestCase):
             with (self.subTest(stage=stage), patch.object(stages, "run_command", side_effect=transport),
                   self.assertRaisesRegex(ValueError, "leak audit blocked")):
                 priority.screen_packet({"proposal": text}, cache, leak_judge=judge)
-            self.assertEqual(seen, [PROMPT, stages.PROMPTS["outcome_screen"], PROMPT])
+            self.assertEqual(seen, [OUTCOME_SCREEN_PROMPT, stages.PROMPTS["outcome_screen"], OUTCOME_SCREEN_PROMPT])
 
     def test_run_compress_judges_exact_candidate_units_before_sending(self):
         root = self.root / "batch"
@@ -338,7 +464,7 @@ class ProposalLeakBoundaryTests(TestCase):
         } for i in range(15)]
         write(root / "bank.json", bank)
         write(root / "contrast-bank.json", bank)
-        write(root / "lessons.json", {"criteria": [SIGNAL]})
+        write(root / "lessons.json", {"criteria": [SIGNAL], "split": "dev", "year": 2020, "revision_ms": 30})
         write(root / "prior-opinions.json", {"synthetic-paper": [{"opinion": SIGNAL, "opinion_ms": 30}]})
         prior = [{
             "title": "A synthetic archival method", "abstract": SIGNAL,

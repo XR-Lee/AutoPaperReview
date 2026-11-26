@@ -498,7 +498,7 @@ PROMPTS["field"] = (
 )
 
 
-def field_packet(proposal, hits, opinions, *, cutoff_ms):
+def field_packet(proposal, hits, opinions, *, cutoff_ms, target_year=None):
     from .prior_index import historical_opinions
 
     return {
@@ -508,7 +508,7 @@ def field_packet(proposal, hits, opinions, *, cutoff_ms):
                 "title": h["title"],
                 "abstract": h["abstract"],
                 "year": h["year"],
-                "earlier_peer_opinions": historical_opinions(opinions.get(h["forum"]), cutoff_ms),
+                "earlier_peer_opinions": historical_opinions(opinions.get(h["forum"]), cutoff_ms, target_year=target_year),
             }
             for h in hits
         ],

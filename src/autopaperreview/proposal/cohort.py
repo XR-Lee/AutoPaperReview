@@ -84,6 +84,8 @@ def validate_manifest(doc: Any, *, allow_legacy: bool = False) -> dict:
     for row in index_by_forum(manifest.get("cases"), "manifest cases").values():
         case_split(row, legacy=legacy)
         _validate_stratum(row)
+        if legacy and "tier" in row and not isinstance(row["tier"], str):
+            raise ValueError("tier must be a string")
         case_allowed = {
             "forum",
             "split",

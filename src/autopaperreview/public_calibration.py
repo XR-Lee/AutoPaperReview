@@ -339,7 +339,7 @@ def _leading_int(value: Any) -> int | None:
     if isinstance(value, str):
         head = value.strip().split(":", 1)[0].strip().split()
         token = head[0] if head else ""
-        if token.isdigit():
+        if re.fullmatch(r"[+-]?\d+", token):
             try:
                 return int(token)
             except (OverflowError, ValueError):

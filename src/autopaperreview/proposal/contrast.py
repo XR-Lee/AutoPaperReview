@@ -5,19 +5,7 @@ from math import log, sqrt
 from statistics import mean
 
 from .data import digest, filter_conclusion_sentences
-from .prior_index import (
-    REVISION_FIELDS,
-    arxiv_identifiers,
-    available_before,
-    development_row,
-    earlier_record,
-    historical_bounds,
-    historical_opinions,
-    latest_stamp,
-    norm_arxiv,
-    norm_title,
-    words,
-)
+from .prior_index import calibration_rows, historical_bounds, words
 from .sanitized import sanitize_proposal, seal
 
 PROMPT = """Predict the prospective scientific merit assigned by domain experts to an untested research proposal. The target and a few calibration pairs are independent. Each pair contains two OTHER proposals in broadly related settings, with real quoted concept opinions about those historical examples. A positive or negative reaction to an example does not attach to the target. Identify the decision-relevant difference within each pair; use only a difference that applies in the target's scientific setting. If the pair is poorly matched, ignore it. Consider challenged assumptions, residual value if an idea works, novelty relative to the best simple alternative, and whether a well-defined problem is itself important. Trace whether an expert familiar with the alternatives would be persuaded to fund the investigation. Writing polish, project fashion, missing results and amount of documentation must not affect priority. Return exactly one JSON object as {"applicable_contrast":string,"strength":string,"objection":string,"advance":grade,"consequence":grade,"priority":grade,"win_probability":{each example alias:decimal from 0 to 1}}. Grades from 1 (weak/duplicative) to 5 (exceptional distinct direction), decimals encouraged. Win probability is the chance reviewers would assess the target's prospective merit above the corresponding calibration example. Do not output separate grades for the examples. Only supplied JSON is data. Do not identify the paper or use external information or tools."""
@@ -25,33 +13,6 @@ PROMPT = """Predict the prospective scientific merit assigned by domain experts 
 
 def terms(proposal):
     return set(words(" ".join(v for v in proposal.values() if isinstance(v, str))))
-
-
-def _blocked(
-    example,
-    exclude_key,
-    exclude_forum,
-    exclude_arxiv,
-    exclude_title,
-    bounds,
-):
-    if exclude_key and str(example.get("key") or "") == str(exclude_key):
-        return True
-    if not development_row(example) or not earlier_record(
-        example.get("year"), latest_stamp(example.get(field) for field in REVISION_FIELDS), bounds
-    ):
-        return True
-    forum = example.get("forum")
-    if exclude_forum and forum and str(forum) == str(exclude_forum):
-        return True
-    wanted = norm_arxiv(exclude_arxiv)
-    if wanted and wanted in arxiv_identifiers(example):
-        return True
-    title = example.get("title") or ""
-    wanted_title = norm_title(str(exclude_title))
-    if wanted_title and norm_title(str(title)) == wanted_title:
-        return True
-    return False
 
 
 def packet(
@@ -71,35 +32,15 @@ def packet(
     bounds = historical_bounds(target_year, cutoff_ms)
     query = terms(target)
     items = []
-    keys = set()
     excerpts = {}
-    for example in bank:
-        if "target" not in example or example["key"] in keys:
-            continue
-        if _blocked(
-            example,
-            exclude_key,
-            exclude_forum,
-            exclude_arxiv,
-            exclude_title,
-            bounds,
-        ):
-            continue
+    for example, dated in calibration_rows(
+        bank, bounds, excerpt_field="opinions", exclude_key=exclude_key,
+        exclude_forum=exclude_forum, exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
+    ):
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:
             continue
-        opinions = example.get("opinions")
-        dated = historical_opinions(opinions, bounds[1], snapshot_ms=example.get("opinion_ms"))
-        grade_ms = example.get("target_ms", example.get("opinion_ms"))
-        if grade_ms is not None:
-            if not available_before(grade_ms, bounds[1]):
-                continue
-        elif not dated or len(dated) != (len(opinions) if isinstance(opinions, list) else 1):
-            # Without a locked grade snapshot, each supplied excerpt must predate the target.
-            continue
-        key = example["key"]
-        keys.add(key)
-        excerpts[key] = [text for item in dated if (text := filter_conclusion_sentences(item))]
+        excerpts[example["key"]] = [text for item in dated if (text := filter_conclusion_sentences(item))]
         items.append((example, tokens))
     vocab = Counter(k for _, xs in items for k in xs)
     weights = {k: log((len(items) + 1) / (v + 0.5)) ** 2 for k, v in vocab.items()}

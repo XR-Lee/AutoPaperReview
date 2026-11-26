@@ -162,6 +162,24 @@ class ProposalArtifactTests(unittest.TestCase):
         published = _top_fifth(np.array(scores), np.array(ratings) >= 7, np)
         self.assertEqual(published["included_positive_range"], expected["included_positive_range"])
 
+    def test_normalize_table_handles_multiline_tsv_header_and_rejects_bad_quoting(self) -> None:
+        self.assertEqual(
+            normalize_table('"left\r\n column"\tright\r\nvalue\titem\r\n'),
+            [["left\n column", "right"], ["value", "item"]],
+        )
+        for text in ('"unclosed\n', 'left,right\n"one"extra,two\n'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "invalid CSV or TSV"):
+                normalize_table(text)
+
+    def test_metrics_reject_nonfinite_and_degenerate_samples(self) -> None:
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "must be finite"):
+                top_fraction([1, value], [3, 7])
+        for pairs in ((), ((1, 3), (2, 4)), ((1, 3), (1, 7))):
+            rows = [{"topic": "synthetic", "overall": score, "human": rating} for score, rating in pairs]
+            with self.subTest(pairs=pairs), self.assertRaisesRegex(ValueError, "needs varying scores"):
+                nlp_from_rows(rows)
+
     def test_custom_reproduction_refuses_all_output_input_aliases(self) -> None:
         with tempfile.TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
             root = Path(tmp)

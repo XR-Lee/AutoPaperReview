@@ -175,15 +175,14 @@ class OutcomeScreenTests(unittest.TestCase):
                 list(apd_cases(path))
             cases = list(apd_cases(path, review_filtered_fields=True))
             self.assertEqual([r["id"] for r in cases], ["plan", "empty"])
-            fields = cases[0]["fields_to_screen"]
-            self.assertEqual(set(fields), {"contribution", "statement"})
-            self.assertIn("outperform", fields["contribution"])
+            self.assertNotIn("fields_to_screen", cases[0])
+            self.assertIn("Could broad rings outperform thin rings?", cases[0]["candidate"].values())
             self.assertNotIn("protected", str(cases))
             self.assertNotIn("contribution", cases[1]["fields_to_screen"])
 
     def test_rechecks_attribution_in_context_before_ranking(self):
         packet = {
-            "proposal": "We propose violet tags. The pilot ended with violet beating grey. Could amber be faster than grey? 旧流程优于纸条。"
+            "proposal": "We propose violet tags. Violet looked superior to grey while sorting. Could amber be faster than grey? 旧流程优于纸条。"
         }
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -197,7 +196,7 @@ class OutcomeScreenTests(unittest.TestCase):
                     flags = [
                         {
                             "unit": "u2",
-                            "quote": "violet beating grey",
+                            "quote": "superior to grey",
                             "kind": "empirical",
                         }
                     ]

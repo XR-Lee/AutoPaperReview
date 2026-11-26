@@ -9,6 +9,7 @@ import argparse
 import sys
 import numpy as np
 from autopaperreview.proposal.data import digest, read, require_distinct_output, write
+from autopaperreview.proposal.file_io import protected_output
 from autopaperreview.proposal.overall_rank import evaluate
 from autopaperreview.proposal.priority import route
 from autopaperreview.public_calibration import spearman
@@ -334,26 +335,19 @@ if __name__ == "__main__":
     if args.action == "judge":
         judge(args.workers)
     else:
-        if args.action == "replay":
-            if args.rows is None:
-                parser.error("replay requires --rows")
-            try:
-                require_distinct_output(args.out, args.rows)
-            except (OSError, RuntimeError, ValueError) as exc:
-                parser.error(str(exc))
-            rows = read(args.rows)
-        else:
+        try:
             development = P / "development-rows.json"
-            inputs = (
-                Path("work/source-check/lock.json"),
-                Path("work/scale/development.json"),
-                *(P / "transfer").glob("*.json"),
-            )
-            try:
-                require_distinct_output(development, *inputs)
-                require_distinct_output(args.out, development, *inputs)
-            except (OSError, RuntimeError, ValueError) as exc:
-                parser.error(str(exc))
-            rows = join()
-            write(development, rows)
-        write(args.out, assess(rows))
+            if args.action == "evaluate":
+                require_distinct_output(args.out, development)
+            with protected_output(args.out):
+                if args.action == "replay":
+                    if args.rows is None:
+                        parser.error("replay requires --rows")
+                    rows = read(args.rows)
+                else:
+                    with protected_output(development):
+                        rows = join()
+                        write(development, rows)
+                write(args.out, assess(rows))
+        except (OSError, RuntimeError, ValueError) as exc:
+            parser.error(str(exc))

@@ -12,7 +12,6 @@ from statistics import mean
 from typing import Any
 
 from ..iclr_anonymize import anonymize_iclr_submission
-from ..pipeline import _atomic_write
 from ..public_calibration import (
     _finite_int,
     content_value,
@@ -21,17 +20,19 @@ from ..public_calibration import (
     parse_rating,
 )
 from ..rating_scales import RatingScale, classic_scale, scale_for_key, scale_for_year
+from .file_io import open_input, read_text, require_distinct_output as require_distinct_output, write_text
 from .sanitized import (
     contains_factual_leak,
     factual_leak,
     factual_patterns,
+    normalized_fact_text,
     score_field,
     to_json_data,
 )
 
 
 def read(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(read_text(path))
 
 
 def digest(value: Any) -> str:
@@ -41,55 +42,81 @@ def digest(value: Any) -> str:
 
 
 def write(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(
+    write_text(
         path,
         json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False, default=to_json_data) + "\n",
     )
 
 
-def require_distinct_output(output: Path, *inputs: Path) -> None:
-    """Refuse an output path that resolves to, or shares an inode with, an input."""
-    resolved = output.resolve()
-    for path in inputs:
-        if resolved == path.resolve():
-            raise ValueError("output must be distinct from every input file")
-        try:
-            if output.samefile(path):
-                raise ValueError("output must be distinct from every input file")
-        except FileNotFoundError:
-            continue
-
-
-# Conservative first pass. The compressor and label coder also check the meaning of every unit.
-OUTCOME = re.compile(
-    r"\b(outperform\w*|achiev(?:e[ds]?|ing) (?:a |the )?(?:new |higher |better |state.of.the.art)|"
-    r"ablations?|empirically|empirical (?:result|evaluat|evidence|performance)|experimental (?:result|evaluat|evidence)|"
-    r"(?:experiments?|evaluations?|results?|benchmarks?) (?:on .{0,75}? )?(?:show|confirm|demonstrat|reveal|indicat)|"
-    r"(?:we|authors|paper) (?:also )?(?:demonstrate|prove|show|establish|find that)|"
-    r"state.of.the.art (?:performance|results)|(?:was|were) (?:accept|reject)ed|rebuttal|camera.ready|"
-    r"acceptance (?:for publication|(?:at|to|by) (?:(?:a|the) )?(?:venue|conference|journal|workshop|iclr|cvpr))|"
-    r"recommend (?:accept|reject)|"
-    r"my (?:rating|score)|after (?:the )?(?:discussion|response))\b|"
-    r"\d\s*(?:%|percentage points)|实验(?:结果|表明|显示)|取得了|优于|提升了|录用|拒稿",
-    re.IGNORECASE,
-)
 LINK = re.compile(r"https?://\S+|\b(?:github\.com|arxiv\.org)/\S+", re.IGNORECASE)
 
-
-REPORTED_FINDING = re.compile(
-    r"\b(?:our |the )?(?:experiments?|results?|evaluations?|pilots?|trials?|benchmarks?)\s+(?:have |also )?"
-    r"(?:demonstrat(?:e[ds]?|ing)|show(?:n|ed|s)?|confirm(?:ed|s)?|indicat(?:e[ds]?|ing)|reveal(?:ed|s)?)\b|"
-    r"\b(?:achieved|obtained|attained)\s+(?:a |an |the )?(?:new |best |higher |lower |accuracy|score)|"
-    r"\b(?:we|(?:the )?authors)\s+(?:(?:have|had|also|then)\s+){0,3}(?:measured|observed|recorded)\b|"
-    r"\b(?:yielded|produced)\s+(?:a |an |the )?(?:measured|observed|empirical|statistically significant)\b|"
-    r"(?:实验|试验|测试)(?:证明|验证了|显示)|结果(?:显示|表明)|观察到|测得",
-    re.IGNORECASE,
+_RESULT_CLAUSE = re.compile(
+    r"(?<=[.!?])\s+|[;；。！？\n]+|,\s*(?:but|however|yet|while)\s+"
+)
+_EVALUATION = r"(?:experiments?|results?|evaluations?|pilots?|trials?|benchmarks?|ablations?|tests?)"
+_METRIC = (
+    r"(?:(?:search|query|inference|training|sorting|response|waiting|execution)\s+)?"
+    r"(?:accuracy|precision|recall|f1|auc|error(?: rate)?|latency|runtime|throughput|"
+    r"speed|time|memory|loss|efficiency|performance|success rate)"
+)
+_QUANTITY = r"[+-]?\d+(?:[.,]\d+)?(?:\s*(?:%|x\b|percentage points?\b)|\b)"
+_COMPARATIVE = r"(?:faster|slower|better|worse|higher|lower|fewer|shorter|longer|more effective)"
+_COMPLETED_RESULT = re.compile(
+    rf"\b{_EVALUATION}\b(?:\s+(?:on|with)\s+[^.!?]{{1,50}}?)?\s+(?:have\s+|also\s+)?"
+    r"(?:showed|confirmed|demonstrated|indicated|revealed|found|ended\s+with|yielded|returned|proved)\b"
+    r"|\b(?:we|(?:the\s+)?authors?)\s+(?:(?:have|had|also|then|already|repeatedly)\s+){0,3}"
+    r"(?:measured|observed|recorded|ran|tested|evaluated|demonstrated|proved|verified|confirmed|conducted|showed)\b"
+    rf"|\b(?:completed|ran|conducted|performed)\s+(?:(?:a|an|the|our|preliminary|initial)\s+){{0,3}}{_EVALUATION}\b"
+    r"|\b(?:was|were|has been|have been)\s+(?:measured|observed|achieved|verified|confirmed|proven)\b"
+    rf"|\b{_METRIC}\s+(?:was|reached|fell to|rose to|increased to|decreased to)\s+{_QUANTITY}"
+    rf"|\b(?:outperformed|surpassed|beat|exceeded)\s+(?:(?:the|a|all|our)\s+)?"
+    r"(?:baseline\w*|control\w*|prior|existing|previous|manual|comparators?)\b"
+    rf"|\b(?:achieved|attained|obtained|recorded)\s+(?:(?:a|an|the|new|best|higher|lower)\s+){{0,3}}"
+    rf"(?:{_METRIC}\b|{_QUANTITY})"
+    rf"|\b(?:yielded|produced)\s+(?:a |an |the )?(?:measured|observed|empirical|statistically significant)\b"
+    rf"|\b(?:made|were|was|became)\b[^.!?]{{0,65}}\b(?:{_COMPARATIVE}|easier)\b[^.!?]{{0,65}}"
+    rf"\b(?:during|in|on|across)\s+(?:(?:the|a|our)\s+)?{_EVALUATION}\b"
+    r"|(?:实验|试验|测试)(?:证明|验证了|显示)|结果(?:显示|表明)|观察到|测得|取得了|提升了"
+)
+_ASSERTED_RESULT = re.compile(
+    rf"\b{_EVALUATION}\s+(?:on\s+[^.!?]{{1,65}}?\s+)?(?:also\s+)?"
+    r"(?:shows?|confirms?|demonstrates?|indicates?|reveals?|proves?)\b"
+    rf"|\b{_METRIC}\s*(?:[:=]|\b(?:is|of|at|reaches)\b)\s*{_QUANTITY}"
+    rf"|\b(?:achieves?|attains?|obtains?|yields?|measures?)\s+(?:an?\s+)?{_QUANTITY}"
+    rf"|\b(?:yielded|produced|returned|observed|recorded|measured)\s+{_QUANTITY}"
+    rf"|\b(?:improves?|improved|reduces?|reduced|cuts?|raised|raises?|increases?|increased|lowers?|lowered)"
+    rf"\s+(?:the\s+)?{_METRIC}\b[^.!?]{{0,26}}{_QUANTITY}"
+    rf"|\b(?:outperform(?:s|ed)?|surpass(?:es|ed)?|beats?)\b|\b{_COMPARATIVE}\s+than\b"
+    rf"|\b{_QUANTITY}\s*(?:times\s+)?{_COMPARATIVE}\b"
+    r"|\b(?:we|authors|paper)\s+(?:also\s+)?(?:demonstrate|prove|show|establish|find that)\b"
+    r"|\bstate.of.the.art (?:performance|results)\b|优于|实验结果"
+)
+_RETROSPECTIVE_REVIEW = re.compile(
+    r"\b(?:(?:was|were) (?:accept|reject)ed|rebuttal|camera.ready|"
+    r"acceptance (?:for publication|(?:at|to|by) (?:(?:a|the) )?(?:venue|conference|journal|workshop|iclr|cvpr))|"
+    r"recommend (?:accept|reject)|my (?:rating|score)|after (?:the )?(?:discussion|response))\b|录用|拒稿"
+)
+_PROSPECTIVE = re.compile(
+    r"\b(?:will|would|could|may|might|should|can|planned|intend(?:s)?|aim(?:s)?|hypothesiz(?:e|es)|"
+    r"expect(?:s|ed)?|predict(?:s|ed)?|whether)\b|"
+    r"\b(?:plan(?:s)? to|propos(?:e|es|ed) to|to be measured|to be tested|if|assuming|design goal|"
+    r"target(?:ed)? (?:accuracy|precision|recall|latency|throughput|performance|error))\b|"
+    r"^\s*(?:estimate|test|measure|compare|simulate|evaluate|check|assess|target|plan|assume|set)\b|"
+    r"将会?|计划|拟议|假设|如果|是否|预期|目标"
 )
 
 
 def reported_result(text: str) -> bool:
-    return bool(OUTCOME.search(text) or REPORTED_FINDING.search(text))
+    """Flag retrospective evidence while retaining proposals, targets and hypotheses."""
+    for clause in _RESULT_CLAUSE.split(normalized_fact_text(text)):
+        if _COMPLETED_RESULT.search(clause) or _RETROSPECTIVE_REVIEW.search(clause):
+            return True
+        if any(
+            not _PROSPECTIVE.search(clause[: finding.end()])
+            for finding in _ASSERTED_RESULT.finditer(clause)
+        ):
+            return True
+    return False
 
 
 # Factual leaks live in sanitized.py. Indirect acceptance is not a regex.
@@ -103,7 +130,7 @@ _LABEL_SPLIT = re.compile(
 _LABEL_TRIM = " \t-*"
 _LABEL_JOIN = " "
 # Bump when the review-span cleaning or offset mapping algorithm changes.
-REVIEW_CLEANING_VERSION = 2
+REVIEW_CLEANING_VERSION = 3
 # Score and identity fields are never copied into a model packet. "contribution"
 # is not listed: APD uses that key for prose, and the ICLR numeric score is
 # excluded by the review-prose allowlist below.
@@ -126,8 +153,16 @@ def cleaning_rules() -> dict[str, Any]:
         "sentence_boundary": {"pattern": _LABEL_SPLIT.pattern, "flags": _LABEL_SPLIT.flags},
         "trim_chars": _LABEL_TRIM,
         "sentence_join": _LABEL_JOIN,
-        "outcome": {"pattern": OUTCOME.pattern, "flags": OUTCOME.flags},
-        "reported_finding": {"pattern": REPORTED_FINDING.pattern, "flags": REPORTED_FINDING.flags},
+        "result_patterns": {
+            name: {"pattern": pattern.pattern, "flags": pattern.flags}
+            for name, pattern in {
+                "clause_boundary": _RESULT_CLAUSE,
+                "completed_result": _COMPLETED_RESULT,
+                "asserted_result": _ASSERTED_RESULT,
+                "retrospective_review": _RETROSPECTIVE_REVIEW,
+                "prospective": _PROSPECTIVE,
+            }.items()
+        },
     }
 
 
@@ -199,14 +234,7 @@ def retained_label_text(
 
 def filter_conclusion_sentences(text: str) -> str:
     """Drop label leaks and reported-result sentences from audited prose."""
-    if not isinstance(text, str) or not text.strip():
-        return ""
-    kept = []
-    for part in _LABEL_SPLIT.split(text):
-        sentence = part.strip(_LABEL_TRIM)
-        if sentence and not label_leak(sentence) and not reported_result(sentence):
-            kept.append(sentence)
-    return " ".join(kept).strip()
+    return retained_label_text(text, screen_results=True)[0]
 
 
 _GROUP_YEAR = re.compile(r"ICLR\.cc/(20\d{2})/")
@@ -342,7 +370,7 @@ def sentences(text: str) -> list[str]:
         p.strip(" \t-*")
         for p in parts
         if (len(p.strip(" \t-*")) >= 8 or re.search(r"[\u3400-\u9fff]{3}", p))
-        and not OUTCOME.search(p)
+        and not reported_result(p)
         and not label_leak(p)
     ]
 
@@ -376,7 +404,7 @@ def review_prose(note: dict) -> dict[str, str]:
 
 
 def prospective_comments(comments: dict) -> dict:
-    """Drop score fields and label sentences before label or audit sees comments."""
+    """Drop score fields, label facts and completed results before reference coding."""
     if not isinstance(comments, dict):
         raise TypeError("comments must be an object")
     cleaned: dict = {}
@@ -384,7 +412,7 @@ def prospective_comments(comments: dict) -> dict:
         if score_field(reviewer):
             continue
         if isinstance(body, str):
-            text = neutralize_label_text(body)
+            text = filter_conclusion_sentences(body)
             if text and not label_leak(text):
                 cleaned[reviewer] = text
             continue
@@ -394,7 +422,7 @@ def prospective_comments(comments: dict) -> dict:
         for key, value in body.items():
             if score_field(key) or not isinstance(value, str):
                 continue
-            text = neutralize_label_text(value)
+            text = filter_conclusion_sentences(value)
             if text and not label_leak(text):
                 kept[key] = text
         cleaned[reviewer] = kept
@@ -528,7 +556,7 @@ def iclr_case(
 def archived_notes(path: Path):
     """Stream the leading notes array of the submission snapshot, one note at a time."""
     decoder = json.JSONDecoder()
-    with path.open(encoding="utf-8") as f:
+    with open_input(path) as f:
         buf = f.read(65536)
         prefix = re.match(r'\s*\{\s*"notes"\s*:\s*\[', buf)
         if not prefix:
@@ -575,7 +603,7 @@ def snapshot_cases(
         }
         sub["content"] = {k: n["content"].get(k) for k in ("abstract", "primary_area")}
         submissions[n["id"]] = sub
-    with forums.open(encoding="utf-8") as stream:
+    with open_input(forums) as stream:
         for line in stream:
             notes = json.loads(line)["notes"]
             for fid in {n.get("forum") for n in notes} & submissions.keys():
@@ -595,7 +623,7 @@ def apd_cases(path: Path, *, review_filtered_fields=False):
                 "install autopaperreview[proposal-yaml] to read APD YAML, or supply JSON"
             ) from None
         try:
-            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+            doc = yaml.safe_load(read_text(path))
         except yaml.YAMLError as exc:
             raise ValueError(f"invalid APD YAML: {exc}") from exc
     if (

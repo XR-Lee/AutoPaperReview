@@ -103,6 +103,15 @@ class ProposalFixedInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicting cohort split"):
             cohort_cases(lock)
 
+    def test_versionless_tier_alias_must_be_a_string(self):
+        lock = self.manifest(tier="synthetic-tier")
+        del lock["version"]
+        self.assertEqual(self.evaluate(lock, self.reference())["n"], 1)
+        for value in (True, False, 3, None, []):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "tier must be a string"):
+                lock["cases"][0]["tier"] = value
+                self.evaluate(lock, self.reference())
+
     def test_evaluate_rank_rejects_output_alias_of_input(self):
         with TemporaryDirectory(prefix="apr-pr70-fix-r2-") as tmp:
             root = Path(tmp)

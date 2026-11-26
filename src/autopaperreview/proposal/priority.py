@@ -9,12 +9,13 @@ from statistics import mean
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
 from .data import apd_cases, assert_no_label_leak, digest, read, require_distinct_output, write
+from .file_io import input_sha256, local_output, protect_cli_output, read_text
 from .leak_audit import apply_leak_audit, model_leak_judge, require_leak_judge
 from .sanitized import sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
-from .prior_index import historical_bounds, retrieve, words
+from .prior_index import eligible_history, historical_bounds, retrieve, words
 from .stages import PROMPTS, SECTIONS, claude_argv, invoke, validate
 
 
@@ -97,11 +98,29 @@ def text_packet(doc):
     return sanitize_proposal(doc)
 
 
-_HISTORICAL_STAGES = {"challenge", "delta", "opinion", "field", "contrast"}
+_PRIOR_STAGES = {"challenge", "delta", "opinion", "field"}
+_INDEX_STAGES = _PRIOR_STAGES | {"contrast"}
+_PRIOR_INPUTS = ("prior.sqlite", "prior.sqlite-wal", "prior.sqlite-shm", "prior.sqlite-journal")
+_HISTORICAL_ASSETS = {
+    **dict.fromkeys(_PRIOR_STAGES, _PRIOR_INPUTS),
+    "field": (*_PRIOR_INPUTS, "prior-opinions.json"),
+    "contrast": ("contrast-bank.json",),
+    "learned": ("lessons.json",),
+    "match": ("bank.json",),
+    "slate": ("bank.json",),
+}
 
 
 def needs_historical_bounds(profile):
-    return any(stage_for_feature(name) in _HISTORICAL_STAGES for name in profile["ranker"]["names"])
+    return any(stage_for_feature(name) in _HISTORICAL_ASSETS for name in profile["ranker"]["names"])
+
+
+def profile_inputs(profile, folder):
+    stages = {stage_for_feature(name) for name in profile["ranker"]["names"]}
+    assets = set(profile.get("assets", {}))
+    for stage in stages:
+        assets.update(_HISTORICAL_ASSETS.get(stage, ()))
+    return [folder / name for name in sorted(assets)]
 
 
 def rank(
@@ -127,6 +146,13 @@ def rank(
     require_leak_judge(leak_judge)
     if needs_historical_bounds(profile):
         year, cutoff_ms = historical_bounds(year, cutoff_ms)
+    history_exclusions = {
+        "exclude_key": exclude_key,
+        "exclude_forum": forum,
+        "exclude_arxiv": arxiv,
+        "exclude_title": title,
+    }
+    history_options = {**history_exclusions, "target_year": year, "cutoff_ms": cutoff_ms}
     packet = sanitize_proposal(packet)
     if legacy is not None:
         legacy = sanitize_proposal(legacy)
@@ -182,7 +208,7 @@ def rank(
                 f"model route or prompt differs from frozen {key} configuration"
             )
     query_packet = packet
-    uses_english_index = bool(set(stages) & _HISTORICAL_STAGES)
+    uses_english_index = bool(set(stages) & _INDEX_STAGES)
     if uses_english_index and len(words(" ".join(v for v in packet.values() if v))) < 5:
         qm, qa = route("search_terms")
         qp = send("search_terms", packet, qm, qa)
@@ -197,7 +223,7 @@ def rank(
             requests = []
             bank = read(folder / "bank.json")
             for i in range(2):
-                source, reference = panel(packet, bank, i, exclude_key)
+                source, reference = panel(packet, bank, i, **history_options)
                 path = send(stage, source, model, argv)
                 verdict = read(path)["output"]
                 validate(stage, verdict, source)
@@ -214,12 +240,7 @@ def rank(
                 packet,
                 read(folder / "contrast-bank.json"),
                 query_packet,
-                exclude_key=exclude_key,
-                exclude_forum=forum,
-                exclude_arxiv=arxiv,
-                exclude_title=title,
-                target_year=year,
-                cutoff_ms=cutoff_ms,
+                **history_options,
             )
         elif stage == "forecast":
             source = legacy or packet
@@ -227,12 +248,18 @@ def rank(
         elif stage == "merit":
             source = packet
         elif stage == "learned":
+            lessons = read(folder / "lessons.json")
+            criteria = lessons["criteria"]
+            if not isinstance(criteria, list):
+                raise ValueError("expected a list of historical calibration criteria")
+            if criteria and not eligible_history(lessons, (year, cutoff_ms), **history_exclusions):
+                raise ValueError("historical calibration criteria lack eligible development provenance")
             source = {
                 "proposal": packet,
-                "calibration_questions": read(folder / "lessons.json")["criteria"],
+                "calibration_questions": criteria,
             }
         elif stage == "match":
-            source = example_packet(packet, read(folder / "bank.json"), exclude_key)
+            source = example_packet(packet, read(folder / "bank.json"), **history_options)
         else:
             if not sources:
                 sources = retrieve(
@@ -253,7 +280,7 @@ def rank(
             }
         if stage == "field":
             source = merit.field_packet(
-                packet, sources, read(folder / "prior-opinions.json"), cutoff_ms=cutoff_ms
+                packet, sources, read(folder / "prior-opinions.json"), cutoff_ms=cutoff_ms, target_year=year,
             )
         if stage == "opinion":
             pm, pa = route("peer")
@@ -313,12 +340,10 @@ def register(sub):
 
 
 def load_profile(path):
-    from ..hashing import sha256_file
-
     folder = path.resolve().parent
     profile = read(path)
     for name, expected in profile.get("assets", {}).items():
-        if Path(name).name != name or sha256_file(folder / name) != expected:
+        if Path(name).name != name or input_sha256(folder / name) != expected:
             raise ValueError("profile asset mismatch")
     return profile, folder
 
@@ -404,11 +429,12 @@ def screen_rank_inputs(packet, legacy, root, profile, *, cached_only=False, prov
     return packet, legacy, evidence, assessable
 
 
+@protect_cli_output
 def dispatch(args):
-    output = assert_local_only(args.output)
+    output = local_output(args.output)
     require_distinct_output(output, args.proposal, args.profile)
     profile, folder = load_profile(args.profile)
-    require_distinct_output(output, *(folder / name for name in profile.get("assets", {})))
+    require_distinct_output(output, *profile_inputs(profile, folder))
     year, cutoff_ms = getattr(args, "target_year", None), getattr(args, "cutoff_ms", None)
     if needs_historical_bounds(profile):
         year, cutoff_ms = historical_bounds(year, cutoff_ms)
@@ -465,7 +491,7 @@ def dispatch(args):
             items.append(item)
     else:
         if doc is None:
-            doc = args.proposal.read_text(encoding="utf-8")
+            doc = read_text(args.proposal)
         batch = isinstance(doc, list)
         items = doc if batch else [doc]
     if include_audit and not is_apd:

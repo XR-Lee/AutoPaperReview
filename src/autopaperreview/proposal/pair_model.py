@@ -1,14 +1,15 @@
 """Numerical backend for equal-token, two-order comparisons of pre-experiment proposals."""
 
 import hashlib
+import json
 
 import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 
-from ..hashing import sha256_file
 from .material import material
 from .data import digest, read
+from .file_io import input_sha256, open_input
 from .leak_audit import apply_leak_audit, require_leak_judge
 
 def expit(value):
@@ -23,10 +24,16 @@ def truncate(tokens, n):
     return tokens[:left] + (tokens[-right:] if right else [])
 
 
+def _tensor_digest(tensor):
+    # All encoder inputs are int64. The nested array includes row boundaries.
+    encoded = json.dumps(tensor.tolist(), separators=(",", ":")).encode("ascii")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 class PairEvaluator:
     def __init__(self, assets, checkpoint, tokenizer):
         spec = read(assets)
-        if sha256_file(checkpoint) != spec['checkpoint'] or sha256_file(tokenizer) != spec['tokenizer']:
+        if input_sha256(checkpoint) != spec['checkpoint'] or input_sha256(tokenizer) != spec['tokenizer']:
             raise ValueError('encoder or tokenizer fingerprint mismatch')
         ort.disable_telemetry_events()
         session = ort.SessionOptions()
@@ -49,32 +56,49 @@ class PairEvaluator:
         if stability_path.exists():
             meta = read(stability_path)
             weights = assets.with_name('stability-models.npy')
-            if sha256_file(weights) != meta['weights'] or sha256_file(assets) != meta['central_model']:
+            if input_sha256(weights) != meta['weights'] or input_sha256(assets) != meta['central_model']:
                 raise ValueError('stability model fingerprint mismatch')
-            self.replicates = np.load(weights, allow_pickle=False)
+            with open_input(weights, "rb") as handle:
+                self.replicates = np.load(handle, allow_pickle=False)
             if self.replicates.shape != (meta['bootstrap'], len(self.coefficient)) or not np.isfinite(self.replicates).all():
                 raise ValueError('invalid stability weight dimensions')
 
+    def _audit_input(self, tensors, judge):
+        fingerprints = {name: _tensor_digest(array) for name, array in tensors.items()}
+        packet = {"tensor_sha256": fingerprints}
+        for side, ids in zip(("left", "right"), tensors["input_ids"].tolist()):
+            wordpieces = []
+            for token_id in ids:
+                token = self.tokenizer.id_to_token(token_id)
+                if not token or self.tokenizer.token_to_id(token) != token_id:
+                    raise ValueError("pair tokenizer cannot identify an encoder token")
+                wordpieces.append(token)
+            packet[f"{side}_first"] = self.tokenizer.decode(ids, skip_special_tokens=False)
+            packet[f"{side}_wordpieces"] = " ".join(wordpieces)
+        apply_leak_audit(packet, judge)
+        return fingerprints
+
     def encode_pair(self, left, right, *, leak_judge=None):
+        feature, n, _ = self._encode_pair(left, right, leak_judge)
+        return feature, n
+
+    def _encode_pair(self, left, right, leak_judge):
         require_leak_judge(leak_judge)
         a, b = [self.tokenizer.encode('\n'.join(side), add_special_tokens=False).ids for side in (left, right)]
         n = min(96, len(a), len(b))
         if n == 0:
-            return None, 0
+            return None, 0, None
         a, b = truncate(a, n), truncate(b, n)
-        orders = [[101, *a, 102, *b, 102], [101, *b, 102, *a, 102]]
-        apply_leak_audit({
-            name: self.tokenizer.decode(order, skip_special_tokens=False)
-            for name, order in zip(("left_first", "right_first"), orders)
-        }, leak_judge)
-        ids = np.array(orders, dtype='int64')
+        ids = np.array([[101, *a, 102, *b, 102], [101, *b, 102, *a, 102]], dtype='int64')
         segments = np.zeros_like(ids)
         segments[:, n+2:] = 1
-        h = self.net.run(None, dict(input_ids=ids, attention_mask=(ids != 0).astype('int64'), token_type_ids=segments))[0]
+        tensors = dict(input_ids=ids, attention_mask=(ids != 0).astype('int64'), token_type_ids=segments)
+        fingerprints = self._audit_input(tensors, leak_judge)
+        h = self.net.run(None, tensors)[0]
         cls = h[:, 0, :] @ self.projection
         contrast = (h[:, 1:n+1, :].mean(1) - h[:, n+2:2*n+2, :].mean(1)) @ self.projection
         feature = np.concatenate(((cls[0] - cls[1]) * .5, (contrast[0] - contrast[1]) * .5))
-        return feature.astype(float), n
+        return feature.astype(float), n, fingerprints
 
     def preference(self, left, right, *, leak_judge=None):
         feature, n = self.encode_pair(left, right, leak_judge=leak_judge)
@@ -82,7 +106,7 @@ class PairEvaluator:
 
     def compare(self, first, second, *, leak_judge=None):
         left, right = material(first), material(second)
-        feature, n = self.encode_pair(left, right, leak_judge=leak_judge)
+        feature, n, fingerprints = self._encode_pair(left, right, leak_judge)
         p = None
         bounds = None
         direction = 'insufficient_material'
@@ -94,5 +118,6 @@ class PairEvaluator:
                 direction = 'left' if p > .5 and bounds[0] > .5 else 'right' if p < .5 and bounds[1] < .5 else 'unresolved'
         return dict(left=first['id'], right=second['id'], left_overall=first.get('overall'), right_overall=second.get('overall'),
                     state='available' if p is not None else 'insufficient_material', wordpieces_per_side=n,
+                    tensor_sha256=fingerprints,
                     left_statements=len(left), right_statements=len(right), probability_prefer_left=p,
                     training_stability90=bounds, direction=direction, model=self.model_id, endpoint='expert_pair_preference_research')

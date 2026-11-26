@@ -9,6 +9,7 @@ from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
 from .data import digest, read, reported_result, require_distinct_output, write
+from .file_io import local_output, protect_cli_output
 from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .outcome_screen import units
 from .sanitized import require_model_input, seal
@@ -176,8 +177,9 @@ def register(sub):
     parser.set_defaults(func=dispatch)
 
 
+@protect_cli_output
 def dispatch(args):
-    root, output = assert_local_only(args.work), assert_local_only(args.output)
+    root, output = assert_local_only(args.work), local_output(args.output)
     require_distinct_output(output, args.input)
     if not protocol.finite_number(args.timeout) or args.timeout <= 0:
         raise ValueError("use a positive finite timeout")

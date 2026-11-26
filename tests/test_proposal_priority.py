@@ -45,6 +45,9 @@ class TestProposalPriority(unittest.TestCase):
             {
                 "split": "dev",
                 "key": str(i),
+                "year": 2020,
+                "revision_ms": 10,
+                "opinion_ms": 11,
                 "target": 2 + i / 8,
                 "proposal": {"problem": f"Offline archive fixture {i}"},
                 "excerpts": [f"opinion-{i}"],
@@ -52,7 +55,7 @@ class TestProposalPriority(unittest.TestCase):
             for i in range(12)
         ]
         rows.append({**rows[0], "split": "test", "excerpts": ["SECRET"]})
-        actual = packet({"problem": "archive"}, rows, "0")
+        actual = packet({"problem": "archive"}, rows, "0", target_year=2024, cutoff_ms=20)
         self.assertNotIn("SECRET", str(actual))
         self.assertNotIn("'opinion-0'", str(actual))
         self.assertEqual(len(actual["examples"]), 4)
@@ -235,14 +238,17 @@ class TestFixedProposalBenchmark(unittest.TestCase):
             {
                 "key": str(i),
                 "split": "dev",
+                "year": 2020,
+                "revision_ms": 10,
+                "target_ms": 11,
                 "target": 2 + i / 12,
                 "proposal": {"problem": f"Archive notation {i}."},
             }
             for i in range(23)
         ]
         proposal = {"problem": "Compare how archival aliases are chosen."}
-        a, g = panel(proposal, bank, 0, "4")
-        b, h = panel(proposal, bank, 1, "4")
+        a, g = panel(proposal, bank, 0, "4", target_year=2024, cutoff_ms=20)
+        b, h = panel(proposal, bank, 1, "4", target_year=2024, cutoff_ms=20)
         self.assertEqual(len(a), 6)
         self.assertNotEqual(list(a.values()), list(b.values()))
         self.assertEqual(sum(v is None for v in h.values()), 1)

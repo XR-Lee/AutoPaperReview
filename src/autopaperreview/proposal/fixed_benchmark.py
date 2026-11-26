@@ -8,10 +8,11 @@ from pathlib import Path
 from ..public_calibration import assert_local_only
 from .cohort import case_split, index_by_forum, validate_manifest, validate_predictions, validate_references
 from .data import digest, read, require_distinct_output, require_official_mean, scale_for_reference, write
+from .file_io import local_output, map_with_input_tracking, protect_cli_output
 from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
 from .leak_audit import model_leak_judge, require_leak_judge
 from .priority import (
-    add_screen_provider, claude_argv, load_profile, needs_historical_bounds, rank, screen_rank_inputs, text_packet,
+    add_screen_provider, claude_argv, load_profile, needs_historical_bounds, profile_inputs, rank, screen_rank_inputs, text_packet,
 )
 from .prior_index import historical_bounds, norm_arxiv
 
@@ -25,7 +26,10 @@ def _present(source, field):
     if field in {"arxiv", "arxiv_id"}:
         if not isinstance(value, str):
             raise ValueError("arxiv must be a string")
-        return norm_arxiv(value) or None
+        identifier = norm_arxiv(value)
+        if value.strip() and not identifier:
+            raise ValueError("invalid arxiv identifier")
+        return identifier or None
     if field in {"year", "cutoff_ms", "submission_ms"} and type(value) is not int:
         raise ValueError(f"{field} must be an integer")
     return value
@@ -216,12 +220,14 @@ def blind_inputs(manifest, proposals):
     return inputs
 
 
+@protect_cli_output
 def predict_dispatch(args):
-    output = assert_local_only(args.output)
+    output = local_output(args.output)
     require_distinct_output(output, args.manifest, args.proposals, args.profile)
     inputs = blind_inputs(read(args.manifest), read(args.proposals))
     profile, folder = load_profile(args.profile)
     require_distinct_output(output, *(folder / name for name in profile.get("assets", {})))
+    require_distinct_output(output, *profile_inputs(profile, folder))
     if needs_historical_bounds(profile):
         for _, _, metadata in inputs:
             historical_bounds(metadata.get("year"), metadata.get("cutoff_ms"))
@@ -270,13 +276,14 @@ def predict_dispatch(args):
         return {"forum": fid, "overall": judged["overall"], **audit}
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        predictions = list(pool.map(one, inputs))
+        predictions = map_with_input_tracking(pool, one, inputs)
     write(output, predictions)
     return 0
 
 
+@protect_cli_output
 def dispatch(args):
-    output = assert_local_only(args.output)
+    output = local_output(args.output)
     require_distinct_output(output, args.manifest, args.predictions, args.references)
     result = evaluate_fixed(
         read(args.manifest), read(args.predictions), read(args.references)

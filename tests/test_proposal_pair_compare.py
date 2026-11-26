@@ -1,5 +1,7 @@
 import argparse
+import hashlib
 import importlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -63,14 +65,17 @@ class TestProposalPairCompare(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pair_compare.evaluate_bundle(bundle, "a", "b", leak_judge=clean_judge)
 
-    def test_pair_audits_both_truncated_orders_before_onnx(self):
+    def pair_backend(self):
         try:
             importlib.import_module("numpy")
         except ModuleNotFoundError:
             self.skipTest("NumPy is required for the pair encoder test")
         local_dependencies = {"onnxruntime": SimpleNamespace(), "tokenizers": SimpleNamespace(Tokenizer=object)}
         with patch.dict(sys.modules, local_dependencies):
-            pair_model = importlib.import_module("autopaperreview.proposal.pair_model")
+            return importlib.import_module("autopaperreview.proposal.pair_model")
+
+    def test_pair_audits_both_truncated_orders_before_onnx(self):
+        pair_model = self.pair_backend()
         model = object.__new__(pair_model.PairEvaluator)
         tokens = {"[CLS]": 101, "[SEP]": 102, "violet": 12, "basket": 13,
                   "copper": 14, "catalogue": 15, "omitted": 16}
@@ -86,8 +91,13 @@ class TestProposalPairCompare(unittest.TestCase):
 
         left = [" ".join(["violet"] * 58), " ".join(["omitted"] * 23), " ".join(["basket"] * 38)]
         right = [" ".join(["copper"] * 58), " ".join(["omitted"] * 31), " ".join(["catalogue"] * 38)]
-        model.tokenizer = SimpleNamespace(encode=encode, decode=decode)
+        model.tokenizer = SimpleNamespace(encode=encode, decode=decode,
+                                          id_to_token=words.get, token_to_id=tokens.get)
         model.projection = pair_model.np.identity(2)
+        model.scale = pair_model.np.ones(4)
+        model.coefficient = pair_model.np.zeros(4)
+        model.replicates = None
+        model.model_id = "synthetic-model"
         events = []
 
         def judge(packet, verdict="clean"):
@@ -95,7 +105,7 @@ class TestProposalPairCompare(unittest.TestCase):
             return {"verdict": verdict}
 
         def infer(_, tensors):
-            events.append(("onnx", tensors["input_ids"].tolist()))
+            events.append(("onnx", {name: array.tolist() for name, array in tensors.items()}))
             return [pair_model.np.zeros((2, 195, 2))]
 
         model.net = SimpleNamespace(run=infer)
@@ -103,12 +113,57 @@ class TestProposalPairCompare(unittest.TestCase):
             model.encode_pair(left, right, leak_judge=lambda packet: judge(packet, "leak"))
         self.assertEqual([name for name, _ in events], ["judge"])
         events.clear()
-        _, count = model.encode_pair(left, right, leak_judge=judge)
-        self.assertEqual(count, 96)
+        with patch.object(pair_model, "material", side_effect=[left, right]):
+            compared = model.compare({"id": "one"}, {"id": "two"}, leak_judge=judge)
+        self.assertEqual(compared["wordpieces_per_side"], 96)
         self.assertEqual([name for name, _ in events], ["judge", "onnx"])
-        checked, encoded = events[0][1], events[1][1]
-        self.assertEqual(checked, {
-            name: decode(ids, skip_special_tokens=False)
-            for name, ids in zip(("left_first", "right_first"), encoded)
-        })
+        checked, tensors = events[0][1], events[1][1]
+        encoded = tensors["input_ids"]
+        for side, ids in zip(("left", "right"), encoded):
+            self.assertEqual(checked[f"{side}_first"], decode(ids, skip_special_tokens=False))
+            self.assertEqual(checked[f"{side}_wordpieces"], " ".join(words[token] for token in ids))
+        self.assertEqual(set(checked["tensor_sha256"]), {"input_ids", "attention_mask", "token_type_ids"})
+        self.assertEqual(compared["tensor_sha256"], checked["tensor_sha256"])
+        for name, array in tensors.items():
+            encoded_array = json.dumps(array, separators=(",", ":")).encode("ascii")
+            self.assertEqual(checked["tensor_sha256"][name], "sha256:" + hashlib.sha256(encoded_array).hexdigest())
         self.assertNotIn(tokens["omitted"], encoded[0] + encoded[1])
+
+    def test_pair_audit_distinguishes_tokens_with_the_same_decoded_text(self):
+        pair_model = self.pair_backend()
+        model = object.__new__(pair_model.PairEvaluator)
+        tokens = {"[CLS]": 101, "[SEP]": 102, "copper": 12, "amber": 13, "basket": 14}
+        words = {token: word for word, token in tokens.items()}
+        model.tokenizer = SimpleNamespace(
+            encode=lambda text, **_: SimpleNamespace(ids=[tokens[text]]),
+            decode=lambda ids, **_: " ".join(words[token].replace("amber", "copper") for token in ids),
+            id_to_token=words.get,
+            token_to_id=tokens.get,
+        )
+        model.projection = pair_model.np.identity(2)
+        events = []
+
+        def judge(packet):
+            events.append(("judge", require_model_input(packet)))
+            return {"verdict": "clean"}
+
+        def infer(_, tensors):
+            events.append(("onnx", tensors["input_ids"].tolist()))
+            return [pair_model.np.zeros((2, 5, 2))]
+
+        model.net = SimpleNamespace(run=infer)
+        model.encode_pair(["copper"], ["basket"], leak_judge=judge)
+        model.encode_pair(["amber"], ["basket"], leak_judge=judge)
+        self.assertEqual([event for event, _ in events], ["judge", "onnx", "judge", "onnx"])
+        first, second = events[0][1], events[2][1]
+        for side in ("left", "right"):
+            self.assertEqual(first[f"{side}_first"], second[f"{side}_first"])
+            self.assertNotEqual(first[f"{side}_wordpieces"], second[f"{side}_wordpieces"])
+        self.assertNotEqual(first["tensor_sha256"]["input_ids"], second["tensor_sha256"]["input_ids"])
+        self.assertNotEqual(events[1][1], events[3][1])
+
+        events.clear()
+        words[tokens["amber"]] = "copper"
+        with self.assertRaisesRegex(ValueError, "cannot identify an encoder token"):
+            model.encode_pair(["amber"], ["basket"], leak_judge=judge)
+        self.assertEqual(events, [])

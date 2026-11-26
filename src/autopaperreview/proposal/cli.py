@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 
 from ..command_transport import command_argv
-from ..hashing import sha256_file
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import evaluation
 from .data import apd_cases, prepare, read, reported_result, require_distinct_output, snapshot_cases, write
+from .file_io import input_sha256, local_output, open_input, protect_cli_output, protected_output, read_text, remember_input
 from .fetch import SNAPSHOTS, download, live_cases
 from .runner import run_batch, stage_result
 from .leak_audit import model_leak_judge
@@ -131,7 +131,7 @@ def intake(args, root):
             root,
             seed="apd",
             limit=None,
-            source={"type": "apd", "sha256": sha256_file(args.document)},
+            source={"type": "apd", "sha256": input_sha256(args.document)},
         )
     if args.source == "api":
         check(
@@ -158,7 +158,7 @@ def intake(args, root):
                 "bundled snapshot URLs are for ICLR 2024; supply files for other years",
             )
             papers, forums = download(root / "downloads")
-        hashes = [sha256_file(p) for p in (papers, forums)]
+        hashes = [input_sha256(p) for p in (papers, forums)]
         names = [
             url if h == known else path.name
             for (url, known), h, path in zip(SNAPSHOTS, hashes, (papers, forums))
@@ -193,9 +193,10 @@ def with_calibration(result, record, path):
     return result
 
 
+@protect_cli_output
 def dispatch(args):
     root = assert_local_only(args.work)
-    output = assert_local_only(args.output) if getattr(args, "output", None) else None
+    output = local_output(args.output) if getattr(args, "output", None) else None
     if output is not None:
         inputs = tuple(
             path for name in ("proposal", "calibration", "document", "papers", "forums", "holdout_after")
@@ -242,15 +243,17 @@ def dispatch(args):
         write(root / name, evaluation.fit(root, args.reviewer))
         result = {"calibration": str(root / name)}
     elif args.action == "report":
-        calibration = read(args.calibration or root / "calibration.json")
-        metrics, rows = evaluation.evaluate(root, calibration)
-        prefix = (
-            "forecast-"
-            if calibration["config"]["review"]["stage"] == "forecast"
-            else ""
-        )
-        write(root / (prefix + "holdout.json"), rows)
-        write(root / (prefix + "metrics.json"), metrics)
+        calibration_path = args.calibration or root / "calibration.json"
+        with open_input(calibration_path) as handle:
+            calibration = json.load(handle)
+            prefix = "forecast-" if calibration["config"]["review"]["stage"] == "forecast" else ""
+            rows_path = root / (prefix + "holdout.json")
+            metrics_path = root / (prefix + "metrics.json")
+            with protected_output(rows_path), protected_output(metrics_path):
+                remember_input(calibration_path, handle)
+                metrics, rows = evaluation.evaluate(root, calibration)
+                write(rows_path, rows)
+                write(metrics_path, metrics)
         result = metrics
     elif args.action == "export":
         result = []
@@ -276,7 +279,7 @@ def dispatch(args):
             packet = sanitize_proposal(doc)
             check(set(packet) == set(SECTIONS), "expected five proposal sections")
         else:
-            packet = sanitize_proposal(args.proposal.read_text(encoding="utf-8").strip())
+            packet = sanitize_proposal(read_text(args.proposal).strip())
         check(any(packet.values()), "empty proposal")
         check(
             not any(reported_result(v) for v in packet.values() if v),

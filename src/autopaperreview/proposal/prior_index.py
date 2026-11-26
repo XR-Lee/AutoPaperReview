@@ -28,25 +28,40 @@ def norm_title(text: str) -> str:
 _SPLIT_FIELDS = ("split", "partition", "cohort")
 _DEVELOPMENT_SPLITS = {"dev", "development"}
 _ARXIV_FIELDS = ("arxiv", "arxiv_id")
-REVISION_FIELDS = ("revision", "revision_ms")
-_OPINION_TIME_FIELDS = (
-    "opinion_ms", "review_ms", "timestamp_ms", "created_ms", "modified_ms",
-    "revision_ms", "cdate", "mdate", "tcdate", "tmdate", "mtime",
+_REVISION_FIELDS = ("revision", "revision_ms")
+_GRADE_TIME_FIELDS = ("target_ms", "grade_ms", "opinion_ms")
+_HISTORY_TIME_FIELDS = (
+    *_REVISION_FIELDS, *_GRADE_TIME_FIELDS, "review_ms", "timestamp_ms", "created_ms", "modified_ms",
+    "cdate", "mdate", "tcdate", "tmdate", "mtime", "snapshot_ms", "available_ms", "submission_ms",
 )
+_ARXIV_HOST = re.compile(
+    r"^(?:(?:https?|ftp):)?(?://)?(?:[a-z0-9-]+\.)*arxiv\.org\.?(?::\d+)?/"
+)
+_ARXIV_DOI = re.compile(r"^(?:(?:(?:https?:)?//)?(?:dx\.)?doi\.org/|doi:\s*)?10\.48550/arxiv\.")
+_ARXIV_DIRECTORIES = {"abs", "arxiv", "e-print", "format", "ftp", "html", "papers", "pdf", "ps", "pub", "src"}
+_ARXIV_ARCHIVE = re.compile(r"[a-z][a-z0-9.-]*")
 
 
 def norm_arxiv(value: str) -> str:
-    text = unquote(value or "").strip().casefold()
-    text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    """Resolve an arXiv identifier from a bare ID, DOI, URL, or archive path."""
+    if not isinstance(value, str):
+        return ""
+    text = unquote(value).strip(" <>\t\r\n").casefold()
+    text = re.split(r"[?#]", text, maxsplit=1)[0].strip()
     text = re.sub(r"^arxiv:\s*", "", text)
-    text = re.sub(
-        r"^(?:(?:https?:)?//)?(?:[a-z0-9-]+\.)*arxiv\.org\.?(?::\d+)?/"
-        r"(?:abs|pdf|html|ps|format)/",
-        "",
-        text,
-    )
-    text = re.sub(r"\.pdf$", "", text.rstrip("/"))
-    return re.sub(r"v\d+$", "", text)
+    text = _ARXIV_DOI.sub("", _ARXIV_HOST.sub("", text))
+    if ":" in text or "//" in text:
+        return ""
+    *directories, stem = text.strip("/").split("/")
+    archives = [part for part in directories if part not in _ARXIV_DIRECTORIES and not re.fullmatch(r"[0-9]{4}", part)]
+    if len(archives) > 1 or any(not _ARXIV_ARCHIVE.fullmatch(part) for part in archives):
+        return ""
+    stem = re.sub(r"v[0-9]+$", "", re.sub(r"(?:\.(?:pdf|ps|gz|html|tar|zip))+$", "", stem))
+    if re.fullmatch(r"[0-9]{4}\.[0-9]{4,5}", stem):
+        return stem
+    if archives and re.fullmatch(r"[0-9]{7}", stem):
+        return f"{archives[0]}/{stem}"
+    return ""
 
 
 def _positive_stamp(value: object) -> int | None:
@@ -79,15 +94,17 @@ def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
     return year, cutoff
 
 
-def earlier_record(year, revision, bounds) -> bool:
-    year_limit, cutoff = bounds
-    year = _positive_stamp(year)
-    revision = _positive_stamp(revision)
-    return year is not None and year < year_limit and revision is not None and revision < cutoff
-
-
-def arxiv_identifiers(row) -> set[str]:
-    return {identifier for field in _ARXIV_FIELDS if (identifier := norm_arxiv(str(row.get(field) or "")))}
+def _arxiv_identifiers(row) -> set[str] | None:
+    identifiers = set()
+    for field in _ARXIV_FIELDS:
+        value = row.get(field)
+        if value is None or isinstance(value, str) and not value.strip():
+            continue
+        identifier = norm_arxiv(value)
+        if not identifier:
+            return None
+        identifiers.add(identifier)
+    return identifiers
 
 
 def latest_stamp(values) -> int | None:
@@ -97,13 +114,39 @@ def latest_stamp(values) -> int | None:
     return max(stamps)
 
 
-def available_before(timestamp, cutoff_ms) -> bool:
-    stamp = _positive_stamp(timestamp)
+def eligible_history(row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="", exclude_title=""):
+    """Check development provenance, all known availability clocks and self-matches."""
+    if not isinstance(row, dict) or not development_row(row):
+        return False
+    year = _positive_stamp(row.get("year"))
+    revision = latest_stamp(row.get(field) for field in _REVISION_FIELDS)
+    available = latest_stamp(row.get(field) for field in _HISTORY_TIME_FIELDS)
+    if year is None or revision is None or available is None:
+        return False
+    if bounds is not None and (year >= bounds[0] or available >= bounds[1]):
+        return False
+    identifiers = _arxiv_identifiers(row)
+    if identifiers is None or len(identifiers) > 1:
+        return False
+    if exclude_key and str(row.get("key") or "") == str(exclude_key):
+        return False
+    if exclude_forum and str(row.get("forum") or "") == str(exclude_forum):
+        return False
+    wanted_title = norm_title(exclude_title)
+    if wanted_title and norm_title(str(row.get("title") or "")) == wanted_title:
+        return False
+    arxiv = norm_arxiv(exclude_arxiv)
+    if arxiv:
+        searchable = " ".join(str(row.get(field) or "") for field in ("title", "abstract", "forum"))
+        if arxiv in identifiers or arxiv in unquote(searchable).casefold():
+            return False
+    return True
+
+
+def historical_opinions(items, cutoff_ms, *, snapshot_ms=None, target_year=None):
     cutoff = _positive_stamp(cutoff_ms)
-    return stamp is not None and cutoff is not None and stamp < cutoff
-
-
-def historical_opinions(items, cutoff_ms, *, snapshot_ms=None):
+    if cutoff is None:
+        return []
     if isinstance(items, (str, dict)):
         items = [items]
     if not isinstance(items, list):
@@ -113,13 +156,37 @@ def historical_opinions(items, cutoff_ms, *, snapshot_ms=None):
         if isinstance(item, str):
             text, available = item, _positive_stamp(snapshot_ms)
         elif isinstance(item, dict):
+            year = _positive_stamp(item.get("year"))
+            if item.get("year") is not None and (year is None or target_year is not None and year >= target_year):
+                continue
+            if any(item.get(field) is not None for field in _SPLIT_FIELDS) and not development_row(item):
+                continue
             text = item.get("opinion", item.get("text"))
-            available = latest_stamp(item.get(field) for field in _OPINION_TIME_FIELDS)
+            available = latest_stamp(item.get(field) for field in _HISTORY_TIME_FIELDS)
         else:
             continue
-        if isinstance(text, str) and text.strip() and available_before(available, cutoff_ms):
+        if isinstance(text, str) and text.strip() and available is not None and available < cutoff:
             kept.append(text)
     return kept
+
+
+def calibration_rows(bank, bounds, *, excerpt_field, **exclusions):
+    """Yield distinct examples with a dated grade and only eligible opinion text."""
+    keys = set()
+    for row in bank:
+        if not eligible_history(row, bounds, **exclusions) or "key" not in row or "target" not in row:
+            continue
+        key = row["key"]
+        if type(key) not in (int, str) or key in keys:
+            continue
+        opinions = row.get(excerpt_field)
+        dated = historical_opinions(opinions, bounds[1], snapshot_ms=row.get("opinion_ms"), target_year=bounds[0])
+        grade = latest_stamp(row.get(field) for field in _GRADE_TIME_FIELDS)
+        if grade is None and (not dated or len(dated) != (len(opinions) if isinstance(opinions, list) else 1)):
+            # Undated aggregates may only rely on excerpts with independent dates.
+            continue
+        keys.add(key)
+        yield row, dated
 
 
 def _connect(db, *, readonly=False):
@@ -135,7 +202,7 @@ def build(corpus: Path, db: Path):
         conn.execute(
             "CREATE VIRTUAL TABLE papers USING fts5("
             "title, abstract, year UNINDEXED, revision UNINDEXED, forum UNINDEXED, "
-            "arxiv UNINDEXED, split UNINDEXED)"
+            "arxiv UNINDEXED, split UNINDEXED, available_ms UNINDEXED)"
         )
         for line in source:
             p = json.loads(line)
@@ -145,14 +212,16 @@ def build(corpus: Path, db: Path):
                 re.IGNORECASE,
             ):
                 continue
-            year = _positive_stamp(p.get("year"))
-            revision = latest_stamp(p.get(field) for field in REVISION_FIELDS)
-            arxiv = arxiv_identifiers(p)
-            if not development_row(p) or year is None or revision is None or len(arxiv) > 1:
+            if not eligible_history(p):
                 continue
             conn.execute(
-                "INSERT INTO papers VALUES (?,?,?,?,?,?,?)",
-                (p["title"], p["abstract"], year, revision, p.get("forum"), next(iter(arxiv), ""), "dev"),
+                "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    p["title"], p["abstract"], _positive_stamp(p["year"]),
+                    latest_stamp(p.get(field) for field in _REVISION_FIELDS), p.get("forum"),
+                    next(iter(_arxiv_identifiers(p)), ""), "dev",
+                    latest_stamp(p.get(field) for field in _HISTORY_TIME_FIELDS),
+                ),
             )
         conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
         conn.commit()
@@ -186,37 +255,28 @@ def retrieve(
     counts = Counter(words(content))
     seen = set(words(exclude_title))
     ab = set(words(exclude_abstract))
-    target_title = norm_title(exclude_title)
-    target_arxiv = norm_arxiv(exclude_arxiv)
     if limit <= 0 or not counts:
         return []
     with closing(_connect(db, readonly=True)) as conn:
         columns = set(_columns(conn))
         split_fields = tuple(k for k in _SPLIT_FIELDS if k in columns)
-        revision_fields = tuple(k for k in REVISION_FIELDS if k in columns)
+        revision_fields = tuple(k for k in _REVISION_FIELDS if k in columns)
         required = ("title", "abstract", "year", "forum")
         if not split_fields or not revision_fields or not set(required).issubset(columns):
             return []
         arxiv_fields = tuple(k for k in _ARXIV_FIELDS if k in columns)
-        aliases = (*revision_fields, *split_fields, *arxiv_fields)
+        timeline_fields = tuple(k for k in _HISTORY_TIME_FIELDS if k in columns)
+        aliases = (*timeline_fields, *split_fields, *arxiv_fields)
         eligibility_args = ", ".join((*required, *aliases))
         revisions = ", ".join(revision_fields)
 
         def eligible(title, abstract, year, forum, *values):
             row = dict(zip(aliases, values, strict=True))
-            rev = latest_stamp(row.get(field) for field in revision_fields)
-            identifiers = arxiv_identifiers(row)
-            if not development_row(row) or not earlier_record(year, rev, bounds) or len(identifiers) > 1:
-                return False
             if not isinstance(title, str) or not isinstance(abstract, str):
                 return False
-            if exclude_forum and str(forum) == str(exclude_forum):
-                return False
-            if target_title and norm_title(title) == target_title:
-                return False
-            if target_arxiv and (
-                target_arxiv in identifiers
-                or target_arxiv in unquote(f"{title} {abstract} {forum}").casefold()
+            row.update(title=title, abstract=abstract, year=year, forum=forum)
+            if not eligible_history(
+                row, bounds, exclude_forum=exclude_forum, exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
             ):
                 return False
             t = set(words(title))

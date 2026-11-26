@@ -7,7 +7,7 @@ export APR_PROPOSAL_REPRO_DIR=/path/outside/git
 python3 scripts/reproduce_proposal_rank.py
 ```
 
-`APR_PROPOSAL_REPRO_DIR` can point to the original or HMAC bundle. The script requires all eight files to match a single committed SHA-256 manifest before it recomputes. `external-sha256.json` covers the original delivered bytes. `external-hmac-sha256.json` covers the corresponding HMAC bundle. The scorer reads numeric fields and row keys. `replications199` uses `joined.json` directly.
+`APR_PROPOSAL_REPRO_DIR` can point to the original or HMAC bundle. The script reads each of the eight files once, matches the bytes against a single committed SHA-256 manifest, and computes from those bytes. `external-sha256.json` covers the original delivered bytes. `external-hmac-sha256.json` covers the corresponding HMAC bundle. The scorer reads numeric fields and row keys. `replications199` uses `joined.json` directly. Give `--output` a separate file under a directory path without symbolic links. Output is published by an atomic rename relative to the parent directory opened before computation.
 
 To rekey the eight reproduction files, supply `APR_PROPOSAL_REPRO_SALT` through the environment and use a separate output directory. The rekeyer recalculates the cohort locks' test-ID digests after transforming the identifiers. For recursive conversion, it supports known ID fields in JSON and JSONL and recognized ID columns in CSV and TSV. Keep both bundles outside git because the files can contain review quotes and other per-paper data.
 

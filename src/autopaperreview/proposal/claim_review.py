@@ -15,6 +15,7 @@ from .claim_prompts import FORECAST, GROUND, PROSPECTIVE
 from .clarification import plan_units
 from .clarification_protocol import outside_scope
 from .data import digest, read, require_distinct_output, write
+from .file_io import local_output, protect_cli_output
 from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
 from .material import ORDER, material
 from .outcome_screen import units
@@ -252,11 +253,12 @@ def evaluate(rows, profile, cache, offline, *, leak_judge=None):
     return output
 
 
+@protect_cli_output
 def dispatch(args):
     source = assert_local_only(args.input)
     profile = assert_local_only(args.model)
     cache = assert_local_only(args.work)
-    target = assert_local_only(args.output) if args.output else None
+    target = local_output(args.output) if args.output else None
     if target is not None and target.is_relative_to(cache):
         raise ValueError("choose an output separate from inputs, fitted parameters and model receipts")
     if target is not None:

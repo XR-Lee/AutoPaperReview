@@ -14,23 +14,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from autopaperreview.pipeline import _atomic_write  # noqa: E402
-from autopaperreview.proposal.data import read, require_distinct_output  # noqa: E402
+from autopaperreview.proposal.data import read  # noqa: E402
+from autopaperreview.proposal.file_io import protected_output, write_text  # noqa: E402
 from autopaperreview.proposal.fixed_benchmark import evaluate_fixed  # noqa: E402
 from autopaperreview.proposal.repro_metrics import (  # noqa: E402
     EXTERNAL_DIR_ENV,
     PUBLISHED,
     committed_aggregates,
+    external_root,
     headlines_match,
-    published_external_files,
-    repo_repro_dir,
     reproduce_headlines,
 )
 
@@ -57,15 +55,21 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        with protected_output(args.output):
+            return _run(args, supplied)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"could not write reproduction result: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(args, supplied) -> int:
     if all(path is not None for path in supplied):
-        inputs = supplied
         missing = [str(path) for path in supplied if not path.is_file()]
         if missing:
             print("missing cohort artifact: " + ", ".join(missing), file=sys.stderr)
             return 2
         try:
-            if args.output is not None:
-                require_distinct_output(args.output, *inputs)
             if args.bootstrap < 0 or args.stratified_draws < 0:
                 raise ValueError("resampling draws must be non-negative")
             result = evaluate_fixed(
@@ -79,54 +83,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"invalid cohort artifact: {exc}", file=sys.stderr)
             return 2
     else:
-        external = args.root
-        if external is None and os.environ.get(EXTERNAL_DIR_ENV):
-            external = Path(os.environ[EXTERNAL_DIR_ENV])
+        external = args.root if args.root is not None else external_root()
         try:
-            folder = repo_repro_dir()
-            inputs = (folder / "aggregates.json",)
-            if external is not None:
-                inputs += (
-                    folder / "external-sha256.json",
-                    folder / "external-hmac-sha256.json",
-                    *(external / name for name in published_external_files()),
-                )
-            if args.output is not None:
-                require_distinct_output(args.output, *inputs)
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"invalid reproduction output or manifest: {exc}", file=sys.stderr)
+            expected = committed_aggregates()
+            result = expected if external is None else reproduce_headlines(external)
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            print(
+                "Per-paper rows are not in the repository. "
+                f"Set {EXTERNAL_DIR_ENV} to a directory outside git. "
+                f"The headline numbers are {PUBLISHED}.",
+                file=sys.stderr,
+            )
             return 2
-        if external is None:
-            result = committed_aggregates()
-        else:
-            try:
-                result = reproduce_headlines(external)
-            except (FileNotFoundError, RuntimeError) as exc:
-                print(str(exc), file=sys.stderr)
-                print(
-                    "Per-paper rows are not in the repository. "
-                    f"Set {EXTERNAL_DIR_ENV} to a directory outside git. "
-                    f"The headline numbers are {PUBLISHED}.",
-                    file=sys.stderr,
-                )
-                return 2
-            if not headlines_match(result):
-                print(
-                    "recomputed headlines differ from the committed aggregates",
-                    file=sys.stderr,
-                )
-                text = json.dumps(result, indent=2, sort_keys=True) + "\n"
-                sys.stdout.write(text)
-                return 1
+        if external is not None and not headlines_match(result, expected):
+            print("recomputed headlines differ from the committed aggregates", file=sys.stderr)
+            sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+            return 1
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
-        try:
-            require_distinct_output(args.output, *inputs)
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_write(args.output, text)
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"could not write reproduction result: {exc}", file=sys.stderr)
-            return 2
+        write_text(args.output, text)
     sys.stdout.write(text)
     return 0
 

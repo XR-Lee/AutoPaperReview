@@ -20,6 +20,7 @@ from .data import (
     scale_for_reference,
     write,
 )
+from .file_io import local_output, map_with_input_tracking, protect_cli_output
 from .leak_audit import (
     REFERENCE_PROMPT,
     REPLY_PROTOCOL,
@@ -235,11 +236,12 @@ def register(sub):
     p.set_defaults(func=dispatch)
 
 
+@protect_cli_output
 def dispatch(args):
     if args.jobs < 1 or args.timeout <= 0:
         raise ValueError("jobs and timeout must be positive")
     root = assert_local_only(args.work)
-    output = assert_local_only(args.output)
+    output = local_output(args.output)
     require_distinct_output(output, args.inputs)
     rows = read(args.inputs)
     validate_cases(rows)
@@ -266,6 +268,6 @@ def dispatch(args):
             config_path = root / "reference-protocols" / (digest(independent_config) + ".json")
             write(config_path, independent_config)
         with ThreadPoolExecutor(max_workers=args.jobs) as workers:
-            references = list(workers.map(code, rows))
+            references = map_with_input_tracking(workers, code, rows)
         write(output, references)
     return 0
