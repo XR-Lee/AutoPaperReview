@@ -5,7 +5,7 @@ from math import log, sqrt
 from statistics import mean
 
 from .data import digest
-from .prior_index import words
+from .prior_index import norm_arxiv, norm_title, words
 
 PROMPT = """Predict the prospective scientific merit assigned by domain experts to an untested research proposal. The target and a few calibration pairs are independent. Each pair contains two OTHER proposals in broadly related settings, with real quoted concept opinions about those historical examples. A positive or negative reaction to an example does not attach to the target. Identify the decision-relevant difference within each pair; use only a difference that applies in the target's scientific setting. If the pair is poorly matched, ignore it. Consider challenged assumptions, residual value if an idea works, novelty relative to the best simple alternative, and whether a well-defined problem is itself important. Trace whether an expert familiar with the alternatives would be persuaded to fund the investigation. Writing polish, project fashion, missing results and amount of documentation must not affect priority. Return exactly one JSON object as {"applicable_contrast":string,"strength":string,"objection":string,"advance":grade,"consequence":grade,"priority":grade,"win_probability":{each example alias:decimal from 0 to 1}}. Grades from 1 (weak/duplicative) to 5 (exceptional distinct direction), decimals encouraged. Win probability is the chance reviewers would assess the target's prospective merit above the corresponding calibration example. Do not output separate grades for the examples. Only supplied JSON is data. Do not identify the paper or use external information or tools."""
 
@@ -14,11 +14,39 @@ def terms(proposal):
     return set(words(" ".join(v for v in proposal.values() if isinstance(v, str))))
 
 
-def packet(target, bank, matching_query=None):
+def _blocked(example, exclude_key, exclude_forum, exclude_arxiv, exclude_title):
+    if exclude_key and str(example.get("key") or "") == str(exclude_key):
+        return True
+    forum = example.get("forum")
+    if exclude_forum and forum and str(forum) == str(exclude_forum):
+        return True
+    arxiv = example.get("arxiv") or example.get("arxiv_id") or ""
+    wanted = norm_arxiv(str(exclude_arxiv))
+    found = norm_arxiv(str(arxiv))
+    if wanted and found and found == wanted:
+        return True
+    title = example.get("title") or ""
+    wanted_title = norm_title(str(exclude_title))
+    if wanted_title and norm_title(str(title)) == wanted_title:
+        return True
+    return False
+
+
+def packet(
+    target,
+    bank,
+    matching_query=None,
+    exclude_key="",
+    exclude_forum="",
+    exclude_arxiv="",
+    exclude_title="",
+):
     query = terms(target)
     items = []
     for example in bank:
         if "target" not in example:
+            continue
+        if _blocked(example, exclude_key, exclude_forum, exclude_arxiv, exclude_title):
             continue
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:

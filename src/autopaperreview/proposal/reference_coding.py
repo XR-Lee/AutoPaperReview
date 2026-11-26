@@ -9,7 +9,14 @@ from statistics import mean
 
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
-from .data import digest, read, require_official_mean, scale_for_reference, write
+from .data import (
+    digest,
+    neutralize_label_text,
+    read,
+    require_official_mean,
+    scale_for_reference,
+    write,
+)
 from .merit import reference_packet
 from .stages import PROMPTS, claude_argv, invoke
 
@@ -52,8 +59,9 @@ def validate_cases(rows):
             ):
                 raise ValueError("expected numbered review units containing text")
         rating = row.get("final_rating")
+        scale = scale_for_reference(row)
         if rating is not None:
-            require_official_mean(rating, scale_for_reference(row))
+            require_official_mean(rating, scale)
         if "accept" in row and (
             type(row["accept"]) not in (int, bool) or row["accept"] not in (0, 1)
         ):
@@ -76,11 +84,24 @@ def reviewer_result(note, units, extracted, grade):
     return {"id": note["id"], "score": grade["score"], "evidence": spans}
 
 
+def coding_units(units):
+    """Remove acceptance and overall-rating sentences before a coder sees them."""
+    cleaned = {}
+    for key, text in units.items():
+        kept = neutralize_label_text(text)
+        if kept:
+            cleaned[key] = kept
+    return cleaned
+
+
 def code_paper(
     row, cache, command, *, timeout=240, cached_only=False,
     include_independent_grades=False,
 ):
-    comments = {f"r{i}": note["units"] for i, note in enumerate(row["reviews"], 1)}
+    comments = {
+        f"r{i}": coding_units(note["units"])
+        for i, note in enumerate(row["reviews"], 1)
+    }
     requests = {}
     extracted = {}
     grades = {}
@@ -93,8 +114,9 @@ def code_paper(
         return read(p)["output"]
 
     source = {}
-    if any(comments.values()):
-        extracted = stage("ref_extract", comments, requests, "ref_extract")
+    payload = {key: units for key, units in comments.items() if units}
+    if payload:
+        extracted = stage("ref_extract", payload, requests, "ref_extract")
         source = reference_packet(comments, extracted)
         if any(source.values()):
             grades = stage("ref_grade", source, requests, "ref_grade")
@@ -125,7 +147,11 @@ def code_paper(
         "input_sha256": digest(comments),
         "reference_protocol": digest(protocol(command)),
         "requests": requests,
-        **{k: row[k] for k in ("final_rating", "accept") if k in row},
+        **{
+            k: row[k]
+            for k in ("final_rating", "accept", "year", "rating_scale")
+            if k in row
+        },
     }
     if include_independent_grades:
         scores = [r["score"] for r in independent if r["score"] is not None]

@@ -7,7 +7,7 @@ from statistics import mean
 
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import apd_cases, digest, read, write
+from .data import apd_cases, assert_no_label_leak, digest, read, write
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
@@ -107,6 +107,7 @@ def text_packet(doc):
     }
     if not all(v is None or isinstance(v, str) for v in result.values()):
         raise ValueError("invalid proposal section")
+    assert_no_label_leak(result, where="proposal")
     return result
 
 
@@ -120,6 +121,10 @@ def rank(
     title="",
     abstract="",
     exclude_key="",
+    forum="",
+    arxiv="",
+    year=None,
+    cutoff_ms=None,
     timeout=240,
     call=invoke,
     screen_receipt=None,
@@ -128,6 +133,11 @@ def rank(
         raise ValueError("empty proposal")
     from .data import reported_result
 
+    # Main, fallback, and legacy packets can each be the text a stage sends.
+    # A screen receipt does not clear a rating, decision, award, or identity.
+    assert_no_label_leak(packet, where="proposal")
+    if legacy is not None:
+        assert_no_label_leak(legacy, where="fallback proposal")
     if any(reported_result(v) for v in packet.values() if v) and (
         not screen_receipt or screen_receipt.get("cleared_packet") != digest(packet)
     ):
@@ -178,10 +188,17 @@ def rank(
             continue
         if stage == "contrast":
             source, anchors = contrast.packet(
-                packet, read(folder / "contrast-bank.json"), query_packet
+                packet,
+                read(folder / "contrast-bank.json"),
+                query_packet,
+                exclude_key=exclude_key,
+                exclude_forum=forum,
+                exclude_arxiv=arxiv,
+                exclude_title=title,
             )
         elif stage == "forecast":
             source = legacy or packet
+            assert_no_label_leak(source, where="forecast proposal")
         elif stage == "merit":
             source = packet
         elif stage == "learned":
@@ -194,7 +211,14 @@ def rank(
         else:
             if not sources:
                 sources = retrieve(
-                    folder / "prior.sqlite", query_packet, title, abstract
+                    folder / "prior.sqlite",
+                    query_packet,
+                    title,
+                    abstract,
+                    exclude_forum=forum,
+                    exclude_arxiv=arxiv,
+                    target_year=year,
+                    cutoff_ms=cutoff_ms,
                 )
             source = {
                 "proposal": packet,
@@ -273,6 +297,7 @@ def load_profile(path):
 
 
 def screen_packet(packet, root, *, cached_only=False, provider=None):
+    assert_no_label_leak(packet, where="proposal")
     source = outcome_screen.units(packet)
     if not source:
         return outcome_screen.filter_units(packet, source, {"exclude": []})

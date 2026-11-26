@@ -1,4 +1,4 @@
-"""Verify a sealed 100-paper test and evaluate exactly one prediction per forum."""
+"""Score a locked proposal cohort and, for prediction, the sealed 100-paper test."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..public_calibration import assert_local_only
 from .data import digest, read, require_official_mean, scale_for_reference, write
-from .overall_rank import evaluate
+from .overall_rank import STRATIFIED_DRAWS, STRATIFIED_SEED, evaluate, stratified_ci, top_fraction
 from .priority import add_screen_provider, load_profile, rank, screen_rank_inputs, text_packet
 from .stages import invoke
 
@@ -23,16 +23,35 @@ def index(rows, field):
     return lookup
 
 
-def sealed_cases(manifest):
+def cohort_cases(manifest):
+    """Any locked test list. The digest is the sorted forum ids, not a fixed n."""
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("cases"), list):
+        raise ValueError("manifest needs a cases list")
     all_ids = index(manifest["cases"], "forum")
-    test = {fid: c for fid, c in all_ids.items() if c["split"] == "test"}
-    if len(test) != 100 or digest(sorted(test)) != manifest["ids_sha256"]:
+    test = {fid: c for fid, c in all_ids.items() if c.get("split", "test") == "test"}
+    if not test:
+        raise ValueError("manifest has no test cases")
+    expected = manifest.get("ids_sha256")
+    if not isinstance(expected, str) or digest(sorted(test)) != expected:
+        raise ValueError("forum IDs do not match the manifest digest")
+    return test
+
+
+def sealed_cases(manifest):
+    test = cohort_cases(manifest)
+    if len(test) != 100:
         raise ValueError("fixed test must match the sealed 100 forum IDs")
     return test
 
 
-def evaluate_fixed(manifest, predictions, references, bootstrap=2000):
-    test = set(sealed_cases(manifest))
+def evaluate_fixed(
+    manifest,
+    predictions,
+    references,
+    bootstrap=2000,
+    stratified_draws=STRATIFIED_DRAWS,
+):
+    test = set(cohort_cases(manifest))
     pred = index(predictions, "forum")
     gold = index(references, "forum")
     if set(pred) != test or set(gold) != test:
@@ -45,26 +64,38 @@ def evaluate_fixed(manifest, predictions, references, bootstrap=2000):
         score = pred[fid]["overall"]
         target = g["prospective"]
         rating = g["final_rating"]
-        accept = g["accept"]
-        if type(score) not in (float, int) or not math.isfinite(score):
+        accept = g.get("accept", None)
+        if type(score) not in (float, int) or not math.isfinite(float(score)):
             raise ValueError("missing or nonfinite prediction")
-        if (
-            type(target) not in (float, int)
-            or not 1 <= target <= 5
-            or accept not in (0, 1)
-        ):
+        if type(target) not in (float, int) or not 1 <= target <= 5:
+            raise ValueError("incomplete reference")
+        if accept is not None and accept not in (0, 1):
             raise ValueError("incomplete reference")
         require_official_mean(rating, scale_for_reference(g))
-        rows.append(
-            {
-                "key": fid,
-                "target": target,
-                "accept": int(accept),
-                "rating": rating,
-                "features": {"score": score},
-            }
+        row = {
+            "key": fid,
+            "target": target,
+            "accept": None if accept is None else int(accept),
+            "rating": rating,
+            "features": {"score": score},
+        }
+        if g.get("stratum") is not None:
+            row["stratum"] = g["stratum"]
+        rows.append(row)
+    spec = {"method": "mean", "names": ["score"]}
+    result = evaluate(rows, spec, bootstrap)
+    if stratified_draws:
+        result["stratified_ci95"] = stratified_ci(
+            rows, spec, draws=stratified_draws, seed=STRATIFIED_SEED
         )
-    result = evaluate(rows, {"method": "mean", "names": ["score"]}, bootstrap)
+        result["stratified_draws"] = stratified_draws
+        result["stratified_seed"] = STRATIFIED_SEED
+    decided = [row for row in rows if row["accept"] in (0, 1)]
+    result["decision_n"] = len(decided)
+    result["top_fraction"] = top_fraction(
+        [row["features"]["score"] for row in rows],
+        [row["rating"] for row in rows],
+    )
     if any("reference_protocol" in g for g in gold.values()):
         recorded = [g.get("reference_protocol") for g in gold.values()]
         known = {p for p in recorded if isinstance(p, str) and p}
@@ -85,7 +116,8 @@ def register(sub):
 
     reference_coding.register(sub)
     p = sub.add_parser(
-        "evaluate-rank", help="verify and score a locked 100-forum proposal benchmark"
+        "evaluate-rank",
+        help="score a locked proposal cohort of any size against its manifest digest",
     )
     for key in ("manifest", "predictions", "references", "output"):
         p.add_argument("--" + key, type=Path, required=True)
@@ -119,25 +151,49 @@ def blind_inputs(manifest, proposals):
             "title",
             "abstract",
             "short_proposal",
+            "year",
+            "arxiv",
+            "arxiv_id",
+            "cutoff_ms",
+            "submission_ms",
         }:
             raise ValueError("expected blind proposal fields only")
         title, abstract = row.get("title", ""), row.get("abstract", "")
         if not isinstance(title, str) or not isinstance(abstract, str):
             raise TypeError("invalid retrieval metadata")
-        inputs.append(
-            (
-                fid,
-                text_packet(row["proposal"]),
-                {
-                    "title": title,
-                    "abstract": abstract,
-                    "exclude_key": cases[fid].get("key", fid),
-                    "legacy": text_packet(row["short_proposal"])
-                    if "short_proposal" in row
-                    else None,
-                },
-            )
-        )
+        case = cases[fid]
+        metadata = {
+            "title": title,
+            "abstract": abstract,
+            "exclude_key": case.get("key", fid),
+            "forum": fid,
+            "legacy": text_packet(row["short_proposal"])
+            if "short_proposal" in row
+            else None,
+        }
+        for source, field, dest in (
+            (row, "year", "year"),
+            (case, "year", "year"),
+            (row, "arxiv", "arxiv"),
+            (row, "arxiv_id", "arxiv"),
+            (case, "arxiv", "arxiv"),
+            (case, "arxiv_id", "arxiv"),
+            (row, "cutoff_ms", "cutoff_ms"),
+            (case, "cutoff_ms", "cutoff_ms"),
+            (row, "submission_ms", "cutoff_ms"),
+            (case, "submission_ms", "cutoff_ms"),
+        ):
+            if dest in metadata or field not in source or source[field] in (None, ""):
+                continue
+            value = source[field]
+            if dest == "year" and type(value) is not int:
+                raise ValueError("year must be an integer venue year")
+            if dest == "cutoff_ms" and type(value) is not int:
+                raise ValueError("cutoff_ms must be an integer millisecond timestamp")
+            if dest == "arxiv" and not isinstance(value, str):
+                raise ValueError("arxiv must be a string")
+            metadata[dest] = value
+        inputs.append((fid, text_packet(row["proposal"]), metadata))
     return inputs
 
 

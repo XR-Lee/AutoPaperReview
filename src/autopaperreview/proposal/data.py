@@ -12,7 +12,12 @@ from typing import Any
 
 from ..iclr_anonymize import anonymize_iclr_submission
 from ..pipeline import _atomic_write
-from ..public_calibration import content_value, latest_official_reviews, parse_rating
+from ..public_calibration import (
+    content_value,
+    is_official_review,
+    latest_official_reviews,
+    parse_rating,
+)
 from ..rating_scales import RatingScale, classic_scale, scale_for_key, scale_for_year
 
 
@@ -60,6 +65,84 @@ def reported_result(text: str) -> bool:
     return bool(OUTCOME.search(text) or REPORTED_FINDING.search(text))
 
 
+# Venue outcome, a numeric rating, an award, or an identity marker. Scientific
+# prose such as "we accept the assumption" does not match.
+LABEL_LEAK = re.compile(
+    r"\boverall\s+ratings?\b"
+    r"|\b(?:final|meta|reviewer|my|our|average)\s+(?:ratings?|scores?|recommendations?)\b"
+    r"|\b(?:ratings?|scores?)\s*[:=]\s*\d"
+    r"|\bdecision\s*[:=]\s*(?:accept|reject)\w*"
+    r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
+    r"|\b(?:strong|weak|clear|marginal)\s+(?:accept|reject)\b"
+    r"|\b(?:best|outstanding)\s+paper\b"
+    r"|\bpaper\s+award\b"
+    r"|\b(?:was|were|been)\s+(?:accept|reject)ed\b"
+    r"|\bacceptance\s+(?:decision|rate|notification)\b"
+    r"|\bcamera[- ]ready\b"
+    r"|\brecommend(?:ation)?\s*[:=]?\s*(?:to\s+)?(?:accept|reject)\b"
+    r"|\bcorresponding\s+authors?\b"
+    r"|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
+    r"|\bgithub\.com/[A-Za-z0-9_.\-]+",
+    re.IGNORECASE,
+)
+_LABEL_SPLIT = re.compile(
+    r"(?<=[.!?。！？])\s+|\n+"
+    r"|(?=\bOverall\s+Ratings?\b)"
+    r"|(?=\bDecision\s*:)"
+    r"|(?=\b(?:Final|Meta|Reviewer|My|Our)\s+(?:Rating|Score)s?\b)",
+    re.IGNORECASE,
+)
+
+
+def label_leak(text: str) -> bool:
+    return bool(isinstance(text, str) and text and LABEL_LEAK.search(text))
+
+
+def label_leak_in(value: Any) -> bool:
+    if isinstance(value, str):
+        return label_leak(value)
+    if isinstance(value, dict):
+        return any(label_leak_in(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(label_leak_in(item) for item in value)
+    return False
+
+
+def assert_no_label_leak(value: Any, *, where: str) -> None:
+    """Refuse a packet that still carries a label or an identity marker.
+
+    The check fails closed: the packet is not rewritten and is not sent on.
+    """
+    if label_leak_in(value):
+        raise ValueError(
+            f"{where} contains a rating, decision, award, acceptance, or identity leak"
+        )
+
+
+def neutralize_label_text(text: str) -> str:
+    """Drop rating, decision, award, acceptance, and identity sentences."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    kept = []
+    for part in _LABEL_SPLIT.split(text):
+        sentence = part.strip(" \t-*")
+        if sentence and not label_leak(sentence):
+            kept.append(sentence)
+    return " ".join(kept).strip()
+
+
+def filter_conclusion_sentences(text: str) -> str:
+    """Drop label leaks and reported-result sentences from audited prose."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    kept = []
+    for part in _LABEL_SPLIT.split(text):
+        sentence = part.strip(" \t-*")
+        if sentence and not label_leak(sentence) and not reported_result(sentence):
+            kept.append(sentence)
+    return " ".join(kept).strip()
+
+
 _GROUP_YEAR = re.compile(r"ICLR\.cc/(20\d{2})/")
 _ABSTRACT_LINE = re.compile(r"(?i)^abstract\b[ \t]*[:.]?[ \t]*(.*)$")
 
@@ -100,19 +183,34 @@ def anonymized_submission_text(text: Any) -> str:
 
 
 def scale_for_reference(row: dict) -> RatingScale:
-    """Scale for an already-averaged official mean on a reference record."""
+    """Scale for an already-averaged official mean on a reference record.
+
+    When both ``year`` and ``rating_scale`` are set they must resolve to the
+    same scale. A 2026 mean of 0 is legal on ``iclr2026`` and illegal on the
+    2024 bins.
+    """
     key = row.get("rating_scale")
+    named = None
     if isinstance(key, str) and key:
         try:
-            return scale_for_key(key)
+            named = scale_for_key(key)
         except KeyError as exc:
             raise ValueError(f"unknown rating scale {key!r}") from exc
     year = row.get("year")
-    if year is None:
-        return classic_scale()
-    if type(year) is not int:
-        raise ValueError("year must be an integer venue year")
-    return scale_for_year(year)
+    yearly = None
+    if year is not None:
+        if type(year) is not int:
+            raise ValueError("year must be an integer venue year")
+        yearly = scale_for_year(year)
+    if named is not None and yearly is not None and named.key != yearly.key:
+        raise ValueError(
+            f"year {year} resolves to {yearly.key}, which does not match rating_scale {named.key}"
+        )
+    if named is not None:
+        return named
+    if yearly is not None:
+        return yearly
+    return classic_scale()
 
 
 def require_official_mean(value: Any, scale: RatingScale) -> None:
@@ -179,19 +277,51 @@ def units(fields: dict) -> dict[str, str]:
     return {f"s{i}": s for i, s in enumerate(dict.fromkeys(lines), 1)}
 
 
-def official(sub: dict, notes: list[dict], group: str) -> list[dict]:
+def _millis(note: dict, *keys: str) -> int:
+    for key in keys:
+        raw = note.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _review_pool(sub: dict, notes: list[dict], group: str) -> list[dict]:
     fid = sub["id"]
     invitation = f"{group}/Submission{sub['number']}/-/Official_Review"
-    return latest_official_reviews(
-        [
-            n
-            for n in notes
-            if n.get("forum") == fid
-            and n.get("replyto") == fid
-            and invitation in n.get("invitations", [])
-            and not n.get("ddate")
-        ]
-    )
+    return [
+        n
+        for n in notes
+        if n.get("forum") == fid
+        and n.get("replyto") == fid
+        and invitation in (n.get("invitations") or [])
+        and not n.get("ddate")
+        and is_official_review(n)
+    ]
+
+
+def official(sub: dict, notes: list[dict], group: str) -> list[dict]:
+    return latest_official_reviews(_review_pool(sub, notes, group))
+
+
+def _submission_revisions(sub: dict, notes: list[dict], group: str) -> list[dict]:
+    invitation = f"{group}/-/Submission"
+    revisions = [sub]
+    for note in notes:
+        if note is sub or note.get("ddate"):
+            continue
+        invitations = list(note.get("invitations") or [])
+        if isinstance(note.get("invitation"), str):
+            invitations.append(note["invitation"])
+        if invitation not in invitations:
+            continue
+        if note.get("id") != sub.get("id") and note.get("forum") != sub.get("id"):
+            continue
+        revisions.append(note)
+    return revisions
 
 
 def iclr_case(
@@ -201,17 +331,37 @@ def iclr_case(
         "id"
     ) != sub.get("forum"):
         return None
-    reviews = sorted(official(sub, notes, group), key=lambda n: n["id"])
+    pool = _review_pool(sub, notes, group)
+    if not pool:
+        return None
+    # Creation time of every official note, before signature dedup. A later
+    # revision of the same review must not hide the first review. A missing
+    # timestamp is not an earlier review.
+    created = [ms for n in pool if (ms := _millis(n, "tcdate", "cdate"))]
+    first = min(created) if created else 0
+    reviews = sorted(latest_official_reviews(pool), key=lambda n: n["id"])
     if not reviews:
         return None
-    stamp = sub.get("tmdate") or sub.get("mdate")
-    first = min(n.get("tcdate") or n.get("cdate") or 0 for n in reviews)
-    early = bool(stamp and first and stamp < first)
+    eligible = [
+        note
+        for note in _submission_revisions(sub, notes, group)
+        if first and 0 < _millis(note, "tmdate", "mdate") < first
+    ]
+    if eligible:
+        chosen = max(
+            eligible,
+            key=lambda note: (_millis(note, "tmdate", "mdate"), str(note.get("id") or "")),
+        )
+        early = True
+    else:
+        chosen = sub
+        early = False
     if not early and not allow_late:
         return None
+    stamp = _millis(chosen, "tmdate", "mdate") or None
     year = venue_year(group)
     packet = units(
-        {"abstract": anonymized_submission_text(content_value(sub, "abstract"))}
+        {"abstract": anonymized_submission_text(content_value(chosen, "abstract"))}
     )
     if not packet:
         return None

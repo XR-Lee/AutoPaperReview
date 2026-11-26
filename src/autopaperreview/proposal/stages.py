@@ -10,7 +10,15 @@ from statistics import mean
 
 from ..command_transport import recover_json, reply_text, run_command
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import OUTCOME, REPORTED_FINDING, digest, read, reported_result, write
+from .data import (
+    OUTCOME,
+    REPORTED_FINDING,
+    digest,
+    label_leak,
+    read,
+    reported_result,
+    write,
+)
 
 SECTIONS = ("problem", "approach", "difference", "intended_value", "validation_plan")
 RUBRIC = {
@@ -152,6 +160,10 @@ def validate(stage, data, source):
                 check(
                     not reported_result(quote) and not MEASURED.search(quote),
                     "drop measured outcomes",
+                )
+                check(
+                    not label_leak(quote),
+                    "drop rating, decision, award, acceptance, or identity text",
                 )
         elif stage == "label":
             check(isinstance(row, list), "expected a list per reviewer")

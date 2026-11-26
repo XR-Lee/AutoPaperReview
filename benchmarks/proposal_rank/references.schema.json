@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProposalRankReferences",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["forum", "prospective", "final_rating"],
+    "properties": {
+      "forum": {"type": "string", "minLength": 1},
+      "prospective": {"type": "number"},
+      "final_rating": {"type": "number"},
+      "accept": {"type": ["integer", "null"], "enum": [0, 1, null]},
+      "year": {"type": ["integer", "null"]},
+      "rating_scale": {"type": ["string", "null"]},
+      "stratum": {"type": "string"},
+      "reference_protocol": {"type": "string"},
+      "reviewers": {"type": "array"},
+      "requests": {"type": "object"},
+      "input_sha256": {"type": "string"},
+      "independent_reference": {"type": "object"}
+    }
+  }
+}

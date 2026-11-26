@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from math import sqrt
+from collections import defaultdict
+from math import floor, sqrt
 from random import Random
 from statistics import mean
 
 from ..public_calibration import roc_auc, spearman
 from .merit import AXES
+
+# Same generator seed as the unstratified proposal bootstrap. 3000 draws match
+# the reported procedure. The published intervals are not reproduced from the
+# artifacts in this repository.
+STRATIFIED_DRAWS = 3000
+STRATIFIED_SEED = 61124
 
 
 def expectation(probabilities):
@@ -134,45 +141,138 @@ def predict(values, spec):
     )
 
 
+def _accept_pairs(rows, scores, indexes):
+    kept_scores = []
+    kept_labels = []
+    for index in indexes:
+        label = rows[index].get("accept")
+        if label in (0, 1):
+            kept_scores.append(scores[index])
+            kept_labels.append(int(label))
+    return kept_scores, kept_labels
+
+
+def _metrics(rows, scores, indexes):
+    picked_scores = [scores[i] for i in indexes]
+    targets = [rows[i]["target"] for i in indexes]
+    labels = [int(target >= 3.5) for target in targets]
+    accept_scores, accept_labels = _accept_pairs(rows, scores, indexes)
+    return {
+        "rho": spearman(picked_scores, targets),
+        "auc": roc_auc(picked_scores, labels),
+        "apr_rho": spearman(picked_scores, [rows[i]["rating"] for i in indexes]),
+        "apr_auc": roc_auc(accept_scores, accept_labels) if accept_labels else None,
+    }
+
+
+def linear_percentile(sorted_values, probability):
+    """Linear percentile, the same construction as the promotion bootstrap."""
+    if not sorted_values:
+        raise ValueError("percentile of an empty sample")
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    position = (len(sorted_values) - 1) * probability
+    lower = floor(position)
+    upper = lower + 1 if lower < len(sorted_values) - 1 else lower
+    if lower == upper:
+        return float(sorted_values[lower])
+    weight = position - lower
+    return float(sorted_values[lower]) * (1.0 - weight) + float(sorted_values[upper]) * weight
+
+
+def stratum_of(row):
+    if row.get("stratum") is not None:
+        return str(row["stratum"])
+    return f"{float(row['rating']):.6f}"
+
+
+def stratified_ci(rows, spec, *, draws=STRATIFIED_DRAWS, seed=STRATIFIED_SEED):
+    """Percentile interval from resampling inside final-score strata.
+
+    Each draw keeps every stratum's size. Stratum names are sorted so the seed
+    does not depend on row order. A paper with no ``stratum`` uses its official
+    final rating. Draws with an undefined statistic are omitted, and the
+    interval is withheld when fewer than 90% of draws are defined.
+    """
+    if draws < 1:
+        raise ValueError("stratified draws must be positive")
+    if len({r["key"] for r in rows}) != len(rows):
+        raise ValueError("duplicate evaluation row")
+    scores = [predict(r["features"], spec) for r in rows]
+    pools = defaultdict(list)
+    for index, row in enumerate(rows):
+        pools[stratum_of(row)].append(index)
+    names = sorted(pools)
+    rng = Random(seed)
+    trials = {"rho": [], "auc": [], "apr_rho": [], "apr_auc": []}
+    for _ in range(draws):
+        indexes = []
+        for name in names:
+            pool = pools[name]
+            indexes.extend(pool[rng.randrange(len(pool))] for _ in range(len(pool)))
+        for key, value in _metrics(rows, scores, indexes).items():
+            if value is not None:
+                trials[key].append(value)
+
+    def interval(values):
+        if len(values) < 0.9 * draws:
+            return None
+        ordered = sorted(values)
+        return [linear_percentile(ordered, 0.025), linear_percentile(ordered, 0.975)]
+
+    return {key: interval(values) for key, values in trials.items()}
+
+
+def top_fraction(scores, ratings, *, fraction=0.2, threshold=7.0):
+    """How many of the top slice have an official mean at or above ``threshold``."""
+    count = len(scores)
+    if count == 0 or len(ratings) != count:
+        raise ValueError("scores and ratings must be the same nonempty cohort")
+    if not 0 < fraction <= 1:
+        raise ValueError("fraction must be in (0, 1]")
+    width = max(1, int(round(count * fraction)))
+    order = sorted(range(count), key=lambda i: (scores[i], -i), reverse=True)
+    chosen = order[:width]
+    population = sum(1 for rating in ratings if rating >= threshold)
+    return {
+        "k": width,
+        "held": sum(1 for index in chosen if ratings[index] >= threshold),
+        "expected_random": width * population / count,
+        "threshold": threshold,
+        "fraction": fraction,
+    }
+
+
 def evaluate(rows, spec, bootstrap=0):
     if len({r["key"] for r in rows}) != len(rows):
         raise ValueError("duplicate evaluation row")
     scores = [predict(r["features"], spec) for r in rows]
-    targets = [r["target"] for r in rows]
-    labels = [int(t >= 3.5) for t in targets]
+    indexes = range(len(rows))
+    labels = [int(r["target"] >= 3.5) for r in rows]
+    stats = _metrics(rows, scores, indexes)
     out = {
         "n": len(rows),
         "positive": sum(labels),
-        "rho": spearman(scores, targets),
-        "auc": roc_auc(scores, labels),
-        "apr_rho": spearman(scores, [r["rating"] for r in rows]),
-        "apr_auc": roc_auc(scores, [r["accept"] for r in rows]),
+        **stats,
     }
     if bootstrap:
         rng = Random(61124)
         trials = {"rho": [], "auc": [], "apr_rho": [], "apr_auc": []}
         for _ in range(bootstrap):
             ids = rng.choices(range(len(rows)), k=len(rows))
-            p = [scores[i] for i in ids]
-            y = [targets[i] for i in ids]
-            for k, v in [
-                ("rho", spearman(p, y)),
-                ("auc", roc_auc(p, [labels[i] for i in ids])),
-                ("apr_rho", spearman(p, [rows[i]["rating"] for i in ids])),
-                ("apr_auc", roc_auc(p, [rows[i]["accept"] for i in ids])),
-            ]:
-                if v is not None:
-                    trials[k].append(v)
+            for key, value in _metrics(rows, scores, ids).items():
+                if value is not None:
+                    trials[key].append(value)
 
-        def interval(x):
-            x.sort()
+        def interval(values):
+            values.sort()
             return (
-                [x[int((len(x) - 1) * q)] for q in (0.025, 0.975)]
-                if len(x) >= 0.9 * bootstrap
+                [values[int((len(values) - 1) * q)] for q in (0.025, 0.975)]
+                if len(values) >= 0.9 * bootstrap
                 else None
             )
 
-        out["ci95"] = {k: interval(v) for k, v in trials.items()}
+        out["ci95"] = {key: interval(value) for key, value in trials.items()}
     return out
 
 

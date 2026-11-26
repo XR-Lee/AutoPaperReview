@@ -327,15 +327,21 @@ def _leading_int(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
-        number = int(value)
-        if float(number) != float(value):
+        try:
+            number = int(value)
+            if float(number) != float(value):
+                return None
+        except (OverflowError, ValueError, TypeError):
             return None
         return number
     if isinstance(value, str):
         head = value.strip().split(":", 1)[0].strip().split()
         token = head[0] if head else ""
         if token.isdigit():
-            return int(token)
+            try:
+                return int(token)
+            except (OverflowError, ValueError):
+                return None
     return None
 
 

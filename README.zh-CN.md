@@ -610,7 +610,7 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
 
 `autopaperreview proposal-review` 把 ICLR 投稿摘要压成早期提案，并给想法维度打 1–5 分。这条路径没有结果，也没有 PDF。对照的官方终评均值用 `profiles/rating_scales.json` 里的分年量表解析。摘要在切成来源句之前会先匿名化。运行方式见 [docs/proposal-review.md](docs/proposal-review.md)。
 
-下表是该框架此前报告的评估，这次没有重算，单元测试也不调用模型。这些队列是按终评分层抽的，所以相关是样本内部的关联。区间是在这些终评分层里做 3000 次百分位自助法。没有前瞻记录。这些提案是在会议结束之后才打的分，不是在工作做出来之前。
+下表里的 fixed100、confirm100、replications199、前 20% 和 84 篇 NLP 数字是 reported by the original Codex run, not yet reproducible from repo artifacts。这些队列是按终评分层抽的，所以相关是样本内部的关联。区间是在这些终评分层里做 3000 次百分位自助法。没有前瞻记录。这些提案是在会议结束之后才打的分，不是在工作做出来之前。单元测试不调用模型。`scripts/reproduce_proposal_rank.py` 只给以后公开的清单算分，不会把这张表重算出来。
 
 ![提案分更高的地方，终评也更高。固定测试 n=100，Spearman 0.677。独立确认 n=100，Spearman 0.597。两次重复 n=199，Spearman 0.522。点上没有标签。每个队列都按终评分层。](docs/assets/proposal_score_vs_final_review.png)
 

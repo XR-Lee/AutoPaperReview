@@ -76,7 +76,7 @@ Both arms wrote 72 seats and 144 weaknesses. On this release, resolved last-weak
 
 ## Proposal review
 
-The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The figure and the table below were reported from an earlier run. They were not recomputed for this change, and the unit tests do not call a model.
+The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The fixed100, confirm100, replications199, top-20%, and 84-NLP numbers in the figure and the table below are reported by the original Codex run, not yet reproducible from repo artifacts. The unit tests do not call a model.
 
 The harness scores ICLR public OpenReview submissions after they are compressed to an early proposal: a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score. Intake parses that mean with `parse_rating` and the per-year scale, and anonymizes the abstract before the compressor sees it. The numbers below predate that wiring.
 
