@@ -2,6 +2,8 @@
 
 # AutoPaperReview
 
+研究立项阶段可以使用 [Auto Proposal Review](docs/proposal-review.md)，评估一份 proposal 或 AutoPaperDraft 中的全部贡献候选。
+
 AutoPaperReview（简称 APR）是一条在本地运行的审稿流水线。它有两种用法，分别单独运行：
 
 - **[审稿报告](#track-a)**：默认用法。`init` 之后正常 `run`，会写出一份七维审稿，附带证据表、贡献核对和致命问题检查。产物包括 Markdown 报告和带批注的稿件 PDF；装了 reportlab 的话，还有 `review_report.pdf`。
@@ -606,9 +608,9 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
 
 ### 想法分数和终评
 
-分支 `feat/proposal-review-harness` 上的提案审稿框架，评的是 ICLR 2024 公开 OpenReview 投稿压成早期提案之后的文本：标题加一段短描述，没有结果，也没有 PDF。APR 给想法维度打 1–5 分。对照是官方终评的审稿人均分。这个框架没有合并。它不是本版本代码的一部分。
+`autopaperreview proposal-review` 把 ICLR 投稿摘要压成早期提案，并给想法维度打 1–5 分。这条路径没有结果，也没有 PDF。对照的官方终评均值用 `profiles/rating_scales.json` 里的分年量表解析。摘要在切成来源句之前会先匿名化。运行方式见 [docs/proposal-review.md](docs/proposal-review.md)。
 
-这些队列是按终评分层抽的，所以相关是样本内部的关联。区间是在这些终评分层里做 3000 次百分位自助法。没有前瞻记录。这些提案是在会议结束之后才打的分，不是在工作做出来之前。
+下表里的 fixed100、confirm100、replications199、前 20% 和 84 篇 NLP 数字是已提交的汇总。逐篇记录不在 git 里。设置 `APR_PROPOSAL_REPRO_DIR` 才会重算。这些队列是按终评分层抽的，所以相关是样本内部的关联。三个 ICLR 区间是在这些终评分层里做 3000 次百分位自助法。84 篇 NLP 的区间是另一套 2000 次普通自助法（`random.Random` 种子 11752，下标分位数），不是那套分层自助法。没有前瞻记录。这些提案是在会议结束之后才打的分，不是在工作做出来之前。单元测试不调用模型。`scripts/reproduce_proposal_rank.py` 默认打印已提交的汇总；只有外部目录存在时才重算。
 
 ![提案分更高的地方，终评也更高。固定测试 n=100，Spearman 0.677。独立确认 n=100，Spearman 0.597。两次重复 n=199，Spearman 0.522。点上没有标签。每个队列都按终评分层。](docs/assets/proposal_score_vs_final_review.png)
 
@@ -618,7 +620,7 @@ PYTHONPATH=src python3 scripts/rank_eval.py \
 | 独立确认 | 100 | 0.597 | [0.465, 0.713] | 0.794 |
 | 两次重复 | 199 | 0.522 | [0.400, 0.637] | 0.805 |
 
-两次重复的 AUC 用的是有决定的 141 篇。在这 199 篇里，按 APR 分数取前 20% 是 40 篇，其中终评均值至少为 7 的有 23 篇；随机抽 40 篇大约会有 10.05 篇。在 AI-Researcher 研究的 84 篇真实、实验前的 NLP 提案上，和专家想法分的 Spearman 是 0.273。
+两次重复的 AUC 用的是有决定的 141 篇。在这 199 篇里，按 APR 分数取前 20% 是 40 篇，其中终评均值至少为 7 的有 23 篇；随机抽 40 篇大约会有 10.05 篇。在 AI-Researcher 研究的 84 篇真实、实验前的 NLP 提案上，和专家想法分的 Spearman 是 0.273 [0.045, 0.472]，以 6.625/10 为阳性的 AUC 是 0.681 [0.434, 0.885]。这个区间是 2000 次自助法，不是 ICLR 队列用的 3000 次分层自助法。
 
 ### 本版本实际跑的路径
 

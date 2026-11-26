@@ -3,12 +3,20 @@
 
 The check is generic on purpose. It does not store manuscript sentences.
 Exact strings, when needed, are blocked by SHA-256 of a normalized form.
+Structured records are also refused when they carry an OpenReview-shaped
+forum or note id, including a nested note.id or an id used as a key, a
+per-paper rating next to such an id, an unsalted digest of a neighboring
+string (including one stored under an hmac field name), or a home-directory
+path. JSON, JSONL, YAML, CSV, and TSV are scanned.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
+import json
 import re
 import subprocess
 import sys
@@ -72,12 +80,58 @@ LEADING_MARKER = re.compile(
     re.IGNORECASE,
 )
 
+# The locked public dev-set registry predates this field check. It is not a
+# place to put a new submission. Home-directory paths in that file still fail.
+_FIELD_EXCEPTIONS = {
+    "benchmarks/fixed_eval/manifest.json",
+}
+
 SKIP_CONTENT = {
     "scripts/confidentiality_hashes.txt",
     "scripts/confidentiality_patterns.txt",
     "scripts/confidentiality_allowlist.txt",
     "scripts/check_confidentiality.py",
 }
+
+# OpenReview forum and note ids are ten characters from this alphabet.
+_OPENREVIEW_ID = re.compile(r"^[A-Za-z0-9]{10}\Z")
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}\Z")
+_HOME_PATH = re.compile(r"/Users/|/home/[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\")
+_ID_FIELDS = frozenset(
+    {
+        "forum",
+        "forum_id",
+        "forumid",
+        "note_id",
+        "noteid",
+        "review_id",
+        "reviewid",
+        "replyto",
+        "reply_to",
+    }
+)
+_ID_LIST_FIELDS = frozenset(
+    {
+        "note_ids",
+        "review_ids",
+        "review_note_ids",
+        "initial_review_note_ids",
+        "forum_ids",
+    }
+)
+_RATING_FIELDS = frozenset(
+    {
+        "final_rating",
+        "rating",
+        "ratings",
+        "accept",
+        "decision",
+        "recommendation",
+        "full_ratings",
+        "meta_rating",
+    }
+)
+_UNSALTED_HEADERS = frozenset({"title_sha256", "title_hash", "title_digest"})
 
 
 def normalize(text: str) -> str:
@@ -174,6 +228,204 @@ def walked_files(root: Path) -> list[Path]:
     return files
 
 
+def _openreview_id(value: object) -> bool:
+    return isinstance(value, str) and _OPENREVIEW_ID.fullmatch(value) is not None
+
+
+def _openreview_key(value: object) -> bool:
+    """A dict key with the OpenReview shape, mixed case, and a digit.
+
+    A ten-letter word such as a schema name is not an id. A lowercase label
+    with digits is not one either.
+    """
+    if not _openreview_id(value):
+        return False
+    text = str(value)
+    return (
+        any(char.islower() for char in text)
+        and any(char.isupper() for char in text)
+        and any(char.isdigit() for char in text)
+    )
+
+
+def _record_kinds(value: object, kinds: set[str]) -> None:
+    """Collect field-level findings. Values are not copied into the messages."""
+    if isinstance(value, dict):
+        lowered = {str(key).lower(): item for key, item in value.items()}
+        id_hit = False
+        for key in _ID_FIELDS:
+            if _openreview_id(lowered.get(key)):
+                id_hit = True
+                kinds.add("openreview id field")
+        for key in _ID_LIST_FIELDS:
+            items = lowered.get(key)
+            if isinstance(items, list) and any(_openreview_id(item) for item in items):
+                id_hit = True
+                kinds.add("openreview id field")
+        for key in value:
+            if _openreview_key(key):
+                id_hit = True
+                kinds.add("openreview id key")
+        for parent in ("note", "reply", "review", "comment"):
+            nested = lowered.get(parent)
+            if isinstance(nested, dict) and _openreview_id(nested.get("id")):
+                id_hit = True
+                kinds.add("openreview id field")
+        if id_hit and any(key in lowered for key in _RATING_FIELDS):
+            kinds.add("per-paper rating")
+        strings = []
+        digests = []
+        for key, item in lowered.items():
+            if not isinstance(item, str):
+                continue
+            if _HEX64.fullmatch(item):
+                digests.append((key, item.lower()))
+            else:
+                strings.append(item)
+        for key, digest in digests:
+            matched = False
+            for text in strings:
+                candidates = {text, text.strip(), " ".join(text.split())}
+                if any(
+                    hashlib.sha256(candidate.encode("utf-8")).hexdigest() == digest
+                    for candidate in candidates
+                    if candidate
+                ):
+                    matched = True
+                    break
+            if not matched:
+                continue
+            if "hmac" in key or "salt" in key:
+                kinds.add("fake hmac")
+            else:
+                kinds.add("unsalted title digest")
+        for item in value.values():
+            _record_kinds(item, kinds)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _record_kinds(item, kinds)
+
+
+def _yaml_scalar(token: str):
+    text = token.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _yaml_lines(text: str) -> list[tuple[int, str]]:
+    parsed = []
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        parsed.append((indent, raw.strip()))
+    return parsed
+
+
+def _parse_yaml(lines: list[tuple[int, str]], index: int, indent: int):
+    if index >= len(lines):
+        return None, index
+    if lines[index][0] == indent and lines[index][1].startswith("- "):
+        items = []
+        while index < len(lines) and lines[index][0] == indent and lines[index][1].startswith("- "):
+            content = lines[index][1][2:].strip()
+            index += 1
+            if content and ":" in content:
+                key, _, val = content.partition(":")
+                node = {key.strip(): _yaml_scalar(val) if val.strip() else ""}
+                if index < len(lines) and lines[index][0] > indent:
+                    extra, index = _parse_yaml(lines, index, lines[index][0])
+                    if isinstance(extra, dict):
+                        node.update(extra)
+                items.append(node)
+            else:
+                items.append(_yaml_scalar(content))
+        return items, index
+    mapping: dict = {}
+    while index < len(lines) and lines[index][0] == indent and not lines[index][1].startswith("- "):
+        key, sep, val = lines[index][1].partition(":")
+        if not sep:
+            index += 1
+            continue
+        index += 1
+        name = key.strip().strip("'\"")
+        if not val.strip():
+            if index < len(lines) and lines[index][0] > indent:
+                child, index = _parse_yaml(lines, index, lines[index][0])
+                mapping[name] = child
+            else:
+                mapping[name] = ""
+        else:
+            mapping[name] = _yaml_scalar(val)
+    return mapping, index
+
+
+def _scan_delimited(text: str, kinds: set[str], *, delimiter: str = ",") -> None:
+    rows = list(
+        csv.reader(
+            io.StringIO(text.replace("\r\n", "\n").replace("\r", "\n")),
+            delimiter=delimiter,
+        )
+    )
+    if not rows:
+        return
+    header = [cell.strip().lower() for cell in rows[0]]
+    salted = any("salt" in name or "hmac" in name for name in header)
+    if not salted and any(name in _UNSALTED_HEADERS for name in header):
+        kinds.add("unsalted title digest")
+    for row in rows[1:]:
+        cells = [cell.strip() for cell in row]
+        record = {
+            header[index] if index < len(header) else str(index): cells[index]
+            for index in range(len(cells))
+        }
+        _record_kinds(record, kinds)
+
+
+def scan_fields(text: str, posix: str) -> list[str]:
+    """Field checks for ids, per-paper ratings, unsalted digests, and home paths."""
+    findings: list[str] = []
+    if _HOME_PATH.search(text):
+        findings.append(f"{posix}: home-directory path")
+    if posix in _FIELD_EXCEPTIONS:
+        return findings
+    kinds: set[str] = set()
+    stripped = text.lstrip()
+    payload = None
+    if posix.endswith((".json", ".jsonl")) or stripped.startswith(("{", "[")):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
+        if payload is None and posix.endswith(".jsonl"):
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    _record_kinds(json.loads(line), kinds)
+                except json.JSONDecodeError:
+                    continue
+        elif payload is not None:
+            _record_kinds(payload, kinds)
+    if posix.endswith((".yaml", ".yml")):
+        try:
+            document, _end = _parse_yaml(_yaml_lines(text), 0, 0)
+        except (ValueError, IndexError):
+            document = None
+        if document is not None:
+            _record_kinds(document, kinds)
+    if posix.endswith(".tsv"):
+        _scan_delimited(text, kinds, delimiter="\t")
+    elif posix.endswith(".csv"):
+        _scan_delimited(text, kinds)
+    for kind in sorted(kinds):
+        findings.append(f"{posix}: {kind}")
+    return findings
+
+
 def sniff_magic(header: bytes) -> str | None:
     for prefix, kind in MAGIC:
         if header.startswith(prefix):
@@ -232,6 +484,7 @@ def scan_file(
             if digest in hashes:
                 findings.append(f"{posix}:{number}: blocked content hash")
                 break
+    findings.extend(scan_fields(text, posix))
     return findings
 
 

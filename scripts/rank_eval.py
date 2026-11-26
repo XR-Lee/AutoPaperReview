@@ -21,8 +21,11 @@ from autopaperreview.fixed_eval import (
     assert_model_recorded,
     dev_ids,
     load_baseline_cache,
+    manifest_path,
 )
 from autopaperreview.fusion import DIAGNOSTIC, LOCKED_CANDIDATE, SHIPPABLE, selection_report
+from autopaperreview.proposal.data import require_distinct_output
+from autopaperreview.proposal.file_io import local_output, protected_output, read_text, write_text
 from autopaperreview.public_calibration import assert_local_only
 from autopaperreview.rank_metrics import candidate_table, format_interval
 
@@ -36,7 +39,7 @@ def _records(
     seen: set[str] = set()
     indexed: list[tuple[str, dict, Path]] = []
     for score_path in sorted(cache.glob("papers/*/project/our_score.json")):
-        score = json.loads(score_path.read_text(encoding="utf-8"))
+        score = json.loads(read_text(score_path))
         forum_id = str(score.get("forum_id") or score_path.parents[1].name)
         indexed.append((forum_id, score, score_path.parents[1] / "heldout" / "human.json"))
     if baseline_scores:
@@ -51,7 +54,7 @@ def _records(
             continue
         if not human_path.is_file():
             continue
-        human = json.loads(human_path.read_text(encoding="utf-8"))
+        human = json.loads(read_text(human_path))
         decision = human.get("decision")
         if decision not in {"accept", "reject"}:
             continue
@@ -108,7 +111,7 @@ def _records(
 
 def _dev_stamp(cache: Path) -> dict | None:
     try:
-        stamp = json.loads((cache / "fixed-eval-run.json").read_text(encoding="utf-8"))
+        stamp = json.loads(read_text(cache / "fixed-eval-run.json"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:
@@ -145,7 +148,7 @@ def _check_fixed_prompt(records: list[dict], meta: dict, stamp: dict | None) -> 
 def _load_ids(path: Path | None, split: str | None) -> set[str] | None:
     if path is None:
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(read_text(path))
     if isinstance(payload, dict):
         if not split or split not in payload:
             raise SystemExit("an id file that is an object needs --split")
@@ -193,8 +196,28 @@ def main(argv: list[str] | None = None) -> int:
         help="manifest digest the baseline cache must name when --fixed-set is none",
     )
     args = parser.parse_args(argv)
+    try:
+        output = local_output(Path(args.output))
+        with protected_output(output):
+            return _run(args, output)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _run(args, output):
     cache = assert_local_only(Path(args.cache))
-    output = assert_local_only(Path(args.output))
+    inputs = [Path(value) for value in (args.ids, args.holdout_file) if value]
+    if args.fixed_set == "iclr-dev":
+        inputs.append(manifest_path())
+    inputs.append(cache / "fixed-eval-run.json")
+    inputs.extend(cache.glob("papers/*/project/our_score.json"))
+    inputs.extend(cache.glob("papers/*/heldout/human.json"))
+    if args.baseline_cache:
+        baseline = Path(args.baseline_cache).expanduser()
+        inputs.append(baseline / "metadata.json")
+        inputs.extend(baseline.glob("papers/*/our_score.json"))
+    require_distinct_output(output, *inputs)
     fixed_meta: dict | None = None
     try:
         if args.fixed_set == "iclr-dev":
@@ -328,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     if grounded_count:
         body["grounded_weaknesses_records"] = grounded_count
         body["forecast_prompt"] = "grounded-weaknesses" if grounded_count == len(records) else "mixed"
-    output.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_text(output, json.dumps(body, ensure_ascii=False, indent=2) + "\n")
     print(f"preregistered={LOCKED_CANDIDATE}")
     if fixed_meta is not None:
         print(

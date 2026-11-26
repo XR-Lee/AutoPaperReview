@@ -29,6 +29,9 @@ Repository = "https://github.com/XR-Lee/AutoPaperReview"
 Issues = "https://github.com/XR-Lee/AutoPaperReview/issues"
 
 [project.optional-dependencies]
+proposal-pair = ["numpy>=1.24,<3", "onnxruntime>=1.18,<2", "tokenizers>=0.20,<1"]
+repro = ["numpy>=1.24,<3"]
+proposal-yaml = ["PyYAML>=6,<7"]
 pdf = ["reportlab>=4", "pymupdf>=1.24,<2"]
 annotate = ["pymupdf>=1.24,<2"]
 visual = ["pypdfium2>=4.30,<6", "pillow>=10"]

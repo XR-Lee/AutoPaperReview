@@ -33,7 +33,7 @@ jobs:
       - name: Install package
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[pdf,visual]"
+          python -m pip install -e ".[pdf,visual,repro]"
 
       - name: Compile Python sources
         run: python -m compileall -q src tests examples/synthetic/checks

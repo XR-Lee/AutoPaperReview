@@ -17,6 +17,7 @@ from typing import Any
 from .venues import profile_dir
 
 _YEAR = re.compile(r"(?:ICLR\.cc/|ICLR\s+)(20\d{2})\b", re.IGNORECASE)
+_RANGE_KEY = re.compile(r"range:([+-]?[0-9]+)-([+-]?[0-9]+)\Z")
 
 
 @dataclass(frozen=True)
@@ -57,14 +58,39 @@ def unparsed_fraction_limit() -> float:
     return value
 
 
-def _range_scale(key: str) -> RatingScale:
+def generic_range_key() -> str:
     block = _payload()["generic_range"]
+    return f"range:{int(block['minimum'])}-{int(block['maximum'])}"
+
+
+def _parsed_range(key: str) -> RatingScale | None:
+    """Read inclusive bounds from ``range:MIN-MAX``.
+
+    A ``range:`` prefix is not the generic 0–10 scale. ``range:0-4`` stops at 4.
+    The configured generic range keeps the source note from ``rating_scales.json``.
+    """
+    match = _RANGE_KEY.fullmatch(key)
+    if match is None:
+        return None
+    try:
+        minimum, maximum = int(match.group(1)), int(match.group(2))
+    except ValueError:
+        return None
+    if minimum > maximum:
+        return None
+    key = f"range:{minimum}-{maximum}"
+    block = _payload()["generic_range"]
+    source = (
+        str(block.get("source") or "")
+        if key == generic_range_key()
+        else "Explicit inclusive integer range."
+    )
     return RatingScale(
         key=key,
         values=None,
-        minimum=int(block["minimum"]),
-        maximum=int(block["maximum"]),
-        source=str(block.get("source") or ""),
+        minimum=minimum,
+        maximum=maximum,
+        source=source,
     )
 
 
@@ -89,25 +115,37 @@ def classic_scale() -> RatingScale:
 
 
 def scale_for_key(key: str | None) -> RatingScale:
-    if not key:
+    if key is None:
         return classic_scale()
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("rating_scale must be a non-empty string")
     registered = registered_scales()
     if key in registered:
         return registered[key]
-    if key.startswith("range:"):
-        return _range_scale(key)
+    parsed = _parsed_range(key)
+    if parsed is not None:
+        return parsed
     raise KeyError(f"unknown rating scale {key!r}")
 
 
 def scale_for_year(year: int | None, *, venue: str = "ICLR") -> RatingScale:
-    """Discrete scale for a known ICLR year, otherwise the explicit 0–10 range."""
+    """Discrete scale for a known ICLR year, otherwise the explicit 0–10 range.
+
+    ``None`` stays on the generic range. Zero and negative years are not venue
+    years, so they fail instead of falling through to that range. An
+    unregistered positive year, such as 2027, still uses the generic range.
+    """
+    if year is not None:
+        if type(year) is not int:
+            raise ValueError("year must be an integer venue year")
+        if year < 1:
+            raise ValueError("year must be a positive venue year")
     if venue.upper() == "ICLR" and year is not None:
-        key = f"iclr{int(year)}"
+        key = f"iclr{year}"
         registered = registered_scales()
         if key in registered:
             return registered[key]
-        return _range_scale(f"range:{_payload()['generic_range']['minimum']}-{_payload()['generic_range']['maximum']}")
-    return _range_scale(f"range:{_payload()['generic_range']['minimum']}-{_payload()['generic_range']['maximum']}")
+    return scale_for_key(generic_range_key())
 
 
 def scale_for_venue_text(*parts: str) -> RatingScale:

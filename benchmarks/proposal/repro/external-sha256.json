@@ -1,0 +1,14 @@
+{
+  "algorithm": "sha256",
+  "note": "SHA-256 of the original delivered row files, byte for byte. Those files are not in git. Point APR_PROPOSAL_REPRO_DIR at a directory that contains them. replications199 is scored from joined.json. A blind index is not part of the delivered set.",
+  "files": {
+    "fixed100/lock.json": "0296743c0c376b0033575861422c0bb9d6e7a71fa3d3d818299824cd8f36e410",
+    "fixed100/fixed-predictions.json": "105253f784ab3a8f2db210d77881bc79729443b70b1525f3e1fd6029490a1ce0",
+    "fixed100/references.json": "e5a430212a610cd8c3524b99e7c535222cc96057a8c06abdf6ba74410d7e5542",
+    "confirm100/lock.json": "a1c66aa7627754ba09be8b67902d3c75965e48fd788eb958b1c45fbf27453d17",
+    "confirm100/fresh-predictions.json": "8e15748f1a43d5dd4d966e8b5fb504751c8debb87b64f856a5cd381073df2d50",
+    "confirm100/references.json": "0e4a7e7d62ff0a3bfd00197eb2047a4e8ec6edb40df7dfe9be8d53fa9113bc1b",
+    "replications199/joined.json": "06e43684cf123ad673e4e6285b64657c90de393b703b747a74f6512426742d68",
+    "nlp84/deployed-external-rows.json": "8268b7828836946d0e37f3c024b43e149fdf2bf9524061ffa4ebd01f0522dac4"
+  }
+}

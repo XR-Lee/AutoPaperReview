@@ -370,6 +370,7 @@ class EvidenceLinkTests(unittest.TestCase):
         self.assertIn('<a id="record-e1"></a>', markdown)
         self.assertIn("## Evidence Index / 证据索引", markdown)
 
+    @unittest.skipUnless(reportlab_available(), "reportlab extra not installed")
     def test_pdf_markup_keeps_citation_brackets_and_one_target_per_id(self) -> None:
         dests, markup = _markup(
             '- <a id="record-e2"></a>`E2` ([E2](#record-e2), [E3](#record-e3)) [[E2](#record-e2), [E3](#record-e3)]'

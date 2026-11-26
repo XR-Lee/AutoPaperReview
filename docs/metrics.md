@@ -76,11 +76,11 @@ Both arms wrote 72 seats and 144 weaknesses. On this release, resolved last-weak
 
 ## Proposal review
 
-The figure and the table below are not a result of the code in this release.
+The optional `proposal-review` command is this harness. See [proposal review](proposal-review.md). The fixed100, confirm100, replications199, top-20%, and 84-NLP headline numbers in the figure and the table below are committed aggregates. Per-paper rows are not in git. The unit tests do not call a model, and the recompute test skips when `APR_PROPOSAL_REPRO_DIR` is unset. `scripts/reproduce_proposal_rank.py` prints the aggregates and recomputes them from an external directory. See [benchmarks/proposal/repro](../benchmarks/proposal/repro/README.md).
 
-The harness is on branch `feat/proposal-review-harness` at `3a1fd15` (a patch on `406ef6c`). It is not merged. It scores ICLR 2024 public OpenReview submissions after they are compressed to an early proposal: the title plus a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score.
+The harness scores ICLR public OpenReview submissions after they are compressed to an early proposal: a short description, with no results and no PDF. APR scores idea dimensions on a 1–5 scale. The comparison is the official final mean reviewer score. Intake parses that mean with `parse_rating` and the per-year scale, and anonymizes the abstract before the compressor sees it. The numbers below predate that wiring.
 
-Cohorts are stratified by that final score. The correlation is a within-sample association, not a sample drawn without regard to the outcome. Intervals are 3000-draw percentile bootstraps inside those final-score strata. There is no prospective trace: the proposals were scored after the conference decisions, not before the work was done.
+Cohorts are stratified by that final score. The correlation is a within-sample association, not a sample drawn without regard to the outcome. The three ICLR intervals are 3000-draw percentile bootstraps inside those final-score strata. The 84-proposal interval is a separate 2000-draw ordinary bootstrap (`random.Random` seed 11752, index percentile), not that tier bootstrap. There is no prospective trace: the proposals were scored after the conference decisions, not before the work was done.
 
 ![Higher proposal scores sit next to higher final review scores. Three panels, fixed test n=100 Spearman 0.677, independent confirm n=100 Spearman 0.597, two replications n=199 Spearman 0.522. Dots are unlabeled. The caption states that each cohort is stratified by the final score.](assets/proposal_score_vs_final_review.png)
 
@@ -92,7 +92,7 @@ Cohorts are stratified by that final score. The correlation is a within-sample a
 
 The two-replication AUC uses the 141 papers that have a decision. On those 199 papers, the top 20% by the APR score is 40 papers. That slice holds 23 papers whose final mean is at least 7. A random 40 of the same 199 would hold about 10.05.
 
-On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273.
+On 84 real pre-experiment NLP proposals from the AI-Researcher study, Spearman against expert idea scores was 0.273 and the AUC at 6.625/10 was 0.681. The Spearman interval is [0.045, 0.472] and the AUC interval is [0.434, 0.885]. Those two intervals use 2000 draws and the index percentile. The ICLR intervals above use 3000 tier draws.
 
 ### Shipped proposal path, and ClaimNov
 

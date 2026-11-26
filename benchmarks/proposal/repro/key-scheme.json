@@ -1,0 +1,6 @@
+{
+  "algorithm": "HMAC-SHA256",
+  "salt_env": "APR_PROPOSAL_REPRO_SALT",
+  "message": "utf-8 identifier",
+  "note": "A salt is never written to git. Keys of real identifiers are computed only when that environment variable is set, and they are not stored in this repository."
+}

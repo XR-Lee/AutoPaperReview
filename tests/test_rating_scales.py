@@ -9,7 +9,7 @@ from autopaperreview.public_calibration import (
     collect_official_ratings,
     parse_rating,
 )
-from autopaperreview.rating_scales import scale_for_year
+from autopaperreview.rating_scales import scale_for_key, scale_for_year
 
 
 def _review(signature: str, rating: str | None) -> dict:
@@ -61,13 +61,44 @@ class RatingScaleTests(unittest.TestCase):
         self.assertEqual(caught.exception.parsed, 2)
         self.assertIn("5", caught.exception.off_scale_tokens if hasattr(caught.exception, "off_scale_tokens") else str(caught.exception))
 
+    def test_nonpositive_years_do_not_use_the_generic_range(self) -> None:
+        for year in (0, -1):
+            with self.assertRaisesRegex(ValueError, "positive venue year"):
+                scale_for_year(year)
+
     def test_unregistered_year_uses_the_explicit_range(self) -> None:
         scale = scale_for_year(2027)
         self.assertIsNone(scale.values)
         self.assertEqual(parse_rating(1, scale=scale), 1)
         self.assertEqual(parse_rating(4, scale=scale), 4)
         self.assertIsNone(parse_rating(11, scale=scale))
-        self.assertTrue(scale.key.startswith("range:"))
+        self.assertEqual(scale.key, "range:0-10")
+        self.assertEqual((scale.minimum, scale.maximum), (0, 10))
+
+    def test_range_prefix_uses_declared_bounds(self) -> None:
+        narrow = scale_for_key("range:0-4")
+        self.assertEqual((narrow.minimum, narrow.maximum), (0, 4))
+        self.assertEqual(parse_rating(4, scale=narrow), 4)
+        self.assertIsNone(parse_rating(5, scale=narrow))
+        wide = scale_for_key("range:0-10")
+        self.assertEqual((wide.minimum, wide.maximum), (0, 10))
+        self.assertIsNone(parse_rating(11, scale=wide))
+        for key in ("range:", "range:later", "range:10-0", "range:0-10-extra"):
+            with self.assertRaises(KeyError):
+                scale_for_key(key)
+
+    def test_abnormal_rating_tokens_do_not_raise(self) -> None:
+        for token in (float("nan"), float("inf"), float("-inf"), ["8: accept"], {"unexpected": 1}):
+            with self.subTest(token=token):
+                self.assertIsNone(parse_rating(token))
+        self.assertIsNone(parse_rating("not-a-number"))
+
+    def test_signed_text_ratings_follow_the_declared_scale(self) -> None:
+        scale = scale_for_key("range:-2-4")
+        for text, expected in (("-2: lower bound", -2), ("+4 upper bound", 4), ("+0", 0),
+                               ("-3: outside", None), ("+5", None), ("--2", None), ("-1.5", None)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_rating(text, scale=scale), expected)
 
     def test_a_raised_limit_records_the_drop_without_hiding_it(self) -> None:
         scale = scale_for_year(2024)

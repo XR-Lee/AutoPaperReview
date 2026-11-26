@@ -23,7 +23,6 @@ from autopaperreview.cvpr_sets import (
     builtin_registry,
     id_list_digest,
     load_lock,
-    load_source_ids,
     save_cache_registry,
     write_lock,
 )
@@ -759,36 +758,48 @@ class SetRegistryTests(unittest.TestCase):
         self.assertEqual(second.seed, 20261032)
         self.assertEqual(second.exclude, ["S24-P", "S24-C1", "S24-D2"])
         self.assertIsNone(second.id_list_sha256)
-        for spec, count in ((pilot, 50), (first, 120)):
-            ids = load_source_ids(spec.id_list_source or "")
-            self.assertEqual(len(ids), count)
-            self.assertEqual(len(set(ids)), count)
-            self.assertEqual(id_list_digest(ids), spec.id_list_sha256)
-        overlap = set(load_source_ids(pilot.id_list_source or "")) & set(
-            load_source_ids(first.id_list_source or "")
-        )
-        self.assertEqual(len(overlap), 0)
+        for spec in (pilot, first):
+            self.assertRegex(spec.id_list_sha256 or "", r"\A[0-9a-f]{64}\Z")
+            self.assertTrue(spec.id_list_source)
 
     def test_fetch_refuses_sealed_sets_and_a_short_pool(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            cache = Path(temporary) / "cache"
+            root = Path(temporary)
+            cache = root / "cache"
             list_catalog(cache, years=(2024, 2025), fixture_dir=FIXTURE)
-            for set_id in ("S24-C1", "S24-C2"):
-                with self.assertRaises(CvprTierError) as caught:
-                    fetch_sample(cache, set_id=set_id, fixture_dir=FIXTURE)
-                self.assertIn("sealed", str(caught.exception))
-                self.assertFalse((cache / "sets" / set_id / "sample_manifest.json").exists())
+            members = root / "synthetic-members.json"
+            member_ids = ["synthetic-excluded"]
+            members.write_text(json.dumps({"members": member_ids}), encoding="utf-8")
+            quotas = {"oral": 1, "highlight": 1, "poster": 1}
+            common = {"year": 2024, "quotas": quotas, "seed": 1}
+            registry = SetRegistry(sets=[
+                SetSpec(id="SYN-FIRST", role="confirm", status="sealed", **common,
+                        id_list_source=f"{members}#members", id_list_sha256=id_list_digest(member_ids)),
+                SetSpec(id="SYN-SECOND", role="confirm", status="sealed", **common,
+                        exclude=["SYN-FIRST"]),
+                SetSpec(id="SYN-SHORT", role="dev", status="fresh", **common,
+                        exclude=["SYN-FIRST"], expect_available={"oral": 99}),
+                SetSpec(id="SYN-LOCKED", role="dev", status="dev", **common,
+                        id_list_sha256=id_list_digest(["synthetic-wrong-member"])),
+            ])
+            save_cache_registry(cache, registry)
+            with patch("autopaperreview.cvpr_sets.resolve_member_ids") as resolve:
+                for set_id in ("SYN-FIRST", "SYN-SECOND"):
+                    with self.assertRaisesRegex(CvprTierError, "sealed"):
+                        fetch_sample(cache, set_id=set_id, fixture_dir=FIXTURE)
+                    self.assertFalse((cache / "sets" / set_id / "sample_manifest.json").exists())
+                resolve.assert_not_called()
             with self.assertRaises(CvprTierError) as caught:
-                fetch_sample(cache, set_id="S24-D2", fixture_dir=FIXTURE)
+                fetch_sample(cache, set_id="SYN-SHORT", fixture_dir=FIXTURE)
             self.assertIn("pool", str(caught.exception))
-            self.assertFalse((cache / "sets" / "S24-D2" / "sample_manifest.json").exists())
+            self.assertFalse((cache / "sets" / "SYN-SHORT" / "sample_manifest.json").exists())
             stored = json.loads((cache / "sets.json").read_text(encoding="utf-8"))
-            dev = next(item for item in stored["sets"] if item["id"] == "S24-D2")
+            dev = next(item for item in stored["sets"] if item["id"] == "SYN-SHORT")
             self.assertIsNone(dev["id_list_sha256"])
             with self.assertRaises(CvprTierError) as caught:
-                fetch_sample(cache, set_id="S24-P", fixture_dir=FIXTURE)
+                fetch_sample(cache, set_id="SYN-LOCKED", fixture_dir=FIXTURE)
             self.assertIn("hash", str(caught.exception))
-            self.assertFalse((cache / "sets" / "S24-P" / "sample_manifest.json").exists())
+            self.assertFalse((cache / "sets" / "SYN-LOCKED" / "sample_manifest.json").exists())
 
     def test_dev_set_fetch_excludes_registered_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

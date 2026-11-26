@@ -12,8 +12,10 @@ stay in that cache.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import re
 import shutil
 import statistics
@@ -327,15 +329,21 @@ def _leading_int(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
-        number = int(value)
-        if float(number) != float(value):
+        try:
+            number = int(value)
+            if float(number) != float(value):
+                return None
+        except (OverflowError, ValueError, TypeError):
             return None
         return number
     if isinstance(value, str):
         head = value.strip().split(":", 1)[0].strip().split()
         token = head[0] if head else ""
-        if token.isdigit():
-            return int(token)
+        if re.fullmatch(r"[+-]?\d+", token):
+            try:
+                return int(token)
+            except (OverflowError, ValueError):
+                return None
     return None
 
 
@@ -362,6 +370,49 @@ def parse_rating(value: Any, *, scale: RatingScale | None = None) -> int | None:
     return number
 
 
+def _finite_int(raw: Any) -> int | None:
+    """Parse an integer timestamp. Non-finite values do not raise."""
+    if isinstance(raw, bool):
+        return None
+    if type(raw) is int:
+        return raw
+    if type(raw) is float:
+        if not math.isfinite(raw):
+            return None
+        whole = math.trunc(raw)
+        if whole != raw:
+            return None
+        try:
+            return int(raw)
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(raw, str) and re.fullmatch(r"[+-]?\d+", raw.strip()):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _record_hash(note: dict[str, Any]) -> str:
+    """SHA-256 of the canonical record. Dict key order does not change it."""
+    payload = json.dumps(note, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _review_order(note: dict[str, Any]) -> tuple[int, str, str]:
+    """Sort key for the review that supplies the official score.
+
+    A missing or non-numeric timestamp loses to any integer timestamp. A
+    leading ``+`` is a positive integer, so ``+120`` and ``120`` are the same
+    stamp. Equal id and timestamp break the tie on the SHA-256 of the full
+    record, so the chosen score does not depend on input order.
+    """
+    parsed = _finite_int(note.get("tmdate"))
+    stamp = -1 if parsed is None else parsed
+    return (stamp, str(note.get("id") or ""), _record_hash(note))
+
+
 def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best: dict[tuple[str, ...], dict[str, Any]] = {}
     for note in notes:
@@ -369,7 +420,7 @@ def latest_official_reviews(notes: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         signatures = tuple(str(item) for item in (note.get("signatures") or [note.get("id")]))
         current = best.get(signatures)
-        if current is None or int(note.get("tmdate") or 0) >= int(current.get("tmdate") or 0):
+        if current is None or _review_order(note) > _review_order(current):
             best[signatures] = note
     return list(best.values())
 
