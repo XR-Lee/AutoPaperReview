@@ -113,6 +113,13 @@ def _invalid_constant(_):
     raise ValueError("invalid JSON constant")
 
 
+def decode_json(text):
+    """Parse JSON text or bytes and reject a duplicate key at every object."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    return json.loads(text, object_pairs_hook=_unique_object)
+
+
 def decode_json_object(text):
     value = json.loads(
         text,
@@ -246,8 +253,10 @@ def apply_leak_audit(proposal, judge, *, stage=None, feedback="") -> str:
     require_leak_judge(judge)
     packet = seal(proposal, stage=stage)
     body = require_model_input(packet, stage=stage)
-    if stage in _REFERENCE_STAGES and _contains_reported_result(body):
-        raise ValueError("leak audit blocked a reported result in reference evidence")
+    if stage not in _OUTCOME_SCREEN_STAGES and _contains_reported_result(body):
+        if stage in _REFERENCE_STAGES:
+            raise ValueError("leak audit blocked a reported result in reference evidence")
+        raise ValueError("leak audit blocked a reported result")
     rendered = serialize_payload(body, feedback)
     if feedback:
         packet = seal({"payload": body, "validation_feedback": feedback}, stage=stage)

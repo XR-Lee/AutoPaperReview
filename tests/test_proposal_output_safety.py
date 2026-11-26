@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 import tempfile
 import unittest
 from collections import Counter
@@ -79,7 +78,7 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         input_dir = self.source / "fixed100"
         source = input_dir / "fixed-predictions.json"
         before = source.read_bytes()
-        replace = os.replace
+        real_rename = file_io.rename_exclusive
         modes = (
             ["--root", str(self.source)],
             ["--manifest", str(input_dir / "lock.json"), "--predictions", str(source),
@@ -91,12 +90,12 @@ class ProposalOutputSafetyTests(unittest.TestCase):
                 parked = self.root / "parked"
                 destination.mkdir()
 
-                def swap_at_publish(old, new, **kwargs):
+                def swap_at_publish(src_dir, src_name, dst_dir, dst_name):
                     destination.rename(parked)
                     input_dir.rename(destination)
-                    return replace(old, new, **kwargs)
+                    return real_rename(src_dir, src_name, dst_dir, dst_name)
 
-                with patch.object(file_io.os, "replace", side_effect=swap_at_publish) as publish:
+                with patch.object(file_io, "rename_exclusive", side_effect=swap_at_publish) as publish:
                     with redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()) as output:
                         rc = reproduce_proposal_rank.main([*args, "--output", str(destination / source.name)])
                 self.assertEqual(rc, 2)
@@ -105,7 +104,7 @@ class ProposalOutputSafetyTests(unittest.TestCase):
                 self.assertEqual((destination / source.name).read_bytes(), before)
                 self.assertEqual([p.name for p in parked.iterdir()], [source.name])
                 self.assertEqual(publish.call_count, 1)
-                self.assertEqual(publish.call_args.kwargs["src_dir_fd"], publish.call_args.kwargs["dst_dir_fd"])
+                self.assertNotEqual(publish.call_args.args[0], publish.call_args.args[2])
                 destination.rename(input_dir)
                 (parked / source.name).unlink()
                 parked.rmdir()
@@ -201,3 +200,66 @@ class ProposalOutputSafetyTests(unittest.TestCase):
         self.assertIn("input file identity changed", error.getvalue())
         self.assertFalse(output.getvalue())
         self.assertEqual(list(destination.parent.iterdir()), [])
+
+    def test_moving_an_input_onto_the_output_name_keeps_its_bytes(self):
+        self._published_fixture()
+        source = self.source / "fixed100" / "fixed-predictions.json"
+        before = source.read_bytes()
+        real_rename = file_io.rename_exclusive
+        output = self.root / "destination" / "summary.json"
+        output.parent.mkdir()
+
+        def move_onto_destination(src_dir, src_name, dst_dir, dst_name):
+            source.replace(output)
+            return real_rename(src_dir, src_name, dst_dir, dst_name)
+
+        for args in (
+            ["--root", str(self.source)],
+            ["--manifest", str(self.source / "fixed100" / "lock.json"),
+             "--predictions", str(source),
+             "--references", str(self.source / "fixed100" / "references.json"),
+             "--stratified-draws", "0"],
+        ):
+            with self.subTest(mode=args[0]):
+                if output.exists():
+                    output.unlink()
+                source.write_bytes(before)
+                with patch.object(file_io, "rename_exclusive", side_effect=move_onto_destination):
+                    with redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()) as stdout:
+                        rc = reproduce_proposal_rank.main([*args, "--output", str(output)])
+                self.assertEqual(rc, 2, error.getvalue())
+                self.assertFalse(stdout.getvalue())
+                self.assertEqual(output.read_bytes(), before)
+                self.assertIn("distinct", error.getvalue())
+
+    def test_reproduction_refuses_output_overlapping_the_repo_or_input_directory(self):
+        self._published_fixture()
+        hmac_manifest = self.manifests / "external-hmac-sha256.json"
+        hmac_manifest.write_text("{}\n", encoding="utf-8")
+        before_hmac = hmac_manifest.read_bytes()
+        before_raw = (self.manifests / "external-sha256.json").read_bytes()
+        prediction = self.source / "fixed100" / "fixed-predictions.json"
+        before_prediction = prediction.read_bytes()
+        repo_file = Path(repro_metrics.__file__).resolve().parents[3] / "benchmarks/proposal/repro/aggregates.json"
+        before_repo = repo_file.read_bytes()
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            file_io.assert_output_isolated(repo_file)
+        targets = (
+            hmac_manifest,
+            self.manifests / "external-sha256.json",
+            self.manifests / "aggregates.json",
+            self.source / "summary.json",
+            self.source / "fixed100" / "summary.json",
+            prediction,
+        )
+        for target in targets:
+            with self.subTest(target=target.name):
+                with redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()) as stdout:
+                    rc = reproduce_proposal_rank.main(["--root", str(self.source), "--output", str(target)])
+                self.assertEqual(rc, 2, error.getvalue())
+                self.assertIn("overlap", error.getvalue())
+                self.assertFalse(stdout.getvalue())
+        self.assertEqual(hmac_manifest.read_bytes(), before_hmac)
+        self.assertEqual((self.manifests / "external-sha256.json").read_bytes(), before_raw)
+        self.assertEqual(prediction.read_bytes(), before_prediction)
+        self.assertEqual(repo_file.read_bytes(), before_repo)

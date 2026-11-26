@@ -3,7 +3,7 @@
 from statistics import mean, pstdev
 
 from .data import digest
-from .prior_index import calibration_rows, historical_bounds
+from .prior_index import calibration_rows, historical_bounds, proposal_body
 
 
 def excerpts(proposal):
@@ -12,6 +12,7 @@ def excerpts(proposal):
 
 def panel(proposal, bank, round_number, exclude_key="", *, target_year=None, cutoff_ms=None, **exclusions):
     bounds = historical_bounds(target_year, cutoff_ms)
+    exclusions = {**exclusions, "exclude_text": exclusions.get("exclude_text") or proposal_body(proposal)}
     pool = sorted(
         (r for r, _ in calibration_rows(bank, bounds, excerpt_field="excerpts", exclude_key=exclude_key, **exclusions)),
         key=lambda r: (r["target"], r["key"]),

@@ -6,7 +6,7 @@ from pathlib import Path
 from .data import digest, prospective_comments, read, write
 from .leak_audit import payload_sha256, require_leak_judge, serialize_payload
 from .sanitized import seal
-from .stages import PROMPTS, audit_packet, invoke, proposal_text, validate
+from .stages import PROMPTS, audit_packet, audit_spans, invoke, proposal_text, validate
 
 
 def run_batch(
@@ -28,19 +28,25 @@ def run_batch(
     def run_one(case):
         bundle = root / "inputs" / case["bundle"]
         target = root / "runs" / case["key"]
+        spans = None
         if stage in ("label", "audit"):
-            packet = prospective_comments(read(bundle / "comments.json"))
+            originals = read(bundle / "comments.json")
+            packet = prospective_comments(originals)
             if stage == "audit":
                 packet = audit_packet(
                     stage_result(root, case, "label")["output"], packet
                 )
+                spans = audit_spans(originals, packet)
         elif stage == "compress":
             packet = read(bundle / "candidate.json")
         else:
             previous = stage_result(root, case, "compress")
             packet = proposal_text(previous["output"])
         packet = seal(packet, stage=stage)
-        path = invoke(stage, packet, root / "cache", model, command, timeout, leak_judge=leak_judge)
+        path = invoke(
+            stage, packet, root / "cache", model, command, timeout,
+            leak_judge=leak_judge, spans=spans,
+        )
         write(
             target / f"{stage}.json",
             {"bundle": case["bundle"], "cache": str(path.relative_to(root))},
@@ -74,13 +80,16 @@ def stage_result(root, case, stage):
         raise ValueError(f"{stage} from a different input bundle")
     entry = read(root / ptr["cache"])
     bundle = root / "inputs" / case["bundle"]
+    spans = None
     if stage in ("review", "forecast"):
         source = proposal_text(stage_result(root, case, "compress")["output"])
     elif stage == "audit":
+        originals = read(bundle / "comments.json")
         source = audit_packet(
             stage_result(root, case, "label")["output"],
-            prospective_comments(read(bundle / "comments.json")),
+            prospective_comments(originals),
         )
+        spans = audit_spans(originals, source)
     else:
         source = read(bundle / "candidate.json") if stage == "compress" else prospective_comments(
             read(bundle / "comments.json")
@@ -92,5 +101,5 @@ def stage_result(root, case, stage):
         or req["system_sha256"] != digest(PROMPTS[stage])
     ):
         raise ValueError(f"stale {stage} result; rerun this stage")
-    validate(stage, entry["output"], source)
+    validate(stage, entry["output"], source, spans=spans)
     return entry

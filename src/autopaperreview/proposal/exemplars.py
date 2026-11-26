@@ -4,7 +4,7 @@ from collections import Counter
 from math import log, sqrt
 
 from .data import filter_conclusion_sentences
-from .prior_index import calibration_rows, historical_bounds, words
+from .prior_index import calibration_rows, historical_bounds, proposal_body, words
 
 
 def tokens(proposal):
@@ -13,6 +13,7 @@ def tokens(proposal):
 
 def packet(proposal, training, exclude_key="", *, target_year=None, cutoff_ms=None, **exclusions):
     bounds = historical_bounds(target_year, cutoff_ms)
+    exclusions = {**exclusions, "exclude_text": exclusions.get("exclude_text") or proposal_body(proposal)}
     pool = sorted(
         calibration_rows(training, bounds, excerpt_field="excerpts", exclude_key=exclude_key, **exclusions),
         key=lambda example: (example[0]["target"], example[0]["key"]),

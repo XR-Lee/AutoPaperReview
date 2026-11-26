@@ -161,12 +161,16 @@ class TestProposalReview(unittest.TestCase):
                 ]
             }
         }
+        spans = {
+            key: [[(unit, list(range(len(unit)))) for unit in row["units"]]]
+            for key, row in source.items()
+        }
         self.assertEqual(
-            validate("audit", {"r1.novelty": []}, source), {"r1.novelty": []}
+            validate("audit", {"r1.novelty": []}, source, spans=spans), {"r1.novelty": []}
         )
         for quote in ("It is astonishing.", "It outperforms the previous approach."):
             with self.assertRaises(ValueError):
-                validate("audit", {"r1.novelty": [quote]}, source)
+                validate("audit", {"r1.novelty": [quote]}, source, spans=spans)
 
     def test_authored_chinese_and_reported_outcomes(self):
         from autopaperreview.proposal.data import reported_result, units

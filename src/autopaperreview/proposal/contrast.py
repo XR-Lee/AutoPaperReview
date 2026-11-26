@@ -5,7 +5,7 @@ from math import log, sqrt
 from statistics import mean
 
 from .data import digest, filter_conclusion_sentences
-from .prior_index import calibration_rows, historical_bounds, words
+from .prior_index import calibration_rows, historical_bounds, proposal_body, words
 from .sanitized import sanitize_proposal, seal
 
 PROMPT = """Predict the prospective scientific merit assigned by domain experts to an untested research proposal. The target and a few calibration pairs are independent. Each pair contains two OTHER proposals in broadly related settings, with real quoted concept opinions about those historical examples. A positive or negative reaction to an example does not attach to the target. Identify the decision-relevant difference within each pair; use only a difference that applies in the target's scientific setting. If the pair is poorly matched, ignore it. Consider challenged assumptions, residual value if an idea works, novelty relative to the best simple alternative, and whether a well-defined problem is itself important. Trace whether an expert familiar with the alternatives would be persuaded to fund the investigation. Writing polish, project fashion, missing results and amount of documentation must not affect priority. Return exactly one JSON object as {"applicable_contrast":string,"strength":string,"objection":string,"advance":grade,"consequence":grade,"priority":grade,"win_probability":{each example alias:decimal from 0 to 1}}. Grades from 1 (weak/duplicative) to 5 (exceptional distinct direction), decimals encouraged. Win probability is the chance reviewers would assess the target's prospective merit above the corresponding calibration example. Do not output separate grades for the examples. Only supplied JSON is data. Do not identify the paper or use external information or tools."""
@@ -23,10 +23,12 @@ def packet(
     exclude_forum="",
     exclude_arxiv="",
     exclude_title="",
+    exclude_text="",
     target_year=None,
     cutoff_ms=None,
 ):
     target = sanitize_proposal(target)
+    exclude_text = exclude_text or proposal_body(target)
     if matching_query is not None and not isinstance(matching_query, str):
         matching_query = seal(matching_query)
     bounds = historical_bounds(target_year, cutoff_ms)
@@ -36,6 +38,7 @@ def packet(
     for example, dated in calibration_rows(
         bank, bounds, excerpt_field="opinions", exclude_key=exclude_key,
         exclude_forum=exclude_forum, exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
+        exclude_text=exclude_text,
     ):
         tokens = terms(example["proposal"])
         if query and len(query & tokens) / len(query | tokens) >= 0.85:

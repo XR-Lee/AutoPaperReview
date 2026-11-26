@@ -9,12 +9,13 @@ from statistics import mean
 
 from ..command_transport import recover_json, reply_text, run_command
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import digest, label_leak, read, reported_result, write
+from .data import contiguous_quote, digest, label_leak, read, reported_result, retained_label_text, write
 from .file_io import read_text
 from .leak_audit import PROMPT as LEAK_AUDIT
 from .leak_audit import (
     REPLY_PROTOCOL,
     apply_leak_audit,
+    decode_json,
     decode_json_object,
     parse_reply,
     payload_sha256,
@@ -99,6 +100,40 @@ def audit_packet(labels, comments):
     }
 
 
+def _matching_spans(body, unit):
+    if isinstance(body, str):
+        candidates = [body]
+    elif isinstance(body, dict):
+        candidates = [value for value in body.values() if isinstance(value, str)]
+    else:
+        candidates = []
+    found = []
+    for original in candidates:
+        text, offsets = retained_label_text(original, screen_results=True)
+        if text == unit:
+            found.append((text, offsets))
+    return found
+
+
+def audit_spans(originals, packet):
+    """Map each cleaned audit unit back to contiguous offsets in the original review."""
+    if not isinstance(originals, dict):
+        raise TypeError("comments must be an object")
+    spans = {}
+    for key, row in packet.items():
+        reviewer, _, _dimension = key.partition(".")
+        if reviewer not in originals:
+            raise ValueError("audit unit has no retained source span")
+        matched = []
+        for unit in row["units"]:
+            found = _matching_spans(originals[reviewer], unit)
+            if not found:
+                raise ValueError("audit unit has no retained source span")
+            matched.append(found)
+        spans[key] = matched
+    return spans
+
+
 PROMPTS.update(merit.PROMPTS)
 PROMPTS["source_evidence"] = source_evidence.PROMPT
 PROMPTS["contrast"] = contrast.PROMPT
@@ -127,7 +162,7 @@ def valid_score(n):
     return type(n) is int and 1 <= n <= 5
 
 
-def validate(stage, data, source):
+def validate(stage, data, source, *, spans=None):
     if stage == "leak_audit":
         return validate_verdict(data)
     if stage == "source_evidence":
@@ -155,11 +190,18 @@ def validate(stage, data, source):
                 isinstance(row, list) and len(row) <= 2, "expected zero to two excerpts"
             )
             for quote in row:
+                groups = None if spans is None else spans.get(key)
                 check(
                     isinstance(quote, str)
                     and len(quote.strip()) >= 8
-                    and any(quote in unit for unit in source[key]["units"]),
-                    "copy an exact source substring, or use []",
+                    and groups is not None
+                    and len(groups) == len(source[key]["units"])
+                    and any(
+                        contiguous_quote(text, offsets, quote) is not None
+                        for matches in groups
+                        for text, offsets in matches
+                    ),
+                    "copy a contiguous retained source span, or use []",
                 )
                 check(
                     not reported_result(quote) and all(
@@ -283,7 +325,7 @@ def claude_argv():
     ]
 
 
-def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=None, cached_only=False):
+def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=None, cached_only=False, spans=None):
     """Send a sealed payload only after the mandatory leak audit."""
     require_leak_judge(leak_judge)
     if stage == "leak_audit":
@@ -301,7 +343,7 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
     if path.exists():
         old = read(path)
         check(old["request"] == descriptor, "cache request mismatch")
-        validate(stage, old["output"], source)
+        validate(stage, old["output"], source, spans=spans)
         return path
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {path.stem}")
@@ -311,7 +353,7 @@ def invoke(stage, source, cache: Path, model, command, timeout, *, leak_judge=No
         )
         body, _ = reply_text(raw)
         try:
-            result = validate(stage, json.loads(recover_json(body)), source)
+            result = validate(stage, decode_json(recover_json(body)), source, spans=spans)
         except (KeyError, TypeError, ValueError) as exc:
             if attempt == 2:
                 raise ValueError(f"{stage} invalid after three calls: {exc}") from exc

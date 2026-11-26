@@ -149,6 +149,7 @@ _OPENREVIEW = re.compile(
     r"(?<![\w-])openreview\s*\.\s*net\.?\s*/\s*"
     r"(?:forum|pdf|notes?|attachment|revisions|group|profiles?)(?![\w-])"
     r"|\bforum\s*\?\s*id\s*=\s*[a-z0-9]{10}"
+    r"|\battachment\s*\?\s*id\s*="
     r"|(?<!\w)~[a-z][a-z_-]+\d+(?!\w)"
 )
 _ARXIV = re.compile(
@@ -170,11 +171,16 @@ _DECIMAL_SCORE = r"[+-]?\d+(?:\.\d+)?"
 _SCORE_VALUE = rf"(?:{_DECIMAL_SCORE}|(?=[ivx])x{{0,3}}(?:ix|iv|v?i{{0,3}}))"
 _FACT_SEPARATOR = r"[:=\-\u2010-\u2015\u2212]"
 _LABELED_REVIEW = re.compile(r"\b(?:meta|reviewer|my)\s+(?:ratings?|scores?|recommendations?)\b")
+# A review number may be followed by an explanation. A unit or a planned-test
+# word keeps the phrase in ordinary scientific prose.
+_SCORE_TAIL = (
+    r"(?=\s*(?:$|[.!?;,\]\)\(]|because\b|since\b|which\b|where\b|"
+    r"for\s+the\b|out\s+of\b|and\b|or\b|as\s+(?:an?\s+)?(?:example|review)\b))"
+)
 _SCORE = re.compile(
     rf"\b(?P<label>ratings?|scores?|grades?|recommendations?)\s*"
     rf"(?:{_FACT_SEPARATOR}\s*{_SCORE_VALUE}|(?:is|of)\s+{_DECIMAL_SCORE})"
-    r"(?=$|\s*[.!?,;()/\n\u2013\u2014-]|\s+(?:out\s+of|or|versus|vs\.?|"
-    r"(?:for|to)\s+(?:the\s+)?(?:submission|paper|proposal))\b)"
+    + _SCORE_TAIL
 )
 _SCIENTIFIC_SCORE = re.compile(
     r"\b(?:cosine|dot product|similarity|distance|overlap|f1|bleu|rouge|brier|"
@@ -199,15 +205,18 @@ _HEADED_SCORE = re.compile(
     rf"(?:^|\n) *{_SCORE_ATOM} *{_FACT_SEPARATOR} *"
     r"(?:borderline|strong|weak|excellent|good|poor|clear|accept|reject)\b"
 )
+_WRAP = r"[\"'`“”‘’«»()（）\[\]【】]*"
 _DECISION = re.compile(
-    rf"\b(?:decision|recommendation)\s*{_FACT_SEPARATOR}\s*(?:\w+\s+){{0,2}}(?:accept|reject)\w*"
+    rf"\b(?:decision|recommendation|verdict|outcome)\s*{_FACT_SEPARATOR}\s*{_WRAP}\s*"
+    rf"(?:\w+\s+){{0,3}}{_WRAP}\s*(?:accept|reject)\w*"
     r"|\b(?:accept|reject)(?:ed|ance)?\s+as\s+(?:an?\s+)?(?:oral|spotlight|poster)\b"
     r"|\b(?:strong|weak|clear|marginal)\s+(?:accept|reject)(?:ance)?\b"
     r"|\bdesk[\s-]*reject(?:s|ed|ion)?\b"
     r"|\bcamera[\s\-]*ready\b"
     r"|\brecommend(?:ation)?\s+(?:to\s+)?(?:accept|reject)\w*"
     r"|\bvote\s+to\s+(?:accept|reject)\b"
-    r"|(?:决定|建议)\s*[:=]\s*(?:录用|拒稿)"
+    rf"|(?:决定|建议|推荐|结论)\s*[:=：]\s*{_WRAP}\s*(?:录用|拒稿|接受|拒绝|接收)"
+    r"|(?:评分|分数|打分|评级)\s*(?:[:=：]\s*)?\d"
 )
 _AWARD = re.compile(r"\b(?:best|outstanding)\s+paper\b|\bpaper\s+award\b")
 _BARE_ID = re.compile(r"(?<![\w-])[a-z0-9]{10}(?![\w-])")
@@ -223,9 +232,11 @@ _IDENTITY = re.compile(
 )
 _NAME_PART = r"[^\W\d_]+(?:[-'’][^\W\d_]+)*"
 _NAME = rf"{_NAME_PART} +{_NAME_PART}"
-_SIGNATURE = rf"(?:{_NAME}(?: *(?:&|and) *{_NAME})*|{_NAME_PART} *& *{_NAME_PART})"
+_INITIAL_NAME = r"(?:[A-Z]\.\s+){1,3}[A-Z][a-z]+(?:[-'’][A-Z][a-z]+)*"
+_SIGNATURE = rf"(?:{_INITIAL_NAME}|{_NAME}(?: *(?:&|and) *{_NAME})*|{_NAME_PART} *& *{_NAME_PART})"
 _BYLINE = re.compile(rf"(?:^|\n) *(?:(?i:by) +|{_FACT_SEPARATOR} +)(?P<names>{_SIGNATURE})[.!]? *(?=\n|$)")
-_BYLINE_PREFIX = re.compile(rf"(?:^|\n) *(?i:by) +(?P<names>{_NAME})\b")
+_BYLINE_PREFIX = re.compile(rf"(?:^|\n) *(?i:by) +(?P<names>{_INITIAL_NAME}|{_NAME})\b")
+_INITIAL_BYLINE = re.compile(rf"(?:^|\n) *(?P<names>{_INITIAL_NAME})[.!]? *(?=\n|$)")
 _ATTRIBUTION = re.compile(
     rf"\b(?P<verb>written|authored|submitted|signed|prepared|created) +by +(?P<names>{_SIGNATURE})\b",
     re.IGNORECASE,
@@ -344,13 +355,53 @@ def fold_facts(folded: str) -> str:
     return _SPELLED_NUMBER.sub(lambda match: _NUMBER_WORDS[match.group(0)], folded)
 
 
+_KEY_LEMMAS = frozenset({
+    "accept", "accepted", "acceptance", "acceptances", "arxiv", "author", "authors",
+    "award", "awards", "byline", "bylines", "decision", "decisions", "email", "emails",
+    "forum", "forums", "grade", "grades", "outcome", "outcomes", "rating", "ratings",
+    "recommendation", "recommendations", "reject", "rejected", "rejection", "rejections",
+    "score", "scores", "verdict", "verdicts",
+})
+_KEY_PREFIXES = frozenset({
+    "aggregated", "aggregate", "actual", "author", "confidence", "final", "first", "human",
+    "initial", "meta", "official", "original", "overall", "paper", "peer", "published",
+    "prospective", "review", "reviewer", "submission", "target", "venue",
+})
+_KEY_SUFFIXES = frozenset({
+    "address", "addresses", "comment", "comments", "field", "fields", "id", "identifier",
+    "identifiers", "ids", "info", "label", "labels", "list", "name", "names", "status",
+    "text", "value", "values",
+})
+_STATUS_OWNERS = _KEY_PREFIXES | {"decision", "outcome", "paper", "review", "reviewer", "submission", "venue"}
+
+
+def _key_word_blocked(word: str) -> bool:
+    if word in _KEY_LEMMAS:
+        return True
+    if word.endswith("status") and word[:-len("status")] in _STATUS_OWNERS:
+        return True
+    for lemma in _KEY_LEMMAS:
+        if word.startswith(lemma) and word[len(lemma):] in _KEY_SUFFIXES:
+            return True
+        if word.endswith(lemma) and word[:-len(lemma)] in _KEY_PREFIXES:
+            return True
+    return False
+
+
 def score_field(key: object) -> bool:
-    compact = _compact(normalized_fact_text(str(key)))
-    return compact in _COMPACT_SCORE_FIELDS or _KEY_OUTCOME.fullmatch(compact) is not None
+    """Reject a key that names a decision, score, or identity, in any nesting."""
+    text = normalized_fact_text(str(key))
+    compact = _compact(text)
+    if compact in _COMPACT_SCORE_FIELDS or _KEY_OUTCOME.fullmatch(compact) is not None:
+        return True
+    words = [word for word in re.split(r"[^0-9a-z]+", text) if word]
+    if "status" in words and set(words) & _STATUS_OWNERS:
+        return True
+    return any(_key_word_blocked(word) for word in words)
 
 
 def _has_signature(text: str) -> bool:
-    for pattern in (_BYLINE, _BYLINE_PREFIX, _ATTRIBUTION):
+    for pattern in (_BYLINE, _BYLINE_PREFIX, _INITIAL_BYLINE, _ATTRIBUTION):
         for match in pattern.finditer(text):
             names = match["names"]
             if _SCIENTIFIC_ATTRIBUTION.fullmatch(names.casefold()):

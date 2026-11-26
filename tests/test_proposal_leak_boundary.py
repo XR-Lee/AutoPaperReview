@@ -270,8 +270,9 @@ class ProposalLeakBoundaryTests(TestCase):
     def test_legacy_audit_rejects_a_partial_quote_from_a_completed_result_unit(self):
         unit = "The catalogue is simple, and the tray trial showed that it saves time."
         source = {"r1.novelty": {"dimension": "novelty", "score": 4, "units": [unit]}}
+        spans = {"r1.novelty": [[(unit, list(range(len(unit))))]]}
         with self.assertRaisesRegex(ValueError, "drop measured outcomes"):
-            stages.validate("audit", {"r1.novelty": ["The catalogue is simple"]}, source)
+            stages.validate("audit", {"r1.novelty": ["The catalogue is simple"]}, source, spans=spans)
             self.assertNotIn("evidence", str(seen[0][1]))
 
     def test_tampered_judge_receipts_block_new_stage_and_cannot_be_reused(self):

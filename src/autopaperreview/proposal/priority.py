@@ -15,7 +15,7 @@ from .sanitized import sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
-from .prior_index import eligible_history, historical_bounds, retrieve, words
+from .prior_index import eligible_history, historical_bounds, proposal_body, retrieve, words
 from .stages import PROMPTS, SECTIONS, claude_argv, invoke, validate
 
 
@@ -152,8 +152,9 @@ def rank(
         "exclude_arxiv": arxiv,
         "exclude_title": title,
     }
-    history_options = {**history_exclusions, "target_year": year, "cutoff_ms": cutoff_ms}
     packet = sanitize_proposal(packet)
+    history_exclusions["exclude_text"] = proposal_body(packet)
+    history_options = {**history_exclusions, "target_year": year, "cutoff_ms": cutoff_ms}
     if legacy is not None:
         legacy = sanitize_proposal(legacy)
     if not any(packet.values()):
@@ -269,8 +270,10 @@ def rank(
                     abstract,
                     exclude_forum=forum,
                     exclude_arxiv=arxiv,
+                    exclude_key=exclude_key,
                     target_year=year,
                     cutoff_ms=cutoff_ms,
+                    identity=packet,
                 )
             source = {
                 "proposal": packet,

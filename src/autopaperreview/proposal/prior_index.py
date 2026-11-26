@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
+from collections.abc import Mapping
 from contextlib import closing
 from math import log
 from pathlib import Path
@@ -71,17 +71,72 @@ def _positive_stamp(value: object) -> int | None:
     return number
 
 
+def _collect_splits(value, names: list[str]) -> bool:
+    """Append every declared split. Return false when one is not text."""
+    if isinstance(value, dict):
+        for field in _SPLIT_FIELDS:
+            item = value.get(field)
+            if item is None or isinstance(item, str) and not item.strip():
+                continue
+            if not isinstance(item, str):
+                return False
+            names.append(item.strip().casefold())
+        for child in value.values():
+            if isinstance(child, (dict, list)) and not _collect_splits(child, names):
+                return False
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)) and not _collect_splits(child, names):
+                return False
+    return True
+
+
 def development_row(row) -> bool:
-    """Every non-blank split alias must identify a development record."""
-    names = []
-    for field in _SPLIT_FIELDS:
-        value = row.get(field)
-        if value is None or isinstance(value, str) and not value.strip():
-            continue
-        if not isinstance(value, str):
-            return False
-        names.append(value.strip().casefold())
-    return bool(names) and all(name in _DEVELOPMENT_SPLITS for name in names)
+    """Every declared split, including nested ones, must be development."""
+    if not isinstance(row, dict):
+        return False
+    names: list[str] = []
+    if not _collect_splits(row, names):
+        return False
+    top = [
+        row[field].strip().casefold()
+        for field in _SPLIT_FIELDS
+        if isinstance(row.get(field), str) and row[field].strip()
+    ]
+    return bool(top) and all(name in _DEVELOPMENT_SPLITS for name in names)
+
+
+def proposal_body(value) -> str:
+    """Normalized text of a proposal object, ignoring key order."""
+    if isinstance(value, str):
+        return norm_title(value)
+    if isinstance(value, Mapping):
+        return norm_title(" ".join(
+            value[key] for key in sorted(value) if isinstance(value[key], str) and value[key].strip()
+        ))
+    return ""
+
+
+def same_document(proposal, title, abstract) -> bool:
+    """True when a prior row repeats the proposal title, abstract, or full text."""
+    if not isinstance(proposal, Mapping):
+        return False
+    parts = [
+        norm_title(value)
+        for value in proposal.values()
+        if isinstance(value, str) and value.strip()
+    ]
+    if not parts:
+        return False
+    joined = proposal_body(proposal)
+    row_title = norm_title(title or "")
+    row_abstract = norm_title(abstract or "")
+    if row_title and row_title in parts:
+        return True
+    if row_abstract and (row_abstract in parts or row_abstract == joined):
+        return True
+    row_joined = norm_title(f"{title or ''} {abstract or ''}".strip())
+    return bool(row_joined) and row_joined == joined
 
 
 def historical_bounds(target_year, cutoff_ms) -> tuple[int, int]:
@@ -114,9 +169,14 @@ def latest_stamp(values) -> int | None:
     return max(stamps)
 
 
-def eligible_history(row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="", exclude_title=""):
+def eligible_history(
+    row, bounds=None, *, exclude_key="", exclude_forum="", exclude_arxiv="",
+    exclude_title="", exclude_abstract="", exclude_text="",
+):
     """Check development provenance, all known availability clocks and self-matches."""
     if not isinstance(row, dict) or not development_row(row):
+        return False
+    if exclude_text and proposal_body(row.get("proposal")) == exclude_text:
         return False
     year = _positive_stamp(row.get("year"))
     revision = latest_stamp(row.get(field) for field in _REVISION_FIELDS)
@@ -134,6 +194,9 @@ def eligible_history(row, bounds=None, *, exclude_key="", exclude_forum="", excl
         return False
     wanted_title = norm_title(exclude_title)
     if wanted_title and norm_title(str(row.get("title") or "")) == wanted_title:
+        return False
+    wanted_abstract = norm_title(exclude_abstract)
+    if wanted_abstract and norm_title(str(row.get("abstract") or "")) == wanted_abstract:
         return False
     arxiv = norm_arxiv(exclude_arxiv)
     if arxiv:
@@ -197,15 +260,28 @@ def _connect(db, *, readonly=False):
     return sqlite3.connect(db)
 
 
+def _record_key(row) -> str:
+    key = row.get("key")
+    if key is None:
+        return ""
+    if type(key) is bool or type(key) not in (str, int):
+        raise ValueError("prior record key must be a string or integer")
+    return str(key).strip()
+
+
 def build(corpus: Path, db: Path):
+    from .leak_audit import decode_json
+
     with corpus.open(encoding="utf-8") as source, closing(_connect(db)) as conn:
         conn.execute(
             "CREATE VIRTUAL TABLE papers USING fts5("
             "title, abstract, year UNINDEXED, revision UNINDEXED, forum UNINDEXED, "
-            "arxiv UNINDEXED, split UNINDEXED, available_ms UNINDEXED)"
+            "arxiv UNINDEXED, split UNINDEXED, available_ms UNINDEXED, key UNINDEXED)"
         )
         for line in source:
-            p = json.loads(line)
+            if not line.strip():
+                continue
+            p = decode_json(line)
             if re.search(
                 r"pathogen|viral vector|malware|weaponi|exploit development|weapon design|protein engineering",
                 p["title"] + " " + p["abstract"],
@@ -215,12 +291,13 @@ def build(corpus: Path, db: Path):
             if not eligible_history(p):
                 continue
             conn.execute(
-                "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     p["title"], p["abstract"], _positive_stamp(p["year"]),
                     latest_stamp(p.get(field) for field in _REVISION_FIELDS), p.get("forum"),
                     next(iter(_arxiv_identifiers(p)), ""), "dev",
                     latest_stamp(p.get(field) for field in _HISTORY_TIME_FIELDS),
+                    _record_key(p),
                 ),
             )
         conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
@@ -244,12 +321,15 @@ def retrieve(
     *,
     exclude_forum="",
     exclude_arxiv="",
+    exclude_key="",
     target_year=None,
     cutoff_ms=None,
+    identity=None,
 ):
     from .sanitized import sanitize_proposal
 
     proposal = sanitize_proposal(proposal)
+    identity = proposal if identity is None else sanitize_proposal(identity)
     bounds = historical_bounds(target_year, cutoff_ms)
     content = " ".join(x for x in proposal.values() if isinstance(x, str))
     counts = Counter(words(content))
@@ -264,19 +344,30 @@ def retrieve(
         required = ("title", "abstract", "year", "forum")
         if not split_fields or not revision_fields or not set(required).issubset(columns):
             return []
+        if exclude_key and "key" not in columns:
+            return []
         arxiv_fields = tuple(k for k in _ARXIV_FIELDS if k in columns)
         timeline_fields = tuple(k for k in _HISTORY_TIME_FIELDS if k in columns)
         aliases = (*timeline_fields, *split_fields, *arxiv_fields)
-        eligibility_args = ", ".join((*required, *aliases))
+        key_field = ("key",) if "key" in columns else ()
+        eligibility_args = ", ".join((*required, *aliases, *key_field))
         revisions = ", ".join(revision_fields)
 
         def eligible(title, abstract, year, forum, *values):
-            row = dict(zip(aliases, values, strict=True))
+            if key_field:
+                *alias_values, key = values
+            else:
+                alias_values, key = values, ""
+            row = dict(zip(aliases, alias_values, strict=True))
             if not isinstance(title, str) or not isinstance(abstract, str):
                 return False
-            row.update(title=title, abstract=abstract, year=year, forum=forum)
+            row.update(title=title, abstract=abstract, year=year, forum=forum, key=key)
+            if same_document(identity, title, abstract):
+                return False
             if not eligible_history(
-                row, bounds, exclude_forum=exclude_forum, exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
+                row, bounds, exclude_key=exclude_key, exclude_forum=exclude_forum,
+                exclude_arxiv=exclude_arxiv, exclude_title=exclude_title,
+                exclude_abstract=exclude_abstract,
             ):
                 return False
             t = set(words(title))

@@ -499,22 +499,22 @@ class AuditAndCohortTests(unittest.TestCase):
         text = audited["proposal"]["mechanism"]
         self.assertEqual(text, "Gather the tokens.")
         self.assertNotIn("Oral", text)
-        quote_source = {
-            "r1.novelty": {
-                "units": ["The pairing is creative. Decision: Accept as Oral."]
-            }
-        }
+        unit = "The pairing is creative. Decision: Accept as Oral."
+        quote_source = {"r1.novelty": {"units": [unit]}}
+        spans = {"r1.novelty": [[(unit, list(range(len(unit))))]]}
         with self.assertRaisesRegex(ValueError, "identity text"):
             stages.validate(
                 "audit",
                 {"r1.novelty": ["Decision: Accept as Oral."]},
                 quote_source,
+                spans=spans,
             )
         self.assertEqual(
             stages.validate(
                 "audit",
                 {"r1.novelty": ["The pairing is creative."]},
                 quote_source,
+                spans=spans,
             )["r1.novelty"],
             ["The pairing is creative."],
         )
@@ -589,7 +589,8 @@ class AuditAndCohortTests(unittest.TestCase):
         self.assertIn("not in the repository", absent.stderr)
         self.assertNotIn("reproduced from committed artifacts", absent.stderr)
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "inputs"
+            root.mkdir()
             ids = ["synthetic-a", "synthetic-b"]
             manifest = {
                 "version": 1,
@@ -626,14 +627,14 @@ class AuditAndCohortTests(unittest.TestCase):
                     "--stratified-draws",
                     "10",
                     "--output",
-                    str(root / "metrics.json"),
+                    str(root.parent / "metrics.json"),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            saved = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+            saved = json.loads((root.parent / "metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["n"], 2)
             self.assertNotIn("not yet reproducible", completed.stdout)
             self.assertNotIn("published_headlines", saved)

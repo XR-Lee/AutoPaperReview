@@ -12,10 +12,9 @@ CLI such as Claude Code or Codex CLI:
 - The process runs in an empty temporary directory with the scrubbed
   environment of the CVPR tier command backend: credential variables and
   ``APR_*`` do not pass through.
-- stdout is the reply. Claude Code's ``--output-format json`` envelope is
-  unwrapped, and its usage is kept. One JSON object is then recovered with
-  the CVPR tier rules: the whole reply, a ``json`` fence, or the last
-  balanced object.
+- stdout must be exactly one JSON value. Any stderr content fails the call.
+  A successful Claude Code ``--output-format json`` envelope is JSON and is
+  unwrapped afterwards. Prose, fences, and trailing text are not a reply.
 
 Sampling settings (``temperature``, ``response_format``) are not passed on.
 APR cannot see where the CLI sends the manuscript, so the session treats a
@@ -180,6 +179,20 @@ def recover_restarted_object(text: str) -> str:
     return candidate
 
 
+def _require_json_stdout(stdout: str) -> None:
+    """Accept exactly one JSON value. Do not recover a verdict from prose."""
+    text = stdout.strip().lstrip("\ufeff")
+    if not text:
+        raise CommandTransportError("command wrote nothing to stdout")
+    try:
+        decoder = json.JSONDecoder()
+        _value, end = decoder.raw_decode(text)
+    except json.JSONDecodeError as exc:
+        raise CommandTransportError("command stdout is not JSON") from exc
+    if text[end:].strip():
+        raise CommandTransportError("command stdout is not JSON")
+
+
 def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeout: float) -> tuple[str, float]:
     """Run one call. Returns stdout and the latency in seconds."""
     work = Path(tempfile.mkdtemp(prefix="apr-command-"))
@@ -215,11 +228,13 @@ def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeou
             raise CommandTransportError(f"command failed to start: {exc}") from exc
         latency = round(time.perf_counter() - started, 3)
         stdout = completed.stdout.decode("utf-8", errors="replace")
+        stderr = completed.stderr.decode("utf-8", errors="replace")
         if completed.returncode != 0:
-            detail = (completed.stderr.decode("utf-8", errors="replace") or stdout).strip()[:500]
+            detail = (stderr or stdout).strip()[:500]
             raise CommandTransportError(f"command exited {completed.returncode}: {detail}")
-        if not stdout.strip():
-            raise CommandTransportError("command wrote nothing to stdout")
+        if stderr.strip():
+            raise CommandTransportError("command wrote to stderr")
+        _require_json_stdout(stdout)
         return stdout, latency
     finally:
         shutil.rmtree(work, ignore_errors=True)

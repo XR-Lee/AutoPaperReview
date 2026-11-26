@@ -21,7 +21,7 @@ from autopaperreview.command_transport import (
     reply_text,
 )
 from autopaperreview.model_exec import ModelExecutionError, OpenAICompatibleAdapter
-from autopaperreview.pipeline import run_pipeline
+from autopaperreview.pipeline import PipelineError, run_pipeline
 from tests.test_model_exec import (
     MANUSCRIPT,
     SECRET,
@@ -117,22 +117,25 @@ class CommandTransportCase(unittest.TestCase):
 
 
 class CommandAdapterTests(CommandTransportCase):
-    def test_schema_retry_uses_the_final_complete_judgment_after_a_restart(self) -> None:
+    def test_schema_retry_uses_the_next_exact_json_object(self) -> None:
         final = _contribution()
-        first = final.replace("C1", "C9")
-        broken = '{"items":[{"id":"abandoned'
-        self.replies.write_text(
-            json.dumps({"contributions": ["invalid", first + broken + final]}), encoding="utf-8"
-        )
+        self.replies.write_text(json.dumps({"contributions": ['{"items":[]}', final]}), encoding="utf-8")
         result = self.execute()
         self.assertEqual(len(self.calls()), 2)
         self.assertEqual(result.package.issues[0].id, "I-C1")
         stored = self.root / "scratch" / result.metadata["model_exchanges"][1]["response_path"]
-        self.assertEqual(json.loads(stored.read_bytes())["choices"][0]["message"]["content"], first + broken + final)
+        self.assertEqual(json.loads(stored.read_bytes())["choices"][0]["message"]["content"], final)
 
-    def test_a_recovered_command_reply_must_still_pass_the_schema(self) -> None:
-        reply = _contribution() + '{"items":"abandoned' + '{"items":[]}'
-        self.replies.write_text(json.dumps({"contributions": ["invalid", reply]}), encoding="utf-8")
+    def test_concatenated_stdout_is_not_recovered_into_a_judgment(self) -> None:
+        final = _contribution()
+        broken = '{"items":[{"id":"abandoned'
+        self.replies.write_text(json.dumps({"contributions": [final + broken + final]}), encoding="utf-8")
+        with self.assertRaisesRegex(ModelExecutionError, "not JSON"):
+            self.execute()
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_a_json_reply_must_still_pass_the_schema(self) -> None:
+        self.replies.write_text(json.dumps({"contributions": ['{"items":[]}', '{"items":[]}']}), encoding="utf-8")
         with self.assertRaisesRegex(ModelExecutionError, "after one retry"):
             self.execute()
         self.assertEqual(len(self.calls()), 2)
@@ -156,13 +159,17 @@ class CommandAdapterTests(CommandTransportCase):
         self.assertFalse(Path(call["argv"][call["argv"].index("--system-file") + 1]).exists())
 
     def test_claude_code_json_and_fenced_replies_are_unwrapped(self) -> None:
-        for style in ("fenced", "claude"):
-            with self.subTest(style=style):
-                self.log.unlink(missing_ok=True)
-                result = self.execute("--style", style)
-                self.assertTrue(result.package.issues)
+        self.log.unlink(missing_ok=True)
+        result = self.execute("--style", "claude")
+        self.assertTrue(result.package.issues)
         totals = result.metadata["usage_totals"]
         self.assertEqual(totals, {"prompt_tokens": 10, "completion_tokens": 7, "total_tokens": 17})
+
+    def test_fenced_stdout_is_not_a_verdict(self) -> None:
+        with self.assertRaises(ModelExecutionError) as caught:
+            self.execute("--style", "fenced")
+        self.assertIn("not JSON", str(caught.exception))
+        self.assertEqual(len(self.calls()), 1)
 
     def test_credentials_do_not_reach_the_cli(self) -> None:
         with mock.patch.dict(os.environ, {"APR_MODEL_API_KEY": SECRET, "SYNTHETIC_API_TOKEN": SECRET}):
@@ -173,12 +180,14 @@ class CommandAdapterTests(CommandTransportCase):
         self.assertNotIn(SECRET, call["env_values"])
 
     def test_schema_retry_quotes_the_earlier_reply(self) -> None:
-        self.replies.write_text(json.dumps({"contributions": ["not json", _contribution()]}), encoding="utf-8")
+        self.replies.write_text(
+            json.dumps({"contributions": ['{"nope": true}', _contribution()]}), encoding="utf-8"
+        )
         result = self.execute()
         self.assertTrue(result.package.issues)
         first, second = self.calls()
         self.assertNotIn("=== Your earlier reply ===", first["prompt"])
-        self.assertIn("=== Your earlier reply ===\nnot json", second["prompt"])
+        self.assertIn('=== Your earlier reply ===\n{"nope": true}', second["prompt"])
         self.assertIn("Validation failed", second["prompt"])
 
     def test_a_failing_cli_fails_the_judgment_without_transport_retries(self) -> None:
@@ -276,9 +285,9 @@ class CommandPipelineTests(CommandTransportCase):
         self.assertEqual(len(self.calls()), 1)
 
         write(self.command("--style", "fenced"))
-        changed = run_pipeline(config).stage("review")
-        assert changed is not None
-        self.assertNotEqual(changed.signature, first_signature)
+        with self.assertRaises(PipelineError) as caught:
+            run_pipeline(config)
+        self.assertIn("not JSON", str(caught.exception))
         self.assertEqual(len(self.calls()), 2)
 
 

@@ -32,7 +32,9 @@ from .sanitized import (
 
 
 def read(path: Path) -> Any:
-    return json.loads(read_text(path))
+    from .leak_audit import decode_json
+
+    return decode_json(read_text(path))
 
 
 def digest(value: Any) -> str:
@@ -235,6 +237,23 @@ def retained_label_text(
 def filter_conclusion_sentences(text: str) -> str:
     """Drop label leaks and reported-result sentences from audited prose."""
     return retained_label_text(text, screen_results=True)[0]
+
+
+def contiguous_quote(text: str, offsets, quote: str, *, start_at: int = 0):
+    """Return the cleaned start and original offset of one contiguous occurrence."""
+    if not isinstance(text, str) or not isinstance(quote, str) or not quote:
+        return None
+    start = text.find(quote, start_at)
+    while start >= 0:
+        window = tuple(offsets[start : start + len(quote)])
+        if (
+            len(window) == len(quote)
+            and window[0] is not None
+            and all(offset == window[0] + index for index, offset in enumerate(window))
+        ):
+            return start, window[0]
+        start = text.find(quote, start + 1)
+    return None
 
 
 _GROUP_YEAR = re.compile(r"ICLR\.cc/(20\d{2})/")
@@ -605,7 +624,9 @@ def snapshot_cases(
         submissions[n["id"]] = sub
     with open_input(forums) as stream:
         for line in stream:
-            notes = json.loads(line)["notes"]
+            from .leak_audit import decode_json
+
+            notes = decode_json(line)["notes"]
             for fid in {n.get("forum") for n in notes} & submissions.keys():
                 case = iclr_case(submissions[fid], notes, group, allow_late=allow_late)
                 if case:

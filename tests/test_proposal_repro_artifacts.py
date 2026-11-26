@@ -197,7 +197,7 @@ class ProposalArtifactTests(unittest.TestCase):
                 for output in (source, symlink, hardlink):
                     with self.subTest(arg=arg, output=output.name), redirect_stderr(StringIO()) as error, redirect_stdout(StringIO()) as stdout:
                         self.assertEqual(reproduce_proposal_rank.main([*args, "--output", str(output)]), 2)
-                        self.assertIn("output must be distinct", error.getvalue())
+                        self.assertRegex(error.getvalue(), "overlap|symbolic links|distinct")
                         self.assertFalse(stdout.getvalue())
                     self.assertEqual(source.read_text(encoding="utf-8"), "{}\n")
 

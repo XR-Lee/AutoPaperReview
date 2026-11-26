@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import os
+import shutil
 import stat
 import tempfile
 from contextlib import contextmanager
@@ -45,6 +48,66 @@ def open_output_directory(path: Path) -> int:
         os.close(directory)
         raise
     return directory
+
+
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _within(parent: Path, child: Path) -> bool:
+    parent = _absolute(parent)
+    child = _absolute(child)
+    if child == parent:
+        return True
+    try:
+        child.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _same_file(path: Path, other: Path) -> bool:
+    try:
+        if not path.exists() or not other.is_file():
+            return False
+        return file_identity(path.stat()) == file_identity(other.stat())
+    except OSError:
+        return False
+
+
+def assert_output_isolated(path: Path, *input_roots: Path) -> None:
+    """Refuse an output that overlaps the repository, checksums, or an input directory."""
+    from .repro_metrics import repo_repro_dir
+
+    output = _absolute(path)
+    roots = [_repository_root(), repo_repro_dir(), *input_roots]
+    for root in roots:
+        if root is not None and (_within(root, output) or _within(output, root)):
+            raise ValueError("output must not overlap committed repository files or the input directory")
+    checksums = repo_repro_dir()
+    for name in ("external-sha256.json", "external-hmac-sha256.json", "aggregates.json"):
+        if _same_file(output, checksums / name):
+            raise ValueError("output must not overlap committed repository files or the input directory")
+
+
+def rename_exclusive(src_dirfd: int, src_name: str, dst_dirfd: int, dst_name: str) -> None:
+    """Move a new file onto a name that must not already exist."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = libc.renameat2
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        int(src_dirfd),
+        os.fsencode(src_name),
+        int(dst_dirfd),
+        os.fsencode(dst_name),
+        1,  # RENAME_NOREPLACE
+    ) == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise ValueError(_ALIAS)
+    raise OSError(error, os.strerror(error), dst_name)
 
 
 def remove_temporary(directory: int, name: str) -> None:
@@ -109,15 +172,65 @@ class _Output:
         if self.inputs.setdefault(_absolute(path), identity) != identity:
             raise ValueError("input file identity changed while preparing the result")
 
-    def publish(self, content: str) -> None:
+    def publish(self, content: str, *, replace: bool = False) -> None:
+        """Publish content from a fresh directory that cannot be an input file.
+
+        A new destination is published with a non-replacing rename. An existing
+        file is rewritten through the file descriptor opened after the identity
+        check, so an input moved onto that name is left unchanged.
+        """
         self.check()
-        temp = stage_output(self.directory, content)
+        original = self._destination_identity()
+        if original is not None and not replace:
+            raise ValueError(_ALIAS)
+        if original is not None and original in self.inputs.values():
+            raise ValueError(_ALIAS)
+        staging = Path(tempfile.mkdtemp(prefix="apr-output-"))
+        staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
+            staging_identity = file_identity(os.fstat(staging_fd))
+            if staging_identity == self.parent_identity or staging_identity in self.inputs.values():
+                raise ValueError(_ALIAS)
+            temp = stage_output(staging_fd, content)
             self.check()
-            os.replace(temp, self.path.name, src_dir_fd=self.directory, dst_dir_fd=self.directory)
+            current = self._destination_identity()
+            if current != original or (current is not None and current in self.inputs.values()):
+                raise ValueError(_ALIAS)
+            if current is None:
+                rename_exclusive(staging_fd, temp, self.directory, self.path.name)
+            else:
+                self._rewrite_verified(staging_fd, temp, original)
             self.check()
         finally:
-            remove_temporary(self.directory, temp)
+            os.close(staging_fd)
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def _rewrite_verified(self, staging_fd: int, temp_name: str, original: tuple[int, int]) -> None:
+        """Write into the already-open destination inode. Never unlink a swapped path."""
+        try:
+            dest = os.open(self.path.name, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=self.directory)
+        except OSError as exc:
+            raise ValueError(_ALIAS) from exc
+        try:
+            info = os.fstat(dest)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or file_identity(info) != original
+                or original in self.inputs.values()
+            ):
+                raise ValueError(_ALIAS)
+            with os.fdopen(os.open(temp_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=staging_fd), "rb") as source:
+                payload = source.read()
+            os.ftruncate(dest, 0)
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(dest, payload[offset:])
+            os.fsync(dest)
+            if self._destination_identity() != original:
+                raise ValueError(_ALIAS)
+        finally:
+            os.close(dest)
 
 
 @contextmanager
@@ -125,6 +238,7 @@ def _pinned_output(path: Path):
     absolute = _absolute(path)
     if path.expanduser().resolve() != absolute:
         raise ValueError(f"{_ALIAS}; output paths cannot traverse symbolic links")
+    assert_output_isolated(absolute)
     try:
         expected = file_identity(absolute.parent.lstat())
     except FileNotFoundError:
@@ -248,7 +362,8 @@ def input_sha256(path: Path) -> str:
 def write_text(path: Path, content: str) -> None:
     active = _active_output(path)
     if active is not None:
-        active.publish(content)
+        # Rewrite only the inode checked before the write. A swapped input is not unlinked.
+        active.publish(content, replace=True)
     else:
         with _pinned_output(path) as output:
-            output.publish(content)
+            output.publish(content, replace=True)
