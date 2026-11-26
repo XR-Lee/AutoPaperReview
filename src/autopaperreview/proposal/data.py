@@ -102,6 +102,11 @@ _RETROSPECTIVE_REVIEW = re.compile(
 _BARE_METRIC = re.compile(
     rf"\b{_METRIC}\s*(?:[:=]|\b(?:is|of|at|reaches)\b)\s*{_QUANTITY}"
 )
+# A metric bound only by a separator is a label, not a completed experiment.
+# ``accuracy was 91%`` stays a result; ``accuracy: 0.91`` and ``准确率: 0.91`` do not.
+_SEPARATOR_METRIC = re.compile(
+    rf"(?:{_METRIC}|准确率|精度|召回率|损失|误差|时延|重建误差|相似度|准确度)\s*[:=]\s*{_QUANTITY}"
+)
 _FORMULA_CONTEXT = re.compile(r"\b(?:formula|equation|synthetic)\b")
 _PROSPECTIVE = re.compile(
     r"\b(?:will|would|could|may|might|should|can|planned|intend(?:s)?|aim(?:s)?|hypothesiz(?:e|es)|"
@@ -118,12 +123,17 @@ def reported_result(text: str) -> bool:
     for clause in _RESULT_CLAUSE.split(normalized_fact_text(text)):
         if _COMPLETED_RESULT.search(clause) or _RETROSPECTIVE_REVIEW.search(clause):
             return True
+        if _SEPARATOR_METRIC.fullmatch(clause.strip()):
+            continue
         formula = _FORMULA_CONTEXT.search(clause) is not None
         for finding in _ASSERTED_RESULT.finditer(clause):
             if _PROSPECTIVE.search(clause[: finding.end()]):
                 continue
             # A quantity on a formula is a definition, not a completed measurement.
             if formula and _BARE_METRIC.fullmatch(finding.group(0)):
+                continue
+            # ``loss: 0.2`` names a metric. ``accuracy was 91%`` does not take this path.
+            if _SEPARATOR_METRIC.fullmatch(finding.group(0).strip()):
                 continue
             return True
     return False

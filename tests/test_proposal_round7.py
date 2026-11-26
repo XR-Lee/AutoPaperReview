@@ -318,14 +318,15 @@ class LegacyRequestTests(TestCase):
         bundle = root / "inputs" / "bundle"
         bundle.mkdir(parents=True)
         write(bundle / "candidate.json", source)
-        write(root / "cache" / "compress" / "receipt.json", entry)
+        name = digest(request) + ".json"
+        write(root / "cache" / "compress" / name, entry)
         write(root / "runs" / "synthetic" / "compress.json", {
             "bundle": "bundle",
-            "cache": "cache/compress/receipt.json",
+            "cache": f"cache/compress/{name}",
             "model": "stub-model",
             "command_sha256": "a" * 64,
         })
-        return case, entry
+        return case, entry, root / "cache" / "compress" / name
 
     def _request(self, source):
         return {
@@ -341,11 +342,11 @@ class LegacyRequestTests(TestCase):
         source = {"s1": PLAN}
         with TemporaryDirectory(prefix="apr-round7-legacy-") as folder:
             root = Path(folder)
-            case, entry = self._workspace(root, self._request(source))
+            case, entry, cache_path = self._workspace(root, self._request(source))
             self.assertEqual(runner.stage_result(root, case, "compress")["output"]["problem"]["text"], PLAN)
             reordered = {key: self._request(source)[key] for key in reversed(tuple(self._request(source)))}
             entry["request"] = reordered
-            write(root / "cache" / "compress" / "receipt.json", entry)
+            write(cache_path, entry)
             self.assertEqual(runner.stage_result(root, case, "compress")["attempts"], 1)
             for name, mutate in (
                 ("added", lambda req: req.update(extra=True)),
@@ -356,7 +357,7 @@ class LegacyRequestTests(TestCase):
                 changed = self._request(source)
                 mutate(changed)
                 entry["request"] = changed
-                write(root / "cache" / "compress" / "receipt.json", entry)
+                write(cache_path, entry)
                 with self.assertRaisesRegex(ValueError, "stale"):
                     runner.stage_result(root, case, "compress")
 

@@ -122,6 +122,10 @@ def stage_result(root, case, stage):
     }
     if not same_model_value(req, descriptor):
         raise ValueError(message)
+    # The cache file is the digest of this descriptor. A pointer and a receipt
+    # that were rewritten together still name the old file, so they are stale.
+    if Path(str(ptr.get("cache") or "")).stem != digest(descriptor):
+        raise ValueError(message)
     require_business_receipt(entry, stage)
     reply = entry.get("reply")
     if not isinstance(reply, str) or payload_sha256(reply) != entry.get("reply_sha256"):

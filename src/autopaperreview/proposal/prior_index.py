@@ -645,10 +645,12 @@ def eligible_history(
 ):
     """Check development provenance, all known availability clocks and self-matches.
 
-    Exact and reordered copies are excluded in code. A near-copy stays eligible
-    only when the history judge returns ``relation=distinct``. A missing judge,
-    a failed judge, or any answer other than ``relation=same`` or
-    ``relation=distinct`` stops the history step.
+    Exact and reordered copies are excluded in code. Year, revision, availability,
+    and known identifiers are applied before any judge call, so a row that fails
+    those checks is dropped even when the judge would not return a relation.
+    A near-copy that survives those checks stays eligible only when the history
+    judge returns ``relation=distinct``. A missing judge, a failed judge, or any
+    answer other than ``relation=same`` or ``relation=distinct`` stops the history step.
     """
     if not isinstance(row, dict) or not development_row(row):
         return False
@@ -661,12 +663,6 @@ def eligible_history(
         or _same_content(proposal, exclude_text)
     ):
         return False
-    judge = history_judge if history_judge is not None else _HISTORY_JUDGE.get()
-    if exclude_text and _borderline_history(proposal, exclude_text):
-        if judge is None:
-            raise HistoryJudgeError("history comparison requires a judge")
-        if _judge_same_study(proposal, exclude_text, judge):
-            return False
     years: list = []
     _collect_years(row, years, skip_opinions=True)
     parsed_years = [_positive_stamp(value) for value in years]
@@ -706,6 +702,12 @@ def eligible_history(
     if arxiv:
         searchable = " ".join(str(row.get(field) or "") for field in ("title", "abstract", "forum"))
         if arxiv in identifiers or arxiv in unquote(searchable).casefold():
+            return False
+    judge = history_judge if history_judge is not None else _HISTORY_JUDGE.get()
+    if exclude_text and _borderline_history(proposal, exclude_text):
+        if judge is None:
+            raise HistoryJudgeError("history comparison requires a judge")
+        if _judge_same_study(proposal, exclude_text, judge):
             return False
     return True
 
@@ -794,7 +796,11 @@ def calibration_rows(bank, bounds, *, excerpt_field, **exclusions):
     """Yield distinct examples with a dated grade and only eligible opinion text."""
     keys = set()
     for row in bank:
-        if not eligible_history(row, bounds, **exclusions) or "key" not in row or "target" not in row:
+        # A missing key or target drops the row before eligibility, so a near-copy
+        # without a training target never reaches the history judge.
+        if not isinstance(row, dict) or "key" not in row or "target" not in row:
+            continue
+        if not eligible_history(row, bounds, **exclusions):
             continue
         key = row["key"]
         if type(key) not in (int, str) or key in keys:

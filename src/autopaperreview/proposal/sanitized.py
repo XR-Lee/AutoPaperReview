@@ -582,6 +582,8 @@ _DECISION_WORDS = frozenset({
 _STATUS_HEADS = frozenset({
     "decision", "verdict", "outcome", "status", "recommendation", "recommendations",
     "estado", "dictamen", "puntuacion", "calificacion", "puntaje", "resultado", "resolucion",
+    "review", "reviews", "reviewer", "rebuttal", "workflow", "phase", "progress", "tracking",
+    "revision", "meta", "situacion", "tramite", "etapa", "fase", "seguimiento", "arbitraje",
     "决定", "结论", "建议", "推荐", "状态", "总分", "总评", "评分", "审稿", "评审",
 })
 _STATUS_BINDERS = frozenset({
@@ -786,16 +788,19 @@ _LABEL_SEPARATORS = frozenset({":", "=", "|", "-", "—", "–", "－"})
 _LABEL_VALUES = _DECISION_WORDS | _STATUS_ABBREV | {"major", "minor", "大修", "小修", "待审"}
 _DECISION_PHRASES = frozenset({
     "major revision", "minor revision", "weak accept", "strong accept", "weak reject",
-    "strong reject", "conditional accept", "desk reject", "camera ready", "under review",
-    "in review", "pending review", "accept as poster", "accept as oral", "accept as spotlight",
-    "revision mayor", "revision menor", "aceptado condicional", "修改后录用", "弱接收", "强接收",
-    "revision requested", "cambios mayores", "cambios menores", "decline publication",
-    "publicacion aprobada",
+    "strong reject", "conditional accept", "desk reject", "desk rejected", "camera ready",
+    "under review", "in review", "pending review", "accept as poster", "accept as oral",
+    "accept as spotlight", "revision mayor", "revision menor", "aceptado condicional",
+    "修改后录用", "弱接收", "强接收", "revision requested", "cambios mayores", "cambios menores",
+    "decline publication", "publicacion aprobada", "meta review", "awaiting rebuttal",
+    "in rebuttal", "en revision", "bajo revision", "pendiente de revision", "rechazo de mesa",
 })
 _OUTCOME_WORDS = _DECISION_WORDS | frozenset({
     "publish", "published", "decline", "declined", "selected",
-    "admitido", "admitida", "aprobado", "aprobada",
+    "withdrawn", "withdraw", "rebuttal", "retracted", "retraction",
+    "admitido", "admitida", "aprobado", "aprobada", "retirado", "retirada", "pendiente",
     "收录", "刊登", "不予录用", "已收录",
+    "审稿中", "评审中", "已撤稿", "撤稿", "退稿", "退修", "在审", "复审", "复审中", "修改中", "待修改",
 })
 _LABEL_HEADS = _STATUS_HEADS | frozenset({
     "disposition", "ruling", "resolution", "veredicto", "editorial",
@@ -817,9 +822,17 @@ def _value_phrase(tokens: list[str], start: int) -> str:
     return " ".join(words)
 
 
-_CJK_IDENTITY_MARK = ("通讯作者", "通讯地址", "联系方式", "署名", "作者", "单位", "机构")
-_CJK_SCORE_MARK = ("总分", "总评", "得分", "评分", "评级")
-_CJK_STATUS_MARK = ("终审结果", "审稿意见", "评审意见", "状态", "决定", "结论", "结果")
+_CJK_IDENTITY_MARK = (
+    "通讯作者", "通讯地址", "联系方式", "署名", "作者", "单位", "机构", "实验室", "作者单位",
+)
+_CJK_SCORE_MARK = ("总分", "总评", "得分", "评分", "评级", "分数")
+_CJK_STATUS_MARK = (
+    "终审结果", "审稿意见", "评审意见", "状态", "决定", "结论", "结果", "进度", "流程", "阶段",
+)
+_CJK_SCORE_TAIL = frozenset({"区间", "范围", "结果"})
+_RANGE_HEADS = frozenset({
+    "range", "rango", "intervalo", "interval", "intervals", "区间", "范围",
+})
 _CJK_REVIEW_HINT = ("审", "稿", "终", "评", "本稿", "本文", "论文", "投稿")
 
 
@@ -832,7 +845,9 @@ def _cjk_kind(token: str) -> str | None:
             return "identity"
     hinted = any(hint in token for hint in _CJK_REVIEW_HINT)
     for mark in _CJK_SCORE_MARK:
-        if token.endswith(mark) and (token == mark or hinted):
+        if token == mark or (token.endswith(mark) and hinted):
+            return "score"
+        if token.startswith(mark) and token[len(mark):] in _CJK_SCORE_TAIL:
             return "score"
     for mark in _CJK_STATUS_MARK:
         if token.endswith(mark) and (token == mark or any(hint in token for hint in ("审", "稿", "终", "投稿", "本稿", "论文"))):
@@ -848,6 +863,8 @@ def _label_kinds(token: str) -> set[str]:
         kinds.add("bare")
     if token in _LABEL_HEADS:
         kinds.add("status")
+    if token in _RANGE_HEADS:
+        kinds.add("range")
     if token in _IDENTITY_LABEL_TOKENS:
         kinds.add("identity")
     kind = _cjk_kind(token)
@@ -864,6 +881,22 @@ def _outcome_text(tokens: list[str]) -> bool:
         return True
     text = " ".join(words)
     return any(phrase in text for phrase in _DECISION_PHRASES)
+
+
+def _numeric_range_tokens(tokens: list[str]) -> bool:
+    """A review range such as ``6-8`` or ``6 to 8``, not a single measurement."""
+    words = [token for token in tokens if token in _RANGE_MARKS or token not in _CONTENT_SKIP]
+    for index, token in enumerate(words):
+        if (
+            _is_number(token)
+            and index + 2 < len(words)
+            and words[index + 1] in _RANGE_MARKS
+            and _is_number(words[index + 2])
+        ):
+            return True
+        if token in {"between", "entre", "从"} and any(_is_number(word) for word in words[index:index + 6]):
+            return True
+    return False
 
 
 def _score_text(tokens: list[str]) -> bool:
@@ -901,13 +934,19 @@ def _labeled_fact(tokens: list[str]) -> bool:
         for word in left:
             kinds |= _label_kinds(word)
         qualified = bool(set(left) & _SCORE_QUALIFIERS)
-        metric = bool(set(left) & (_RANGE_METRICS | _SCIENTIFIC_MEASURES))
+        # A hyphen separator keeps only the previous token as the head, but a
+        # scientific measure a few words earlier still makes the value a measurement.
+        scope = tokens[max(0, index - 6):index] if token == "-" else left
+        metric = bool(set(scope) & (_RANGE_METRICS | _SCIENTIFIC_MEASURES))
         if "bare" in kinds and not qualified:
             kinds.discard("bare")
         if metric and not qualified:
             kinds.discard("bare")
             kinds.discard("score")
+            kinds.discard("range")
         if ("score" in kinds or "bare" in kinds) and _score_text(right):
+            return True
+        if "range" in kinds and _numeric_range_tokens(right):
             return True
         if "status" in kinds and _outcome_text(right):
             return True
@@ -919,8 +958,10 @@ def _labeled_fact(tokens: list[str]) -> bool:
 _IDENTITY_LABEL_TOKENS = frozenset({
     "affiliation", "institution", "university", "universidad", "instituto", "department",
     "orcid", "email", "phone", "telephone", "mobile", "author", "authors", "autores",
-    "autoria", "corresponding", "byline", "单位", "机构", "邮箱", "电话", "大学",
-    "作者", "署名", "通讯作者", "通讯地址",
+    "autoria", "autor", "corresponding", "byline", "afiliacion", "correo", "institucion",
+    "contacto", "laboratorio", "laboratory", "institute",
+    "单位", "机构", "邮箱", "电话", "大学", "作者", "署名", "通讯作者", "通讯地址",
+    "实验室", "作者单位", "通讯", "邮箱地址",
 })
 
 
@@ -948,9 +989,15 @@ def _preprint_authorship(text: str) -> bool:
 
 _CELL_LABELS = (
     _STATUS_HEADS | _LABEL_HEADS | _SCORE_LABELS | _IDENTITY_LABEL_TOKENS | _SCORE_QUALIFIERS
+    | _RANGE_HEADS
     | {"score", "scores", "author", "authors", "autor", "autores", "afiliacion", "correo"}
 )
+_HTML_ROW = re.compile(r"(?is)<tr\b[^>]*>(.*?)</tr>")
 _HTML_CELL = re.compile(r"(?is)<t[hd][^>]*>(.*?)</t[hd]>")
+_LATEX_BOUND = re.compile(
+    r"\\(?:textbf|textit|emph|textsc|texttt|underline|mathrm)\*?\s*\{([^{}]{1,80})\}",
+    re.IGNORECASE,
+)
 _BRACKETED_REVIEW = re.compile(
     r"(?i)(?P<label>overall|total|final|reviewer|meta|official|rating|ratings|grade|grades|"
     r"score|scores|puntuacion|calificacion|puntaje|nota|总分|总评|评分)"
@@ -992,6 +1039,9 @@ def _review_cell_value(cell: str) -> bool:
         or folded in _DECISION_PHRASES
     ):
         return True
+    tokens = _construct_tokens(folded)
+    if _outcome_text(tokens) or _score_text(tokens):
+        return True
     words = [part for part in re.split(r"[\s,;]+", folded) if part]
     if any(word in _OUTCOME_WORDS for word in words):
         return True
@@ -1023,12 +1073,17 @@ def _pair_is_fact(label_cell: str, value_cell: str) -> bool:
     }
     if identity:
         return _identity_cell_value(value_cell)
+    metric = bool(parts & (_RANGE_METRICS | _SCIENTIFIC_MEASURES))
+    if label in _RANGE_HEADS and not metric:
+        return _numeric_range_tokens(_construct_tokens(value_cell))
     if label in {"score", "scores"} and not (parts & _SCORE_QUALIFIERS):
-        if parts & (_RANGE_METRICS | _SCIENTIFIC_MEASURES):
+        if metric:
             return False
         folded = _clean_cell(value_cell)
         if _is_number(folded) and "." in folded:
             return False
+    if metric and label not in _IDENTITY_LABEL_TOKENS and label not in _LABEL_HEADS and label not in _STATUS_HEADS:
+        return False
     return _review_cell_value(value_cell)
 
 
@@ -1051,26 +1106,48 @@ def _layout_text(text: str) -> str:
     """
     def promote(match: re.Match) -> str:
         inner = match.group(1).strip()
-        folded = _plain_text(inner).casefold()
-        if any(_label_kinds(token) for token in _construct_tokens(folded)):
-            return f"{inner}: "
-        return match.group(0)
+        tokens = _construct_tokens(_plain_text(inner).casefold())
+        if not tokens or not any(_label_kinds(token) for token in tokens):
+            return match.group(0)
+        # A citation or a long aside stays text. A short head, or a head bound
+        # to a value inside the bracket, becomes the same label line as ``Head: value``.
+        if len(tokens) > 8 and not any(token in _LABEL_SEPARATORS for token in tokens):
+            return match.group(0)
+        return f"{inner}: "
 
-    text = re.sub(r"[【\[]([^【】\[\]\n]{1,40})[】\]]", promote, text)
+    text = re.sub(r"[\(\[【]([^()\[\]【】\n]{1,60})[\)\]】]", promote, text)
     text = _DT_DD.sub(
         lambda match: f"{_without_markup(match.group(1)).strip()}: {_without_markup(match.group(2)).strip()}\n",
         text,
     )
     text = _SETEXT.sub(r"\1: ", text)
     text = re.sub(r"\\item\s*\[([^\]]{1,80})\]", r"\1: ", text)
+    # Drop the tags around a rewritten definition pair. The inserted colon stays.
+    text = _without_markup(text)
     return re.sub(r"\\\\+(?=\s|$)", " ", text)
 
 
-def _table_rows(text: str) -> list[list[str]]:
+def _html_rows(text: str) -> list[list[str]]:
+    """One list of cells per ``<tr>``. Column headers then align with the body row."""
+    found = _HTML_ROW.findall(text)
+    if not found:
+        return []
     rows: list[list[str]] = []
-    html_cells = [_without_markup(cell) for cell in _HTML_CELL.findall(text)]
-    if len(html_cells) >= 2:
-        rows.append(html_cells)
+    for row in found:
+        cells = [_without_markup(cell).strip() for cell in _HTML_CELL.findall(row)]
+        cells = [cell for cell in cells if cell]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _table_rows(text: str) -> list[list[str]]:
+    rows: list[list[str]] = _html_rows(text)
+    if not rows:
+        html_cells = [_without_markup(cell).strip() for cell in _HTML_CELL.findall(text)]
+        html_cells = [cell for cell in html_cells if cell]
+        if len(html_cells) >= 2:
+            rows.append(html_cells)
     for line in _layout_text(text).splitlines():
         if not any(mark in line for mark in ("|", "\t", "&")):
             continue
@@ -1154,6 +1231,26 @@ def _bracketed_review(text: str) -> bool:
     return False
 
 
+def _latex_bound_fact(text: str) -> bool:
+    """``\\textbf{Head} value`` binds the command argument to the following value.
+
+    A metric command such as ``\\textbf{loss}`` is not a review head, so the
+    following quantity stays a measurement.
+    """
+    if "\\" not in text:
+        return False
+    for match in _LATEX_BOUND.finditer(text):
+        label = match.group(1)
+        if not any(_label_kinds(token) for token in _construct_tokens(label)):
+            continue
+        rest = text[match.end():match.end() + 80]
+        rest = re.sub(r"^[\s:：=＝\-—–]*", "", rest)
+        rest = re.split(r"\\\\|&|\n", rest, maxsplit=1)[0]
+        if _pair_is_fact(label, _plain_text(rest)):
+            return True
+    return False
+
+
 def _explicit_construct(text: str) -> bool:
     """Submission status, total score, score range, or inline preprint authorship.
 
@@ -1176,6 +1273,7 @@ def _explicit_construct(text: str) -> bool:
         or _tabular_fact(text)
         or _line_facts(text)
         or _bracketed_review(text)
+        or _latex_bound_fact(text)
         or _REVIEW_STATUS.search(text) is not None
         or _CJK_DECISION.search(text) is not None
         or _CJK_SCORE.search(text) is not None
@@ -1184,16 +1282,54 @@ def _explicit_construct(text: str) -> bool:
     )
 
 
+def _content_line_before(text: str, start: int) -> str:
+    """The previous non-empty line, skipping a setext underline."""
+    earlier = [
+        row.strip() for row in text[:start].splitlines()
+        if row.strip() and not re.fullmatch(r"[-=]{3,}", row.strip())
+    ]
+    return earlier[-1] if earlier else ""
+
+
+def _bare_score_is_measurement(text: str, match: re.Match) -> bool:
+    """A number on the line under a non-review heading is a measurement.
+
+    ``Overall rating`` / ``8`` stays a score. ``Configuration`` / ``0.625`` does not.
+    A number with no heading above it keeps the generic score rule.
+    """
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    line = text[start:len(text) if end < 0 else end]
+    if not re.fullmatch(r"\s*[+-]?\d+(?:\.\d+)?\s*", line):
+        return False
+    previous = _content_line_before(text, start)
+    if not previous or len(previous) > 80 or re.search(r"[.!?]", previous):
+        return False
+    return not any(_label_kinds(token) for token in _construct_tokens(previous))
+
+
+def _parenthetical_is_measurement(text: str, match: re.Match) -> bool:
+    """A decimal in parentheses is a measurement unless a review head is nearby."""
+    if "." not in match.group(0):
+        return False
+    window = text[max(0, match.start() - 80):match.start()]
+    return not any(_label_kinds(token) for token in _construct_tokens(window))
+
+
 def _has_scores(text: str) -> bool:
     if _LABELED_REVIEW.search(text) or _HEADED_SCORE.search(text):
         return True
     for match in _SCORE.finditer(text):
         if match["label"] not in {"score", "scores"} or not _SCIENTIFIC_SCORE.search(text[:match.start()]):
             return True
-    if any(not _SCIENCE_FRACTION.search(text[:match.start()]) for match in _BARE_SCORE.finditer(text)):
+    if any(
+        not _SCIENCE_FRACTION.search(text[:match.start()]) and not _bare_score_is_measurement(text, match)
+        for match in _BARE_SCORE.finditer(text)
+    ):
         return True
     return any(
         not _SCIENTIFIC_NUMBER_REFERENCE.search(text[:match.start()])
+        and not _parenthetical_is_measurement(text, match)
         for match in _PARENTHETICAL_SCORE.finditer(text)
     )
 

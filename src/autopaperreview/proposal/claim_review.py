@@ -78,8 +78,10 @@ def request(stage, body, cache, offline, *, leak_judge=None):
     path = cache / "claims" / stage / (key + ".json")
     if not path.exists():
         legacy = cache / stage / (key + ".json")
-        if legacy.is_file() and same_model_value(read(legacy).get("request"), descriptor):
-            path = legacy
+        if legacy.is_file():
+            loaded = read(legacy)
+            if isinstance(loaded, dict) and same_model_value(loaded.get("request"), descriptor):
+                path = legacy
     if path.exists():
         result = read(path)
         if (not same_model_value(result.get("request"), descriptor)
