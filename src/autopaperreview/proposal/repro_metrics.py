@@ -98,6 +98,12 @@ def _read_external_manifest(name: str) -> dict[str, str]:
     return files
 
 
+def _loads(payload: bytes):
+    from .leak_audit import decode_json
+
+    return decode_json(payload)
+
+
 def published_external_files() -> tuple[str, ...]:
     """Relative names of the files needed for an official reproduction."""
     return tuple(_read_external_manifest(_RAW_MANIFEST))
@@ -150,8 +156,8 @@ def reproduce_headlines(root: Path | None = None) -> dict[str, Any]:
         "fresh",
         numpy,
     )
-    replications = _replication_cohort(json.loads(payloads["replications199/joined.json"]), numpy)
-    nlp = nlp_from_rows(json.loads(payloads["nlp84/deployed-external-rows.json"]))
+    replications = _replication_cohort(_loads(payloads["replications199/joined.json"]), numpy)
+    nlp = nlp_from_rows(_loads(payloads["nlp84/deployed-external-rows.json"]))
     return {
         "published_headlines": PUBLISHED,
         "recomputed": True,
@@ -246,9 +252,9 @@ def _numpy():
 
 
 def _iclr_cohort(payloads: dict[str, bytes], folder: str, predictions_name: str, seed_name: str, numpy) -> dict[str, Any]:
-    lock = json.loads(payloads[f"{folder}/lock.json"])
-    predictions = json.loads(payloads[f"{folder}/{predictions_name}"])
-    references = json.loads(payloads[f"{folder}/references.json"])
+    lock = _loads(payloads[f"{folder}/lock.json"])
+    predictions = _loads(payloads[f"{folder}/{predictions_name}"])
+    references = _loads(payloads[f"{folder}/references.json"])
     tiers = {
         row["forum"]: row["tier"]
         for row in lock["cases"]

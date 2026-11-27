@@ -12,10 +12,11 @@ CLI such as Claude Code or Codex CLI:
 - The process runs in an empty temporary directory with the scrubbed
   environment of the CVPR tier command backend: credential variables and
   ``APR_*`` do not pass through.
-- stdout is the reply. Claude Code's ``--output-format json`` envelope is
-  unwrapped, and its usage is kept. One JSON object is then recovered with
-  the CVPR tier rules: the whole reply, a ``json`` fence, or the last
-  balanced object.
+- The paper-review adapter keeps the historical contract. A zero exit returns
+  stdout as written, including a fenced object, a Claude envelope, or ordinary
+  stderr, and the adapter recovers the reply. Proposal and leak callers pass
+  ``strict=True``: stdout must be exactly one JSON value, and any stderr text
+  fails the call before a verdict is read.
 
 Sampling settings (``temperature``, ``response_format``) are not passed on.
 APR cannot see where the CLI sends the manuscript, so the session treats a
@@ -180,8 +181,36 @@ def recover_restarted_object(text: str) -> str:
     return candidate
 
 
-def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeout: float) -> tuple[str, float]:
-    """Run one call. Returns stdout and the latency in seconds."""
+def _require_json_stdout(stdout: str) -> None:
+    """Accept exactly one JSON value. Do not recover a verdict from prose."""
+    text = stdout.strip().lstrip("\ufeff")
+    if not text:
+        raise CommandTransportError("command wrote nothing to stdout")
+    try:
+        decoder = json.JSONDecoder()
+        _value, end = decoder.raw_decode(text)
+    except json.JSONDecodeError as exc:
+        raise CommandTransportError("command stdout is not JSON") from exc
+    if text[end:].strip():
+        raise CommandTransportError("command stdout is not JSON")
+
+
+def run_command(
+    argv: list[str],
+    *,
+    system: str,
+    prompt: str,
+    model: str,
+    timeout: float,
+    strict: bool = False,
+) -> tuple[str, float]:
+    """Run one call. Returns stdout and the latency in seconds.
+
+    The paper-review adapter keeps the historical contract: a zero exit returns
+    stdout as written, and the adapter unwraps an envelope or a fenced object.
+    Proposal and leak callers pass ``strict`` so any stderr text, or stdout that
+    is not exactly one JSON value, fails before a verdict is read.
+    """
     work = Path(tempfile.mkdtemp(prefix="apr-command-"))
     holder = Path(tempfile.mkdtemp(prefix="apr-command-system-"))
     try:
@@ -214,12 +243,24 @@ def run_command(argv: list[str], *, system: str, prompt: str, model: str, timeou
         except OSError as exc:
             raise CommandTransportError(f"command failed to start: {exc}") from exc
         latency = round(time.perf_counter() - started, 3)
-        stdout = completed.stdout.decode("utf-8", errors="replace")
+        # Paper review keeps replacement characters. Proposal calls reject bad bytes.
+        if strict:
+            try:
+                stdout = completed.stdout.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise CommandTransportError("command stdout is not valid utf-8") from exc
+        else:
+            stdout = completed.stdout.decode("utf-8", errors="replace")
+        stderr = completed.stderr.decode("utf-8", errors="replace")
         if completed.returncode != 0:
-            detail = (completed.stderr.decode("utf-8", errors="replace") or stdout).strip()[:500]
+            detail = (stderr or stdout).strip()[:500]
             raise CommandTransportError(f"command exited {completed.returncode}: {detail}")
         if not stdout.strip():
             raise CommandTransportError("command wrote nothing to stdout")
+        if strict:
+            if stderr.strip():
+                raise CommandTransportError("command wrote to stderr")
+            _require_json_stdout(stdout)
         return stdout, latency
     finally:
         shutil.rmtree(work, ignore_errors=True)

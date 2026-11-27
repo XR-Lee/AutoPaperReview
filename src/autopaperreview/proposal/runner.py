@@ -4,9 +4,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .data import digest, prospective_comments, read, write
-from .leak_audit import payload_sha256, require_leak_judge, serialize_payload
+from .leak_audit import (
+    BUSINESS_REPLY_PROTOCOL, _contains_reported_result, payload_sha256, require_business_receipt,
+    require_leak_judge, same_model_value, serialize_payload, strict_model_value,
+)
 from .sanitized import seal
-from .stages import PROMPTS, audit_packet, invoke, proposal_text, validate
+from .stages import PROMPTS, audit_packet, audit_spans, invoke, proposal_text, validate
 
 
 def run_batch(
@@ -28,22 +31,34 @@ def run_batch(
     def run_one(case):
         bundle = root / "inputs" / case["bundle"]
         target = root / "runs" / case["key"]
+        spans = None
         if stage in ("label", "audit"):
-            packet = prospective_comments(read(bundle / "comments.json"))
+            originals = read(bundle / "comments.json")
+            packet = prospective_comments(originals)
             if stage == "audit":
-                packet = audit_packet(
-                    stage_result(root, case, "label")["output"], packet
-                )
+                labels = stage_result(root, case, "label")["output"]
+                packet = audit_packet(labels, packet)
+                spans = audit_spans(originals, packet, labels)
         elif stage == "compress":
             packet = read(bundle / "candidate.json")
         else:
             previous = stage_result(root, case, "compress")
             packet = proposal_text(previous["output"])
         packet = seal(packet, stage=stage)
-        path = invoke(stage, packet, root / "cache", model, command, timeout, leak_judge=leak_judge)
+        if stage == "compress" and _contains_reported_result(packet):
+            raise ValueError("leak audit blocked a reported result")
+        path = invoke(
+            stage, packet, root / "cache", model, command, timeout,
+            leak_judge=leak_judge, spans=spans,
+        )
         write(
             target / f"{stage}.json",
-            {"bundle": case["bundle"], "cache": str(path.relative_to(root))},
+            {
+                "bundle": case["bundle"],
+                "cache": str(path.relative_to(root)),
+                "model": model,
+                "command_sha256": digest(command),
+            },
         )
 
     selected = [
@@ -69,28 +84,63 @@ def run_batch(
 
 
 def stage_result(root, case, stage):
+    message = f"stale {stage} result; rerun this stage"
     ptr = read(root / "runs" / case["key"] / (stage + ".json"))
-    if ptr["bundle"] != case["bundle"]:
+    # A JSON array, string, or number is not a pointer. Raise a stale result
+    # instead of indexing it.
+    if not isinstance(ptr, dict):
+        raise ValueError(message)
+    if ptr.get("bundle") != case["bundle"]:
         raise ValueError(f"{stage} from a different input bundle")
-    entry = read(root / ptr["cache"])
+    cache = ptr.get("cache")
+    if not isinstance(cache, str) or not cache:
+        raise ValueError(message)
+    entry = read(root / cache)
+    if not isinstance(entry, dict):
+        raise ValueError(message)
     bundle = root / "inputs" / case["bundle"]
+    spans = None
     if stage in ("review", "forecast"):
         source = proposal_text(stage_result(root, case, "compress")["output"])
     elif stage == "audit":
-        source = audit_packet(
-            stage_result(root, case, "label")["output"],
-            prospective_comments(read(bundle / "comments.json")),
-        )
+        originals = read(bundle / "comments.json")
+        labels = stage_result(root, case, "label")["output"]
+        source = audit_packet(labels, prospective_comments(originals))
+        spans = audit_spans(originals, source, labels)
     else:
         source = read(bundle / "candidate.json") if stage == "compress" else prospective_comments(
             read(bundle / "comments.json")
         )
-    req = entry["request"]
-    if (
-        req["stage"] != stage
-        or req["input_sha256"] != payload_sha256(serialize_payload(source))
-        or req["system_sha256"] != digest(PROMPTS[stage])
-    ):
+    req = entry.get("request")
+    if not isinstance(req, dict):
+        raise ValueError(message)
+    # The pointer records the model and command used for this run. A pointer
+    # that does not store both cannot be compared with the receipt, so an old
+    # pointer is stale even when the receipt itself is unchanged.
+    model = ptr.get("model")
+    command_sha256 = ptr.get("command_sha256")
+    if not isinstance(model, str) or not isinstance(command_sha256, str):
+        raise ValueError(message)
+    descriptor = {
+        "stage": stage,
+        "system_sha256": digest(PROMPTS[stage]),
+        "input_sha256": payload_sha256(serialize_payload(source)),
+        "model": model,
+        "command_sha256": command_sha256,
+        "reply_protocol": BUSINESS_REPLY_PROTOCOL,
+    }
+    if not same_model_value(req, descriptor):
+        raise ValueError(message)
+    # The cache file is the digest of this descriptor. A pointer and a receipt
+    # that were rewritten together still name the old file, so they are stale.
+    if Path(str(ptr.get("cache") or "")).stem != digest(descriptor):
+        raise ValueError(message)
+    require_business_receipt(entry, stage)
+    reply = entry.get("reply")
+    if not isinstance(reply, str) or payload_sha256(reply) != entry.get("reply_sha256"):
         raise ValueError(f"stale {stage} result; rerun this stage")
-    validate(stage, entry["output"], source)
+    parsed = strict_model_value(reply)
+    validated = validate(stage, parsed, source, spans=spans)
+    if not same_model_value(entry.get("output"), validated):
+        raise ValueError(f"stale {stage} result; rerun this stage")
     return entry

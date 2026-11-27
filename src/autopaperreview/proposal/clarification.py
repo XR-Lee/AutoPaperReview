@@ -4,13 +4,16 @@ import json
 import re
 from pathlib import Path
 
-from ..command_transport import recover_json, reply_text, run_command
+from ..command_transport import CommandTransportError, reply_text, run_command
 from ..pipeline import run_lock
 from ..public_calibration import assert_local_only
 from . import clarification_protocol as protocol
 from .data import digest, read, reported_result, require_distinct_output, write
 from .file_io import local_output, protect_cli_output
-from .leak_audit import apply_leak_audit, model_leak_judge, payload_sha256, require_leak_judge
+from .leak_audit import (
+    apply_leak_audit, hard_model_failure, model_leak_judge, payload_sha256, require_leak_judge,
+    same_model_value, strict_model_value,
+)
 from .outcome_screen import units
 from .sanitized import require_model_input, seal
 from .stages import claude_argv
@@ -37,27 +40,52 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
     path = cache / stage / (key + ".json")
     if path.exists():
         entry = read(path)
-        if entry["request"] != request:
+        if not isinstance(entry, dict) or not same_model_value(entry.get("request"), request):
             raise ValueError("clarification cache fingerprint mismatch")
-        protocol.validate(stage, entry["output"], data)
-        return key, entry["output"]
+        reply = entry.get("reply")
+        if isinstance(reply, str) and payload_sha256(reply) == entry.get("reply_sha256"):
+            parsed = strict_model_value(reply)
+            protocol.validate(stage, parsed, data)
+            if not same_model_value(entry.get("output"), parsed):
+                raise ValueError("cached output does not match the strict reply")
+            return key, parsed
+        if entry.get("disposition") in {"refusal", "invalid", "scope"}:
+            if not same_model_value(entry.get("output"), abstention):
+                raise ValueError("cached abstention does not match the stage sentinel")
+            return key, abstention
+        if cached_only:
+            raise ValueError(f"missing cached {stage} judgment for request {key}")
     if cached_only:
         raise ValueError(f"missing cached {stage} judgment for request {key}")
     disposition = "response"
     for attempt in range(3):
         try:
-            raw, _ = run_command(command, system=system, model=model, prompt=message, timeout=timeout)
+            raw, _ = run_command(
+                command, system=system, model=model, prompt=message, timeout=timeout, strict=True,
+            )
         except RuntimeError as exc:
             if not re.search(r'"stop_reason"\s*:\s*"refusal"', str(exc)):
                 raise
             output, disposition = abstention, "refusal"
             break
-        body, _ = reply_text(raw)
-        if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", body, re.I):
-            output, disposition = abstention, "refusal"
-            break
         try:
-            output = json.loads(recover_json(body))
+            output = strict_model_value(raw)
+        except CommandTransportError:
+            raise
+        except (ValueError, TypeError, KeyError) as exc:
+            if hard_model_failure(exc):
+                raise
+            body, _ = reply_text(raw)
+            if re.match(r"^\s*(?:sorry|I (?:cannot|can't|won't|am unable to)|I'm unable to)", body, re.I):
+                output, disposition = abstention, "refusal"
+                break
+            if attempt == 2:
+                output, disposition = abstention, "invalid"
+                break
+            feedback = "\nReturn the requested JSON and valid identifiers."
+            message = apply_leak_audit(data, leak_judge, feedback=feedback)
+            continue
+        try:
             protocol.validate(stage, output, data)
         except (ValueError, TypeError, KeyError):
             if attempt == 2:
@@ -69,7 +97,10 @@ def judgment(stage, data, cache, *, cached_only, timeout, leak_judge=None):
         if stage == "question" and not output.get("abstain") and protocol.outside_scope(" ".join(protocol.interpretations(output).values())):
             output, disposition = abstention, "scope"
         break
-    write(path, dict(request=request, output=output, disposition=disposition))
+    record = dict(request=request, output=output, disposition=disposition)
+    if disposition == "response":
+        record.update(reply=raw, reply_sha256=payload_sha256(raw))
+    write(path, record)
     return key, output
 
 

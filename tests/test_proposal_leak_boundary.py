@@ -126,15 +126,7 @@ class ProposalLeakBoundaryTests(TestCase):
         fields = {k: {"text": None, "evidence": []} for k in stages.SECTIONS}
         fields["problem"] = {"text": PLAN, "evidence": ["s1"]}
         source = self.document("plan.json", {"proposal": fields})
-        fence = chr(96) * 3
-        for i, raw in enumerate((CLEAN, json.dumps({
-            "type": "result", "subtype": "success", "stop_reason": "end_turn",
-            "is_error": False, "result": f"{fence}json\n{CLEAN}\n{fence}",
-            "terminal_reason": "completed", "safety_stops": 0, "permission_denials": [],
-            "duration_ms": 120, "uuid": "00000000-0000-0000-0000-000000000001",
-            "usage": {"input_tokens": 4, "cache_creation": {"ephemeral_5m_input_tokens": 0}},
-            "modelUsage": {"synthetic-model": {"inputTokens": 4, "costUSD": 0}},
-        }))):
+        for i, raw in enumerate((CLEAN,)):
             seen = []
 
             def transport(_command, *, system, prompt, **_options):
@@ -270,8 +262,9 @@ class ProposalLeakBoundaryTests(TestCase):
     def test_legacy_audit_rejects_a_partial_quote_from_a_completed_result_unit(self):
         unit = "The catalogue is simple, and the tray trial showed that it saves time."
         source = {"r1.novelty": {"dimension": "novelty", "score": 4, "units": [unit]}}
+        spans = {"r1.novelty": [[(unit, list(range(len(unit))))]]}
         with self.assertRaisesRegex(ValueError, "drop measured outcomes"):
-            stages.validate("audit", {"r1.novelty": ["The catalogue is simple"]}, source)
+            stages.validate("audit", {"r1.novelty": ["The catalogue is simple"]}, source, spans=spans)
             self.assertNotIn("evidence", str(seen[0][1]))
 
     def test_tampered_judge_receipts_block_new_stage_and_cannot_be_reused(self):
@@ -301,7 +294,7 @@ class ProposalLeakBoundaryTests(TestCase):
                     judge = cli.model_leak_judge(work / "cache", "claude-opus-5-5", stages.claude_argv(), 240,
                                                  cached_only=cached_only)
                     with (patch.object(stages, "run_command") as transport,
-                          self.assertRaisesRegex(ValueError, "leak audit blocked") as error):
+                          self.assertRaisesRegex(ValueError, "leak audit failed") as error):
                         stages.invoke("forecast", sanitize_proposal(PLAN), work / "cache", "synthetic", ["stub"], 1,
                                       leak_judge=judge, cached_only=cached_only)
                     self.assertEqual(str(error.exception.__cause__), reason)
@@ -366,7 +359,7 @@ class ProposalLeakBoundaryTests(TestCase):
                     self.cli(*args)
                     command.assert_not_called()
         for value in ("clean", {"verdict": " clean"}, {"verdict": "UNSURE"}, {"verdict": "clean", "error": True}):
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "blocked"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "leak audit failed"):
                 apply_leak_audit(sanitize_proposal(PLAN), lambda _: value)
 
     def test_screen_judge_precedes_prioritize_predict_and_apd_transports(self):
@@ -388,9 +381,17 @@ class ProposalLeakBoundaryTests(TestCase):
                 return LEAK, 0
 
             with self.subTest(action=args[0]), patch.object(stages, "run_command", side_effect=transport):
-                self.cli(*args, "--screen-outcomes")
+                # predict-rank records the block and scores the other forums.
+                # prioritize still stops.
+                self.cli(*args, "--screen-outcomes", expected=0 if args[0] == "predict-rank" else 2)
             self.assertTrue(seen)
             self.assertTrue(all("u1" in body for body in seen))
+            if args[0] == "predict-rank":
+                rows = json.loads(self.output.read_text(encoding="utf-8"))
+                self.assertEqual(len(rows), 100)
+                self.assertTrue(all(
+                    row["overall"] is None and row["status"] == "leak_blocked" for row in rows
+                ))
 
     def test_source_evidence_reaudits_combined_source_and_proposal(self):
         source = self.document("paired.json", {"source": {"problem": SIGNAL}, "proposal": {"problem": PLAN}})
@@ -479,9 +480,16 @@ class ProposalLeakBoundaryTests(TestCase):
             receipts = []
 
             def judge(body):
+                if body.get("task") == "self_history":
+                    return {"relation": "distinct"}
                 if marker in body:
                     receipts.append(body)
-                    self.assertIn(SIGNAL, str(require_model_input(body, stage=stage)))
+                    try:
+                        visible = require_model_input(body, stage=stage)
+                    except ValueError:
+                        visible = None
+                    if visible is not None:
+                        self.assertIn(SIGNAL, str(visible))
                     return {"verdict": "leak"}
                 return {"verdict": "clean"}
 

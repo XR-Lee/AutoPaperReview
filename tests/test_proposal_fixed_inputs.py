@@ -178,8 +178,9 @@ class ProposalFixedInputTests(unittest.TestCase):
             ({**self.manifest(), "version": True}, pred, refs),
         )
         with TemporaryDirectory(prefix="apr-pr70-fix-r1-") as tmp:
-            path = Path(tmp)
-            output = path / "out.json"
+            path = Path(tmp) / "inputs"
+            path.mkdir()
+            output = path.parent / "out.json"
             arguments = ["--output", str(output)]
             for name in ("manifest", "predictions", "references"):
                 arguments += [f"--{name}", str(path / f"{name}.json")]

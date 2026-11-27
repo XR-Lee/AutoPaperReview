@@ -8,15 +8,31 @@ from statistics import mean
 
 from ..public_calibration import assert_local_only
 from . import contrast, merit, outcome_screen, source_evidence
-from .data import apd_cases, assert_no_label_leak, digest, read, require_distinct_output, write
+from .data import (
+    apd_cases, assert_no_label_leak, digest, label_leak_in, read, require_distinct_output, write,
+)
 from .file_io import input_sha256, local_output, protect_cli_output, read_text
-from .leak_audit import apply_leak_audit, model_leak_judge, require_leak_judge
+from .leak_audit import LeakBlocked, apply_leak_audit, model_leak_judge, require_leak_judge
 from .sanitized import sanitize_proposal, seal
 from .exemplars import packet as example_packet
 from .overall_rank import expectation, features, predict
 from .preference import panel, score_panel
-from .prior_index import eligible_history, historical_bounds, retrieve, words
+from .prior_index import (
+    eligible_history, historical_bounds, proposal_body, reset_history_judge, retrieve,
+    use_history_judge, words,
+)
 from .stages import PROMPTS, SECTIONS, claude_argv, invoke, validate
+
+
+def search_query_packet(output):
+    """Turn an English search-term reply into a packet the index can read.
+
+    A model that returns ``{"query": "..."}`` would otherwise be rejected by
+    the proposal field allowlist. The original packet stays the identity.
+    """
+    if isinstance(output, Mapping) and isinstance(output.get("query"), str):
+        return {"problem": output["query"]}
+    return output
 
 
 def grok_command():
@@ -95,7 +111,12 @@ def stage_features(stage, verdict):
 
 def text_packet(doc):
     """Allowlisted flat proposal. Nested objects and score fields do not pass."""
-    return sanitize_proposal(doc)
+    try:
+        return sanitize_proposal(doc)
+    except ValueError as exc:
+        if label_leak_in(doc):
+            raise LeakBlocked(str(exc)) from exc
+        raise
 
 
 _PRIOR_STAGES = {"challenge", "delta", "opinion", "field"}
@@ -151,159 +172,170 @@ def rank(
         "exclude_forum": forum,
         "exclude_arxiv": arxiv,
         "exclude_title": title,
+        "exclude_abstract": abstract if isinstance(abstract, str) else "",
     }
+    packet = text_packet(packet)
+    history_exclusions["exclude_text"] = proposal_body(packet)
     history_options = {**history_exclusions, "target_year": year, "cutoff_ms": cutoff_ms}
-    packet = sanitize_proposal(packet)
-    if legacy is not None:
-        legacy = sanitize_proposal(legacy)
-    if not any(packet.values()):
-        raise ValueError("empty proposal")
-    from .data import reported_result
+    history_token = use_history_judge(leak_judge)
+    try:
+        if legacy is not None:
+            legacy = text_packet(legacy)
+        if not any(packet.values()):
+            raise ValueError("empty proposal")
+        from .data import reported_result
 
-    def _has_reported(doc):
-        return isinstance(doc, Mapping) and any(
-            isinstance(value, str) and value and reported_result(value) for value in doc.values()
-        )
-
-    def _cleared(field, doc):
-        return bool(screen_receipt) and screen_receipt.get(field) == digest(doc)
-
-    # Main, fallback, and legacy packets can each be the text a stage sends.
-    # A screen receipt does not clear a rating, decision, award, or identity.
-    # Reported results in the legacy packet are checked even when no stage
-    # selects that packet, and a receipt for the main packet does not cover it.
-    assert_no_label_leak(packet, where="proposal")
-    if legacy is not None:
-        assert_no_label_leak(legacy, where="fallback proposal")
-    if _has_reported(packet) and not _cleared("cleared_packet", packet):
-        raise ValueError("remove reported outcomes before ranking")
-    if _has_reported(legacy) and not _cleared("cleared_legacy", legacy):
-        raise ValueError("remove reported outcomes before ranking")
-    apply_leak_audit(packet, leak_judge)
-    if legacy is not None:
-        apply_leak_audit(legacy, leak_judge)
-
-    def send(stage, body, model, command):
-        body = seal(body, stage=stage)
-        if call is not None:
-            apply_leak_audit(body, leak_judge, stage=stage)
-            return call(stage, body, root / "cache", model, command, timeout)
-        return invoke(
-            stage, body, root / "cache", model, command, timeout,
-            leak_judge=leak_judge, cached_only=cached_only,
-        )
-
-    scores = {}
-    judgments = {}
-    sources = []
-    packet_hashes = {}
-    spec = profile["ranker"]
-    stages = sorted({stage_for_feature(k) for k in spec["names"]})
-    for key, expected in profile.get("routes", {}).items():
-        model, command = route(key)
-        if expected != {"model": model, "command_sha256": digest(command)} or digest(
-            PROMPTS[key]
-        ) != profile["prompts"].get(key):
-            raise ValueError(
-                f"model route or prompt differs from frozen {key} configuration"
+        def _has_reported(doc):
+            return isinstance(doc, Mapping) and any(
+                isinstance(value, str) and value and reported_result(value) for value in doc.values()
             )
-    query_packet = packet
-    uses_english_index = bool(set(stages) & _INDEX_STAGES)
-    if uses_english_index and len(words(" ".join(v for v in packet.values() if v))) < 5:
-        qm, qa = route("search_terms")
-        qp = send("search_terms", packet, qm, qa)
-        query_packet = read(qp)["output"]
-    for stage in stages:
-        if digest(PROMPTS[stage]) != profile["prompts"][stage]:
-            raise ValueError(f"prompt differs from frozen {stage} prompt")
-        model, argv = route(stage)
-        if stage == "slate":
-            rounds = []
-            details = []
-            requests = []
-            bank = read(folder / "bank.json")
-            for i in range(2):
-                source, reference = panel(packet, bank, i, **history_options)
-                path = send(stage, source, model, argv)
-                verdict = read(path)["output"]
-                validate(stage, verdict, source)
-                rounds.append(score_panel(verdict, reference))
-                target = next(k for k, n in reference.items() if n is None)
-                details.append(verdict[target])
-                requests.append(digest(source))
-            scores.update({k: mean(r[k] for r in rounds) for k in rounds[0]})
-            judgments[stage] = details
-            packet_hashes[stage] = requests
-            continue
-        if stage == "contrast":
-            source, anchors = contrast.packet(
-                packet,
-                read(folder / "contrast-bank.json"),
-                query_packet,
-                **history_options,
+
+        def _cleared(field, doc):
+            return bool(screen_receipt) and screen_receipt.get(field) == digest(doc)
+
+        # Main, fallback, and legacy packets can each be the text a stage sends.
+        # A screen receipt does not clear a rating, decision, award, or identity.
+        # Reported results in the legacy packet are checked even when no stage
+        # selects that packet, and a receipt for the main packet does not cover it.
+        try:
+            assert_no_label_leak(packet, where="proposal")
+            if legacy is not None:
+                assert_no_label_leak(legacy, where="fallback proposal")
+        except ValueError as exc:
+            raise LeakBlocked(str(exc)) from exc
+        if _has_reported(packet) and not _cleared("cleared_packet", packet):
+            raise LeakBlocked("remove reported outcomes before ranking")
+        if _has_reported(legacy) and not _cleared("cleared_legacy", legacy):
+            raise LeakBlocked("remove reported outcomes before ranking")
+        apply_leak_audit(packet, leak_judge)
+        if legacy is not None:
+            apply_leak_audit(legacy, leak_judge)
+
+        def send(stage, body, model, command):
+            body = seal(body, stage=stage)
+            if call is not None:
+                apply_leak_audit(body, leak_judge, stage=stage)
+                return call(stage, body, root / "cache", model, command, timeout)
+            return invoke(
+                stage, body, root / "cache", model, command, timeout,
+                leak_judge=leak_judge, cached_only=cached_only,
             )
-        elif stage == "forecast":
-            source = legacy or packet
-            assert_no_label_leak(source, where="forecast proposal")
-        elif stage == "merit":
-            source = packet
-        elif stage == "learned":
-            lessons = read(folder / "lessons.json")
-            criteria = lessons["criteria"]
-            if not isinstance(criteria, list):
-                raise ValueError("expected a list of historical calibration criteria")
-            if criteria and not eligible_history(lessons, (year, cutoff_ms), **history_exclusions):
-                raise ValueError("historical calibration criteria lack eligible development provenance")
-            source = {
-                "proposal": packet,
-                "calibration_questions": criteria,
-            }
-        elif stage == "match":
-            source = example_packet(packet, read(folder / "bank.json"), **history_options)
-        else:
-            if not sources:
-                sources = retrieve(
-                    folder / "prior.sqlite",
-                    query_packet,
-                    title,
-                    abstract,
-                    exclude_forum=forum,
-                    exclude_arxiv=arxiv,
-                    target_year=year,
-                    cutoff_ms=cutoff_ms,
+
+        scores = {}
+        judgments = {}
+        sources = []
+        packet_hashes = {}
+        spec = profile["ranker"]
+        stages = sorted({stage_for_feature(k) for k in spec["names"]})
+        for key, expected in profile.get("routes", {}).items():
+            model, command = route(key)
+            if expected != {"model": model, "command_sha256": digest(command)} or digest(
+                PROMPTS[key]
+            ) != profile["prompts"].get(key):
+                raise ValueError(
+                    f"model route or prompt differs from frozen {key} configuration"
                 )
-            source = {
-                "proposal": packet,
-                "prior_work": [
-                    {k: h[k] for k in ("title", "abstract", "year")} for h in sources
-                ],
-            }
-        if stage == "field":
-            source = merit.field_packet(
-                packet, sources, read(folder / "prior-opinions.json"), cutoff_ms=cutoff_ms, target_year=year,
-            )
-        if stage == "opinion":
-            pm, pa = route("peer")
-            peer_path = send("peer", source, pm, pa)
-            judgments["peer"] = read(peer_path)["output"]
-            source = merit.opinion_packet(judgments["peer"])
-        path = send(stage, source, model, argv)
-        verdict = read(path)["output"]
-        validate(stage, verdict, source)
-        if stage == "contrast":
-            scores.update(contrast.features(verdict, anchors))
-        else:
-            scores.update(stage_features(stage, verdict))
-        judgments[stage] = verdict
-        packet_hashes[stage] = digest(source)
-    return {
-        "overall": predict(scores, spec),
-        "features": scores,
-        "judgments": judgments,
-        "input_hashes": packet_hashes,
-        "profile_sha256": digest(profile),
-        "prior_work": sources,
-    }
+        query_packet = packet
+        uses_english_index = bool(set(stages) & _INDEX_STAGES)
+        if uses_english_index and len(words(" ".join(v for v in packet.values() if v))) < 5:
+            qm, qa = route("search_terms")
+            qp = send("search_terms", packet, qm, qa)
+            query_packet = search_query_packet(read(qp)["output"])
+        for stage in stages:
+            if digest(PROMPTS[stage]) != profile["prompts"][stage]:
+                raise ValueError(f"prompt differs from frozen {stage} prompt")
+            model, argv = route(stage)
+            if stage == "slate":
+                rounds = []
+                details = []
+                requests = []
+                bank = read(folder / "bank.json")
+                for i in range(2):
+                    source, reference = panel(packet, bank, i, **history_options)
+                    path = send(stage, source, model, argv)
+                    verdict = read(path)["output"]
+                    validate(stage, verdict, source)
+                    rounds.append(score_panel(verdict, reference))
+                    target = next(k for k, n in reference.items() if n is None)
+                    details.append(verdict[target])
+                    requests.append(digest(source))
+                scores.update({k: mean(r[k] for r in rounds) for k in rounds[0]})
+                judgments[stage] = details
+                packet_hashes[stage] = requests
+                continue
+            if stage == "contrast":
+                source, anchors = contrast.packet(
+                    packet,
+                    read(folder / "contrast-bank.json"),
+                    query_packet,
+                    **history_options,
+                )
+            elif stage == "forecast":
+                source = legacy or packet
+                assert_no_label_leak(source, where="forecast proposal")
+            elif stage == "merit":
+                source = packet
+            elif stage == "learned":
+                lessons = read(folder / "lessons.json")
+                criteria = lessons["criteria"]
+                if not isinstance(criteria, list):
+                    raise ValueError("expected a list of historical calibration criteria")
+                if criteria and not eligible_history(lessons, (year, cutoff_ms), **history_exclusions):
+                    raise ValueError("historical calibration criteria lack eligible development provenance")
+                source = {
+                    "proposal": packet,
+                    "calibration_questions": criteria,
+                }
+            elif stage == "match":
+                source = example_packet(packet, read(folder / "bank.json"), **history_options)
+            else:
+                if not sources:
+                    sources = retrieve(
+                        folder / "prior.sqlite",
+                        query_packet,
+                        title,
+                        abstract,
+                        exclude_forum=forum,
+                        exclude_arxiv=arxiv,
+                        exclude_key=exclude_key,
+                        target_year=year,
+                        cutoff_ms=cutoff_ms,
+                        identity=packet,
+                    )
+                source = {
+                    "proposal": packet,
+                    "prior_work": [
+                        {k: h[k] for k in ("title", "abstract", "year")} for h in sources
+                    ],
+                }
+            if stage == "field":
+                source = merit.field_packet(
+                    packet, sources, read(folder / "prior-opinions.json"), cutoff_ms=cutoff_ms, target_year=year,
+                )
+            if stage == "opinion":
+                pm, pa = route("peer")
+                peer_path = send("peer", source, pm, pa)
+                judgments["peer"] = read(peer_path)["output"]
+                source = merit.opinion_packet(judgments["peer"])
+            path = send(stage, source, model, argv)
+            verdict = read(path)["output"]
+            validate(stage, verdict, source)
+            if stage == "contrast":
+                scores.update(contrast.features(verdict, anchors))
+            else:
+                scores.update(stage_features(stage, verdict))
+            judgments[stage] = verdict
+            packet_hashes[stage] = digest(source)
+        return {
+            "overall": predict(scores, spec),
+            "features": scores,
+            "judgments": judgments,
+            "input_hashes": packet_hashes,
+            "profile_sha256": digest(profile),
+            "prior_work": sources,
+        }
+    finally:
+        reset_history_judge(history_token)
 
 
 def add_screen_provider(parser):
@@ -350,8 +382,11 @@ def load_profile(path):
 
 def screen_packet(packet, root, *, cached_only=False, provider=None, leak_judge=None):
     require_leak_judge(leak_judge)
-    packet = sanitize_proposal(packet)
-    assert_no_label_leak(packet, where="proposal")
+    packet = text_packet(packet)
+    try:
+        assert_no_label_leak(packet, where="proposal")
+    except ValueError as exc:
+        raise LeakBlocked(str(exc)) from exc
     source = outcome_screen.units(packet)
     if not source:
         clean, audit = outcome_screen.filter_units(packet, source, {"exclude": []})

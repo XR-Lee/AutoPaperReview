@@ -32,7 +32,9 @@ from .sanitized import (
 
 
 def read(path: Path) -> Any:
-    return json.loads(read_text(path))
+    from .leak_audit import decode_json
+
+    return decode_json(read_text(path))
 
 
 def digest(value: Any) -> str:
@@ -92,10 +94,20 @@ _ASSERTED_RESULT = re.compile(
     r"|\bstate.of.the.art (?:performance|results)\b|优于|实验结果"
 )
 _RETROSPECTIVE_REVIEW = re.compile(
-    r"\b(?:(?:was|were) (?:accept|reject)ed|rebuttal|camera.ready|"
+    r"\b(?:(?:was|were) (?:accept|reject)ed(?!\s+(?:practice|standard|meaning|usage|convention|sense|definition|use)\b)"
+    r"|rebuttal|camera.ready|"
     r"acceptance (?:for publication|(?:at|to|by) (?:(?:a|the) )?(?:venue|conference|journal|workshop|iclr|cvpr))|"
     r"recommend (?:accept|reject)|my (?:rating|score)|after (?:the )?(?:discussion|response))\b|录用|拒稿"
 )
+_BARE_METRIC = re.compile(
+    rf"\b{_METRIC}\s*(?:[:=]|\b(?:is|of|at|reaches)\b)\s*{_QUANTITY}"
+)
+# A metric bound only by a separator is a label, not a completed experiment.
+# ``accuracy was 91%`` stays a result; ``accuracy: 0.91`` and ``准确率: 0.91`` do not.
+_SEPARATOR_METRIC = re.compile(
+    rf"(?:{_METRIC}|准确率|精度|召回率|损失|误差|时延|重建误差|相似度|准确度)\s*[:=]\s*{_QUANTITY}"
+)
+_FORMULA_CONTEXT = re.compile(r"\b(?:formula|equation|synthetic)\b")
 _PROSPECTIVE = re.compile(
     r"\b(?:will|would|could|may|might|should|can|planned|intend(?:s)?|aim(?:s)?|hypothesiz(?:e|es)|"
     r"expect(?:s|ed)?|predict(?:s|ed)?|whether)\b|"
@@ -111,10 +123,18 @@ def reported_result(text: str) -> bool:
     for clause in _RESULT_CLAUSE.split(normalized_fact_text(text)):
         if _COMPLETED_RESULT.search(clause) or _RETROSPECTIVE_REVIEW.search(clause):
             return True
-        if any(
-            not _PROSPECTIVE.search(clause[: finding.end()])
-            for finding in _ASSERTED_RESULT.finditer(clause)
-        ):
+        if _SEPARATOR_METRIC.fullmatch(clause.strip()):
+            continue
+        formula = _FORMULA_CONTEXT.search(clause) is not None
+        for finding in _ASSERTED_RESULT.finditer(clause):
+            if _PROSPECTIVE.search(clause[: finding.end()]):
+                continue
+            # A quantity on a formula is a definition, not a completed measurement.
+            if formula and _BARE_METRIC.fullmatch(finding.group(0)):
+                continue
+            # ``loss: 0.2`` names a metric. ``accuracy was 91%`` does not take this path.
+            if _SEPARATOR_METRIC.fullmatch(finding.group(0).strip()):
+                continue
             return True
     return False
 
@@ -235,6 +255,23 @@ def retained_label_text(
 def filter_conclusion_sentences(text: str) -> str:
     """Drop label leaks and reported-result sentences from audited prose."""
     return retained_label_text(text, screen_results=True)[0]
+
+
+def contiguous_quote(text: str, offsets, quote: str, *, start_at: int = 0):
+    """Return the cleaned start and original offset of one contiguous occurrence."""
+    if not isinstance(text, str) or not isinstance(quote, str) or not quote:
+        return None
+    start = text.find(quote, start_at)
+    while start >= 0:
+        window = tuple(offsets[start : start + len(quote)])
+        if (
+            len(window) == len(quote)
+            and window[0] is not None
+            and all(offset == window[0] + index for index, offset in enumerate(window))
+        ):
+            return start, window[0]
+        start = text.find(quote, start + 1)
+    return None
 
 
 _GROUP_YEAR = re.compile(r"ICLR\.cc/(20\d{2})/")
@@ -553,6 +590,58 @@ def iclr_case(
     }
 
 
+def _reject_duplicate_root_key(buf: str, handle, key: str) -> None:
+    """Raise when the root object repeats ``key`` after its first member."""
+    data = buf
+    index = 0
+    depth = 1
+    in_string = False
+    escaped = False
+    capturing = False
+    pending = None
+    while True:
+        if index >= len(data):
+            more = handle.read(65536)
+            if not more:
+                return
+            data = data[index:] + more
+            index = 0
+            continue
+        char = data[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+                capturing = False
+            elif capturing:
+                pending = (pending or "") + char
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            capturing = depth == 1
+            if capturing:
+                pending = ""
+            index += 1
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth <= 0:
+                return
+        elif char == ":" and depth == 1 and pending is not None:
+            if pending == key:
+                raise ValueError(f"duplicate JSON key {key!r} on the root object")
+            pending = None
+        elif char == "," and depth == 1:
+            pending = None
+        index += 1
+
+
 def archived_notes(path: Path):
     """Stream the leading notes array of the submission snapshot, one note at a time."""
     decoder = json.JSONDecoder()
@@ -567,6 +656,17 @@ def archived_notes(path: Path):
         while True:
             buf = buf.lstrip()
             if buf.startswith("]"):
+                rest = buf[1:]
+                while True:
+                    more = f.read(65536)
+                    if not more:
+                        break
+                    rest += more
+                # Re-parse the tail as a complete object so escaped duplicate
+                # keys and a truncated root fail closed.
+                from .leak_audit import decode_json
+
+                decode_json('{"notes":[]' + rest)
                 return
             try:
                 item, end = decoder.raw_decode(buf)
@@ -576,6 +676,9 @@ def archived_notes(path: Path):
                     raise ValueError("incomplete submission snapshot") from None
                 buf += more
                 continue
+            from .leak_audit import decode_json
+
+            item = decode_json(buf[:end])
             yield item
             buf = buf[end:].lstrip()
             while not buf:
@@ -605,7 +708,9 @@ def snapshot_cases(
         submissions[n["id"]] = sub
     with open_input(forums) as stream:
         for line in stream:
-            notes = json.loads(line)["notes"]
+            from .leak_audit import decode_json
+
+            notes = decode_json(line)["notes"]
             for fid in {n.get("forum") for n in notes} & submissions.keys():
                 case = iclr_case(submissions[fid], notes, group, allow_late=allow_late)
                 if case:

@@ -189,7 +189,7 @@ class SanitizedProposalTests(unittest.TestCase):
         }
         calls = []
 
-        def send(_command, *, system, prompt, model, timeout):
+        def send(_command, *, system, prompt, model, timeout, **_extra):
             calls.append((system, json.loads(prompt)))
             result = {"verdict": "clean"} if system == stages.LEAK_AUDIT else response
             return json.dumps(result), 0

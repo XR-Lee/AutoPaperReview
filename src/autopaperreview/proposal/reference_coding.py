@@ -12,6 +12,7 @@ from ..public_calibration import assert_local_only
 from .cohort import validate_decision
 from .data import (
     cleaning_rules,
+    contiguous_quote,
     digest,
     read,
     require_distinct_output,
@@ -98,17 +99,10 @@ def bind_evidence(units, extracted):
             raise ValueError("invalid reference evidence")
         text, offsets = units[unit]
         occurrence = (unit, quote)
-        start = text.find(quote, cursor.get(occurrence, 0))
-        while start >= 0:
-            original = offsets[start]
-            if original is not None and all(
-                offset == original + i
-                for i, offset in enumerate(offsets[start : start + len(quote)])
-            ):
-                break
-            start = text.find(quote, start + 1)
-        else:
+        found = contiguous_quote(text, offsets, quote, start_at=cursor.get(occurrence, 0))
+        if found is None:
             raise ValueError("evidence quote must match a contiguous retained review span")
+        start, original = found
         cursor[occurrence] = start + 1
         spans.append(
             {"unit": unit, "start": original, "end": original + len(quote), "quote": quote}
@@ -117,10 +111,17 @@ def bind_evidence(units, extracted):
 
 
 def reviewer_result(note, spans, grade):
+    used = []
+    seen = set()
+    for index in grade["used"]:
+        if index in seen:
+            continue
+        seen.add(index)
+        used.append(index)
     return {
         "id": note["id"],
         "score": grade["score"],
-        "evidence": [spans[index] for index in grade["used"]],
+        "evidence": [spans[index] for index in used],
     }
 
 

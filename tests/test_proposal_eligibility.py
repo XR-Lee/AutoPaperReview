@@ -179,8 +179,8 @@ class ProposalEligibilityTests(unittest.TestCase):
                          None, "dev", None, None, None, None, 21),
                     ],
                 )
-            hits = retrieve(db, PROPOSAL, limit=100, exclude_arxiv="9999.98766", target_year=2024, cutoff_ms=20)
-            self.assertEqual({hit["forum"] for hit in hits}, {"synthetic-eligible", "synthetic-companion"})
+            with self.assertRaisesRegex(ValueError, "stale"):
+                retrieve(db, PROPOSAL, limit=100, exclude_arxiv="9999.98766", target_year=2024, cutoff_ms=20)
 
     def test_prior_and_contrast_exclude_doi_ftp_and_legacy_arxiv_twins(self):
         options = {"target_year": 2024, "cutoff_ms": 20}
@@ -228,22 +228,28 @@ class ProposalEligibilityTests(unittest.TestCase):
             with closing(sqlite3.connect(database)) as conn, conn:
                 conn.execute(
                     "CREATE VIRTUAL TABLE papers USING fts5(title, abstract, year UNINDEXED, "
-                    "revision UNINDEXED, forum UNINDEXED, split UNINDEXED)"
+                    "revision UNINDEXED, forum UNINDEXED, arxiv UNINDEXED, split UNINDEXED, "
+                    "available_ms UNINDEXED, key UNINDEXED)"
                 )
-                conn.execute("CREATE VIRTUAL TABLE vocab USING fts5vocab(papers,row)")
-                conn.executemany("INSERT INTO papers VALUES (?,?,?,?,?,?)", [
-                    ("Archival labels", "Index household notes.", 2020, 10, "synthetic-first", "dev"),
-                    ("Indexing labels", "Index household notes.", 2021, 11, "synthetic-second", "dev"),
-                    ("Libraries", "Archival indexing of fabrics. " + "Workshop notes. " * 25,
-                     2021, 12, "synthetic-support", "dev"),
-                    *[("Metal shapes", "Model ingots.", 2022, 8, f"synthetic-other-{i}", "dev") for i in range(20)],
+                conn.execute("PRAGMA user_version = 2")
+
+                def row(title, abstract, year, revision, forum):
+                    available = revision if isinstance(revision, int) else 10
+                    return (title, abstract, year, revision, forum, "", "dev", available, forum)
+
+                conn.executemany("INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)", [
+                    row("Archival labels", "Index household notes.", 2020, 10, "synthetic-first"),
+                    row("Indexing labels", "Index household notes.", 2021, 11, "synthetic-second"),
+                    row("Libraries", "Archival indexing of fabrics. " + "Workshop notes. " * 25,
+                        2021, 12, "synthetic-support"),
+                    *[row("Metal shapes", "Model ingots.", 2022, 8, f"synthetic-other-{i}") for i in range(20)],
                 ])
             options = {"target_year": 2024, "cutoff_ms": 20, "limit": 2}
             initial = retrieve(database, PROPOSAL, **options)
             self.assertEqual([hit["forum"] for hit in initial], ["synthetic-first", "synthetic-second"])
             with closing(sqlite3.connect(database)) as conn, conn:
-                conn.executemany("INSERT INTO papers VALUES (?,?,?,?,?,?)", [
-                    ("Sparse archival labels", "Sparse archival labels.", 2020, "10suffix", f"synthetic-ineligible-{i}", "dev")
+                conn.executemany("INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)", [
+                    row("Sparse archival labels", "Sparse archival labels.", 2020, "10suffix", f"synthetic-ineligible-{i}")
                     for i in range(70)
                 ])
             self.assertEqual(retrieve(database, PROPOSAL, **options), initial)

@@ -23,7 +23,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
         calls = []
         self.calls = calls
 
-        def transport(command, *, system, prompt, model, timeout):
+        def transport(command, *, system, prompt, model, timeout, **_extra):
             payload = json.loads(prompt)
             stage = next(key for key, value in stages.PROMPTS.items() if value == system)
             calls.append((stage, payload))
@@ -124,7 +124,7 @@ class ProposalReferenceOffsetTests(unittest.TestCase):
         }
         calls = []
 
-        def transport(command, *, system, prompt, model, timeout):
+        def transport(command, *, system, prompt, model, timeout, **_extra):
             calls.append(system)
             self.assertEqual(system, REFERENCE_PROMPT)
             self.assertIn("experiment", system.casefold())
